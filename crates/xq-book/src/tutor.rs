@@ -13,18 +13,14 @@
 //! instead of `Book`, so a bad book line is not praised.
 
 use crate::schema::{BookNode, Lesson, Verdict};
-use xq_core::analysis::{explain_tags, grade_from_delta, Grade};
+use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_with_mate, Grade};
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::Game;
 use xq_core::notation::{parse_cn, parse_wxf, render_cn};
-use xq_core::search::{SearchLimits, Searcher};
 use xq_core::types::{Color, Move};
+use xq_engine::{shared_engine, BuiltinEngine, EngineRequest, SharedEngine};
 
-/// Depth used to grade an off-book learner move (§4.5).
-const GRADE_DEPTH: u8 = 6;
-/// Depth used to score hint moves.
-const HINT_DEPTH: u8 = 4;
 /// Plies allowed after leaving the book before the lesson ends (§5.3).
 const OFF_BOOK_LIMIT: usize = 8;
 
@@ -86,7 +82,11 @@ pub struct Tutor<'a> {
     pub book_moves: usize,
     rng_state: u64,
     pub plies_after_book: usize,
-    searcher: Option<Searcher>,
+    /// Engine used for off-book grading and hints, shared with the app's
+    /// worker thread (see `xq-engine::SharedEngine`). Lazily created as a
+    /// `BuiltinEngine` — a 32 MB TT per `Tutor::new` would be wasteful:
+    /// the weight test alone builds 1000 tutors.
+    engine: Option<SharedEngine>,
     snapshot: Option<Snapshot>,
     exit_ply: usize,
 }
@@ -112,10 +112,19 @@ impl<'a> Tutor<'a> {
                 rng_seed
             },
             plies_after_book: 0,
-            searcher: None,
+            engine: None,
             snapshot: None,
             exit_ply: usize::MAX,
         }
+    }
+
+    /// Build with a shared engine (e.g. the app's active engine, Pikafish
+    /// when available) instead of a lazily created builtin one.
+    #[must_use]
+    pub fn with_engine(lesson: &'a Lesson, rng_seed: u64, engine: SharedEngine) -> Self {
+        let mut t = Self::new(lesson, rng_seed);
+        t.engine = Some(engine);
+        t
     }
 
     /// xorshift64star: uniform enough for weighted child picks.
@@ -133,13 +142,19 @@ impl<'a> Tutor<'a> {
         ((self.next_rand() >> 11) as f64) / ((1u64 << 53) as f64)
     }
 
-    /// Lazily built engine (a 16 MB TT per `Tutor::new` would be wasteful:
+    /// Lazily built engine (a 32 MB TT per `Tutor::new` would be wasteful:
     /// the weight test alone builds 1000 tutors).
-    fn searcher(&mut self) -> &mut Searcher {
-        if self.searcher.is_none() {
-            self.searcher = Some(Searcher::new(16));
+    fn engine(&mut self) -> SharedEngine {
+        if self.engine.is_none() {
+            self.engine = Some(shared_engine(Box::new(BuiltinEngine::new())));
         }
-        self.searcher.as_mut().unwrap()
+        self.engine.as_ref().unwrap().clone()
+    }
+
+    /// Tags for an analysed line: the rule-based tags plus `MateIn` when
+    /// the line mates (mirrors `Searcher::analyze`).
+    fn line_tags(pos: &Position, line: &xq_engine::Line) -> Vec<xq_core::search::MoveTag> {
+        tags_with_mate(pos, line.mv, line.score.to_cp_clamped())
     }
 
     /// Current tree node (children = legal book replies here).
@@ -278,17 +293,29 @@ impl<'a> Tutor<'a> {
                 exit_ply: self.exit_ply,
             });
         }
-        let pos = self.game.pos.clone();
-        let history: Vec<u64> = self.game.hashes().to_vec();
         let best_main = self.main_child_move();
-        let limits = SearchLimits::depth(GRADE_DEPTH);
-        let best_res = self.searcher().search(&pos, &history, limits, &mut |_| {});
-        let best_score = best_res.score;
-        let engine_best = best_res.best;
-        let mv_score = self.searcher().score_move(&pos, &history, mv, limits);
-        let delta = best_score - mv_score;
-        let grade = grade_from_delta(delta, false);
-        let best = best_main.or(Some(engine_best));
+        let handle = self.engine();
+        let mut engine = handle.lock().expect("engine lock");
+        let req = EngineRequest::new(
+            self.game.start.to_fen(),
+            self.game.moves.clone(),
+            engine.grade_limits(),
+        );
+        let (grade, engine_best, delta) = match engine.best_move(&req, &mut |_| {}) {
+            Ok(best_line) => {
+                let best_score = best_line.score.to_cp_clamped();
+                let mv_score = engine
+                    .score_move(&req, mv)
+                    .map(|s| s.to_cp_clamped())
+                    .unwrap_or(best_score);
+                let delta = best_score - mv_score;
+                let grade = grade_from_delta_with(delta, false, engine.grade_thresholds());
+                (grade, Some(best_line.mv), delta)
+            }
+            Err(_) => (Grade::Acceptable, None, 0),
+        };
+        drop(engine);
+        let best = best_main.or(engine_best);
         let explanation = format!(
             "{} (chênh {} so với nước tốt nhất).",
             grade.label_vi(),
@@ -395,24 +422,30 @@ impl<'a> Tutor<'a> {
     #[must_use]
     pub fn suggestions(&mut self) -> Vec<BookHint> {
         let pos = self.game.pos.clone();
-        let history: Vec<u64> = self.game.hashes().to_vec();
-        let mut hints: Vec<BookHint> = Vec::new();
-        let mut book_moves: Vec<Move> = Vec::new();
-        let mut scored: Vec<(bool, i32, Move, String)> = Vec::new();
         // Copy the child data first: scoring needs `&mut self` (engine).
         let child_data: Vec<(bool, String, String)> = self
             .current_children()
             .iter()
             .map(|n| (n.main, n.mv.clone(), n.note_vi.clone().unwrap_or_default()))
             .collect();
+        let handle = self.engine();
+        let mut engine = handle.lock().expect("engine lock");
+        let req = EngineRequest::new(
+            self.game.start.to_fen(),
+            self.game.moves.clone(),
+            engine.hint_limits(),
+        );
+        let mut hints: Vec<BookHint> = Vec::new();
+        let mut book_moves: Vec<Move> = Vec::new();
+        let mut scored: Vec<(bool, i32, Move, String)> = Vec::new();
         for (is_main, mv_str, note) in &child_data {
             let Some(mv) = self.parse_book_mv(mv_str) else {
                 continue;
             };
-            let score =
-                self.searcher()
-                    .score_move(&pos, &history, mv, SearchLimits::depth(HINT_DEPTH));
-            scored.push((*is_main, score, mv, note.clone()));
+            let Ok(score) = engine.score_move(&req, mv) else {
+                continue;
+            };
+            scored.push((*is_main, score.to_cp_clamped(), mv, note.clone()));
             book_moves.push(mv);
         }
         // Main first, then by engine score.
@@ -427,20 +460,19 @@ impl<'a> Tutor<'a> {
             });
         }
         if !self.out_of_book {
-            let lines = self
-                .searcher()
-                .analyze(&pos, &history, 3, SearchLimits::depth(HINT_DEPTH));
+            let lines = engine.analyze(&req, 3, &mut |_| {}).unwrap_or_default();
             let mut added = 0;
             for line in lines {
                 if added >= 2 || book_moves.contains(&line.mv) {
                     continue;
                 }
+                let tags = Self::line_tags(&pos, &line);
                 hints.push(BookHint {
                     mv: line.mv,
                     mv_cn: render_cn(&pos, line.mv),
                     in_book: false,
-                    score: line.score,
-                    explanation_vi: explain_tags(&line.tags),
+                    score: line.score.to_cp_clamped(),
+                    explanation_vi: explain_tags(&tags),
                 });
                 added += 1;
             }

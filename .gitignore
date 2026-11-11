@@ -2,3 +2,7 @@ target/
 .DS_Store
 *.rs.bk
 .github/workflows/
+# Pikafish engine binaries + NNUE weights (downloaded, never committed).
+# PIKAFISH_VERSION.toml is the pin and IS committed.
+engine/*
+!engine/PIKAFISH_VERSION.toml

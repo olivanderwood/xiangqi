@@ -274,3 +274,90 @@ fn learner_black_starts_with_ai() {
     graded_book(e, "马8进7");
     assert_eq!(t.book_moves, 1);
 }
+
+/// Mock engine with fixed scores, for grading tests (spec §9.4).
+struct MockEngine;
+
+impl xq_engine::Engine for MockEngine {
+    fn name(&self) -> &str {
+        "Mock"
+    }
+
+    fn new_game(&mut self) -> Result<(), xq_engine::EngineError> {
+        Ok(())
+    }
+
+    fn set_level(&mut self, _level: xq_engine::Level) -> Result<(), xq_engine::EngineError> {
+        Ok(())
+    }
+
+    fn best_move(
+        &mut self,
+        req: &xq_engine::EngineRequest,
+        _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
+    ) -> Result<xq_engine::Line, xq_engine::EngineError> {
+        let pos = req.position()?;
+        let mv = pos.legal_moves().into_iter().next().unwrap();
+        Ok(xq_engine::Line {
+            mv,
+            score: xq_engine::Score::Cp(50),
+            depth: 4,
+            pv: vec![mv],
+        })
+    }
+
+    fn analyze(
+        &mut self,
+        req: &xq_engine::EngineRequest,
+        _top_n: usize,
+        _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
+    ) -> Result<Vec<xq_engine::Line>, xq_engine::EngineError> {
+        Ok(vec![self.best_move(req, &mut |_| {})?])
+    }
+
+    fn score_move(
+        &mut self,
+        _req: &xq_engine::EngineRequest,
+        _mv: Move,
+    ) -> Result<xq_engine::Score, xq_engine::EngineError> {
+        Ok(xq_engine::Score::Cp(-250))
+    }
+
+    fn stop_handle(&self) -> xq_engine::StopHandle {
+        xq_engine::StopHandle::new()
+    }
+
+    fn level(&self) -> xq_engine::Level {
+        xq_engine::Level::Medium
+    }
+
+    fn grade_thresholds(&self) -> xq_engine::GradeThresholds {
+        xq_engine::GradeThresholds::PIKAFISH
+    }
+}
+
+#[test]
+fn tutor_with_mock_engine_grades() {
+    // NOTE (spec §9.4 example): mock best = Cp(50) and learner move =
+    // Cp(-200) gives delta 250, which is exactly the Inaccurate edge of
+    // the Pikafish thresholds — not a Blunder. The test uses Cp(-250)
+    // (delta 300 > 250) so the expected label really is Blunder.
+    let book = load_mini();
+    let lesson = book.by_id("r-mini").unwrap();
+    let engine = xq_engine::shared_engine(Box::new(MockEngine));
+    let mut t = Tutor::with_engine(lesson, 1, engine);
+    // "马二进三" is legal from the start position but not in the book.
+    let e = play_learner(&mut t, "马二进三");
+    match e {
+        TutorEvent::Graded {
+            grade: Grade::Blunder,
+            best: Some(_),
+            ..
+        } => {}
+        TutorEvent::Graded { grade, .. } => {
+            panic!("mong đợi Grade::Blunder, gặp {grade:?}")
+        }
+        other => panic!("mong đợi Graded, gặp {}", event_name(&Some(other))),
+    }
+    assert!(t.out_of_book);
+}

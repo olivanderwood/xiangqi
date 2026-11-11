@@ -15,6 +15,16 @@ Nội dung release trên GitHub lấy từ đoạn của đúng phiên bản tro
 - Đấu với AI: 4 mức độ (Dễ, Trung bình, Khó, Cao thủ), alpha-beta +
   PVS + bảng băm + quiescence, gợi ý top 3, hoàn nước, xin hòa/thua,
   xem lại ván, chơi 2 người trên một máy.
+- **AI mặc định nay là Pikafish 2026-09-06** (thay cho alpha-beta tự
+  viết, giờ làm dự phòng): chạy tiến trình con qua UCI, offline hoàn
+  toàn, tự chuyển sang AI tích hợp + banner khi Pikafish lỗi. Mức khó
+  mới: Dễ (depth 3 + chọn nước yếu hơn), Trung bình (depth 6), Khó
+  (depth 12), Cao thủ (không giới hạn depth, 5 s/nước, đa dạng nước
+  đi trong 24 nửa nước đầu), Elo tùy chỉnh (thanh trượt, bước 50).
+  Cài đặt có Engine đang dùng, Threads, Hash (tự động theo RAM),
+  đường dẫn Pikafish, nút Thử lại Pikafish; log `engine.log` xoay
+  vòng; màn Giới thiệu có phiên bản Pikafish + GPLv3 + giấy phép NNUE.
+  Pikafish thắng AI cũ 10/10 ván (đo trên Linux).
 - Học chơi khai cuộc: 12 bài (6 đi tiên, 6 đi hậu), gia sư chấm từng
   nước theo sách + engine, gợi ý, đi lại/tiếp tục khi ra khỏi sách,
   tổng kết cuối bài, đánh tiếp với AI giữ nguyên thế cờ.

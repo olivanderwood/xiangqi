@@ -1,7 +1,7 @@
 //! Move grading, SEE and `MoveTag` (§4.5–4.6).
 
 use crate::board::Position;
-use crate::eval::piece_value_mg;
+use crate::eval::{piece_value_mg, MATE};
 use crate::search::MoveTag;
 use crate::types::{file_of, rank_of, Color, Move, Piece, PieceKind};
 
@@ -31,18 +31,62 @@ impl Grade {
     }
 }
 
+/// Delta thresholds (centipawns) for grading a move (§4.5).
+///
+/// The builtin engine and Pikafish use different scales, so the thresholds
+/// are configurable: the `Engine` trait exposes which set applies
+/// (`xq-engine`). `BUILTIN` keeps the original values; `PIKAFISH` is the
+/// starting set from the Pikafish integration spec (§6), to be calibrated
+/// by measurement (task P6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GradeThresholds {
+    /// `delta <= best` → Best.
+    pub best: i32,
+    /// `delta <= good` → Good.
+    pub good: i32,
+    /// `delta <= acceptable` → Acceptable.
+    pub acceptable: i32,
+    /// `delta <= inaccurate` → Inaccurate, otherwise Blunder.
+    pub inaccurate: i32,
+}
+
+impl GradeThresholds {
+    pub const BUILTIN: Self = Self {
+        best: 20,
+        good: 60,
+        acceptable: 150,
+        inaccurate: 300,
+    };
+    pub const PIKAFISH: Self = Self {
+        best: 15,
+        good: 50,
+        acceptable: 120,
+        inaccurate: 250,
+    };
+}
+
 /// Grade a move from `delta = score(best) - score(move)` (§4.5).
 #[must_use]
 pub fn grade_from_delta(delta: i32, in_book: bool) -> Grade {
+    grade_from_delta_with(delta, in_book, GradeThresholds::BUILTIN)
+}
+
+/// Same as [`grade_from_delta`] with explicit thresholds.
+#[must_use]
+pub fn grade_from_delta_with(delta: i32, in_book: bool, t: GradeThresholds) -> Grade {
     if in_book {
         return Grade::Book;
     }
-    match delta {
-        i32::MIN..=20 => Grade::Best,
-        21..=60 => Grade::Good,
-        61..=150 => Grade::Acceptable,
-        151..=300 => Grade::Inaccurate,
-        _ => Grade::Blunder,
+    if delta <= t.best {
+        Grade::Best
+    } else if delta <= t.good {
+        Grade::Good
+    } else if delta <= t.acceptable {
+        Grade::Acceptable
+    } else if delta <= t.inaccurate {
+        Grade::Inaccurate
+    } else {
+        Grade::Blunder
     }
 }
 
@@ -457,6 +501,21 @@ pub fn tags_for(pos: &Position, m: Move) -> Vec<MoveTag> {
     tagged.sort_by_key(|(p, _)| *p);
     tagged.truncate(2);
     tagged.into_iter().map(|(_, t)| t).collect()
+}
+
+/// Tags for an analysed line: the rule-based tags plus `MateIn` when the
+/// (clamped centipawn) score is a mate, mirroring `Searcher::analyze`.
+#[must_use]
+pub fn tags_with_mate(pos: &Position, m: Move, score_cp: i32) -> Vec<MoveTag> {
+    let mut tags = tags_for(pos, m);
+    if score_cp >= MATE - 500 {
+        let plies = MATE - score_cp;
+        let n = ((plies + 1) / 2).max(1).min(u8::MAX as i32) as u8;
+        tags.retain(|t| !matches!(t, MoveTag::MateIn(_)));
+        tags.insert(0, MoveTag::MateIn(n));
+        tags.truncate(2);
+    }
+    tags
 }
 
 /// Vietnamese explanation from at most 2 tags (§4.6).

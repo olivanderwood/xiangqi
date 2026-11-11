@@ -19,13 +19,13 @@ use std::time::Duration;
 use xq_book::schema::{BookNode, Lesson};
 use xq_book::tree::node_at;
 use xq_book::{BookHint, LessonSummary, Tutor, TutorEvent};
-use xq_core::analysis::{explain_tags, grade_from_delta, tags_for, Grade};
+use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::Game;
 use xq_core::notation;
-use xq_core::search::{Difficulty, Searcher};
 use xq_core::types::{Color, Move, PieceKind};
+use xq_engine::{EngineRequest, Level, SharedEngine};
 
 pub struct LearnState {
     pub lesson: Option<Lesson>,
@@ -63,12 +63,14 @@ pub struct LearnState {
     pub flipped: bool,
     pub started: bool,
     pub last_board: Option<(egui::Rect, BoardGeometry)>,
-    pub searcher: Searcher,
+    /// Shared engine (builtin now, Pikafish when available) for the
+    /// synchronous grading/hint fallbacks and for the `Tutor`.
+    pub engine: SharedEngine,
     pub rng_state: u64,
 }
 
 impl LearnState {
-    pub fn new() -> Self {
+    pub fn new(engine: SharedEngine) -> Self {
         Self {
             lesson: None,
             tutor: None,
@@ -99,7 +101,7 @@ impl LearnState {
             flipped: false,
             started: false,
             last_board: None,
-            searcher: Searcher::new(8),
+            engine,
             rng_state: 0x9E3779B97F4A7C15,
         }
     }
@@ -154,18 +156,19 @@ impl LearnState {
         count
     }
 
-    /// Build a `Tutor` over the boxed lesson. SAFETY: a `Box`'s pointee
-    /// never moves; `tutor` is declared before `lesson_box` (dropped
-    /// first) and is always cleared before `lesson_box` is replaced.
-    fn make_tutor(lesson: &Lesson) -> Tutor<'static> {
+    /// Build a `Tutor` over the boxed lesson, sharing the app's engine.
+    /// SAFETY: a `Box`'s pointee never moves; `tutor` is declared before
+    /// `lesson_box` (dropped first) and is always cleared before
+    /// `lesson_box` is replaced.
+    fn make_tutor(&self, lesson: &Lesson) -> Tutor<'static> {
         let lesson: &'static Lesson = unsafe { &*(lesson as *const Lesson) };
-        Tutor::new(lesson, 0x1234_5678)
+        Tutor::with_engine(lesson, 0x1234_5678, self.engine.clone())
     }
 
     pub fn start_lesson(&mut self, lesson: Lesson, now: f64) {
         self.tutor = None;
         self.lesson_box = Some(Box::new(lesson.clone()));
-        self.tutor = Some(Self::make_tutor(self.lesson_box.as_ref().unwrap()));
+        self.tutor = Some(self.make_tutor(self.lesson_box.as_ref().unwrap()));
         let start = lesson
             .start_fen
             .as_deref()
@@ -233,7 +236,13 @@ impl LearnState {
         }
         // Fallback (no Tutor attached): book children scored locally.
         let pos = self.game.pos.clone();
-        let hashes = self.game.hashes().to_vec();
+        let handle = self.engine.clone();
+        let mut engine = handle.lock().expect("engine lock");
+        let req = EngineRequest::new(
+            self.game.start.to_fen(),
+            self.game.moves.clone(),
+            engine.hint_limits(),
+        );
         let mut hints: Vec<BookHint> = Vec::new();
         let mut children: Vec<(usize, BookNode)> =
             self.children().iter().cloned().enumerate().collect();
@@ -242,9 +251,10 @@ impl LearnState {
             let Ok(mv) = notation::parse_cn(&pos, &node.mv) else {
                 continue;
             };
-            let score = self
-                .searcher
-                .score_move(&pos, &hashes, mv, Difficulty::Medium.limits());
+            let Ok(score) = engine.score_move(&req, mv) else {
+                continue;
+            };
+            let score = score.to_cp_clamped();
             let explanation = node
                 .note_vi
                 .clone()
@@ -257,6 +267,7 @@ impl LearnState {
                 explanation_vi: explanation,
             });
         }
+        drop(engine);
         self.hints = hints;
     }
 
@@ -282,7 +293,6 @@ impl LearnState {
     /// from the Tutor. Off-book moves open the Retry / Continue dialog.
     fn play_user_move(&mut self, mv: Move, now: f64, animate: bool) {
         let pos_before = self.game.pos.clone();
-        let hashes_before = self.game.hashes().to_vec();
         let in_book = self.children().iter().any(|n| {
             notation::parse_cn(&pos_before, &n.mv)
                 .map(|m| m == mv)
@@ -326,25 +336,32 @@ impl LearnState {
             }
             _ => {
                 // No Tutor attached: local engine grading, same §4.5 rule.
-                let best = self.searcher.search(
-                    &pos_before,
-                    &hashes_before,
-                    Difficulty::Medium.limits(),
-                    &mut |_| {},
+                // NOTE: `play_move_common` above already played `mv`, so
+                // the request must use the moves *before* it.
+                let mut moves_before = self.game.moves.clone();
+                moves_before.pop();
+                let handle = self.engine.clone();
+                let mut engine = handle.lock().expect("engine lock");
+                let req = EngineRequest::new(
+                    self.game.start.to_fen(),
+                    moves_before,
+                    engine.grade_limits(),
                 );
-                let score_mv = self.searcher.score_move(
-                    &pos_before,
-                    &hashes_before,
-                    mv,
-                    Difficulty::Medium.limits(),
-                );
-                let grade = grade_from_delta(best.score - score_mv, false);
-                let expl = explain_tags(&tags_for(&pos_before, mv));
-                self.grades.push((mv, grade));
-                self.last_grade = Some((grade, expl.clone(), Some(best.best)));
-                self.grade_pos = Some(pos_before.clone());
-                self.graded_best.push(Some((best.best, pos_before.clone())));
-                self.tutor_message = expl;
+                if let Ok(best) = engine.best_move(&req, &mut |_| {}) {
+                    let best_cp = best.score.to_cp_clamped();
+                    let mv_cp = engine
+                        .score_move(&req, mv)
+                        .map(|s| s.to_cp_clamped())
+                        .unwrap_or(best_cp);
+                    let grade =
+                        grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
+                    let expl = explain_tags(&tags_for(&pos_before, mv));
+                    self.grades.push((mv, grade));
+                    self.last_grade = Some((grade, expl.clone(), Some(best.mv)));
+                    self.grade_pos = Some(pos_before.clone());
+                    self.graded_best.push(Some((best.mv, pos_before.clone())));
+                    self.tutor_message = expl;
+                }
                 if in_book {
                     self.opponent_due = Some(now + 0.6);
                 } else {
@@ -427,10 +444,13 @@ impl LearnState {
         // Out of book: engine plays (Medium, §5.3.4).
         let req_id = worker.alloc_req_id();
         self.opponent_ai_req = Some(req_id);
+        let limits = self
+            .engine
+            .lock()
+            .expect("engine lock")
+            .limits_for(Level::Medium);
         let _ = worker.tx.send(AiRequest::BestMove {
-            pos: self.game.pos.clone(),
-            history: self.game.hashes().to_vec(),
-            limits: Difficulty::Medium.limits(),
+            req: EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits),
             req_id,
         });
     }

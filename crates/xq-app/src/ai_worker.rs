@@ -1,38 +1,38 @@
 //! AI worker thread (§2): requests/responses with `req_id` (M3/T3.3).
 //!
-//! Design notes (see `docs/DECISIONS-m3.md`):
-//! - The worker owns one `Searcher`. The `Searcher`'s own stop flag is the
-//!   one the search loop polls, so the worker hands that exact `Arc` back
-//!   to the constructor and `AiWorker::stop` *is* the searcher's flag.
-//!   `request_stop()` therefore takes effect immediately even while a
-//!   search is running — sending `AiRequest::Stop` alone would queue
-//!   behind the running search and could not interrupt it.
+//! Design notes (see `docs/DECISIONS-m3.md` and the Pikafish integration
+//! spec §1.3):
+//! - The worker does NOT own the engine: the app shares one engine
+//!   (`xq-engine::SharedEngine`) between this thread and the UI thread's
+//!   synchronous grading paths, behind a mutex so searches run strictly
+//!   one at a time.
+//! - The worker holds the engine's [`StopHandle`], which is the exact flag
+//!   a running search polls (builtin) or the flag the engine's wait loop
+//!   polls to send `stop` (Pikafish). `request_stop()` therefore takes
+//!   effect immediately even while a search is running — sending
+//!   `AiRequest::Stop` alone would queue behind the running search and
+//!   could not interrupt it.
 //! - The UI keeps the `req_id` of the request it is currently waiting for
 //!   and drops every response whose `req_id` does not match
 //!   (`response_is_current`). This is what makes Undo-while-thinking safe.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc::{channel, Receiver, Sender},
-    Arc,
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Mutex;
+use xq_core::analysis::tags_with_mate;
+use xq_core::search::AnalysisLine;
+use xq_engine::{
+    BuiltinEngine, Engine, EngineError, EngineRequest, Line, SharedEngine, StopHandle,
 };
-use xq_core::board::Position;
-use xq_core::search::{AnalysisLine, SearchLimits};
-use xq_core::types::Move;
 
 #[derive(Debug)]
 pub enum AiRequest {
     BestMove {
-        pos: Position,
-        history: Vec<u64>,
-        limits: SearchLimits,
+        req: EngineRequest,
         req_id: u64,
     },
     Analyze {
-        pos: Position,
-        history: Vec<u64>,
+        req: EngineRequest,
         top_n: usize,
-        limits: SearchLimits,
         req_id: u64,
     },
     Stop,
@@ -48,11 +48,11 @@ pub enum AiResponse {
         req_id: u64,
         depth: u8,
         score: i32,
-        pv: Vec<Move>,
+        pv: Vec<xq_core::types::Move>,
     },
     BestMove {
         req_id: u64,
-        mv: Move,
+        mv: xq_core::types::Move,
         score: i32,
     },
     Analysis {
@@ -82,73 +82,285 @@ pub fn response_is_current(resp_req_id: u64, current: Option<u64>) -> bool {
     Some(resp_req_id) == current
 }
 
-/// A fixed worker thread owning a `Searcher`.
+/// Convert an engine [`Line`] to the UI's [`AnalysisLine`], adding the
+/// rule-based tags (plus `MateIn`) computed from the position.
+fn to_analysis_line(pos: &xq_core::board::Position, line: &Line) -> AnalysisLine {
+    AnalysisLine {
+        mv: line.mv,
+        score: line.score.to_cp_clamped(),
+        depth: line.depth,
+        pv: line.pv.clone(),
+        tags: tags_with_mate(pos, line.mv, line.score.to_cp_clamped()),
+    }
+}
+
+/// A fixed worker thread driving one shared engine.
 pub struct AiWorker {
     pub tx: Sender<AiRequest>,
     pub rx: Receiver<AiResponse>,
-    /// The `Searcher`'s own stop flag (shared with the worker thread).
-    pub stop: Arc<AtomicBool>,
+    /// Stop handle of the shared engine (see module docs).
+    pub stop: StopHandle,
     pub next_req_id: u64,
+    /// Set once when the worker falls back from Pikafish to the builtin
+    /// engine; the UI shows it as a banner and clears it by taking it.
+    fallback_notice: std::sync::Arc<Mutex<Option<String>>>,
+}
+
+/// Swap the shared engine for the builtin one (once) and record why, so
+/// the UI can show a banner. A no-op when the engine is already builtin.
+fn swap_to_builtin(
+    engine: &SharedEngine,
+    notice: &std::sync::Arc<Mutex<Option<String>>>,
+    reason: &str,
+) {
+    let mut guard = engine.lock().expect("engine lock");
+    if guard.name() == "Builtin" {
+        return;
+    }
+    let level = guard.level();
+    *guard = Box::new(BuiltinEngine::with_level(level));
+    // The new engine must poll the same shared stop flag, or the
+    // worker's stop handle goes stale after the swap.
+    guard.set_stop_flag(&engine.stop_flag());
+    let mut slot = notice.lock().expect("notice lock");
+    if slot.is_none() {
+        *slot = Some(format!(
+            "Không chạy được Pikafish ({reason}), đang dùng AI tích hợp"
+        ));
+    }
+}
+
+/// Run one best-move request against an engine, forwarding `Info` and
+/// sending the `BestMove` response. Returns the engine error, if any.
+fn run_best_move_on(
+    engine: &mut dyn Engine,
+    req: &EngineRequest,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let result = engine.best_move(req, &mut |info| {
+        let (score, pv) = info
+            .lines
+            .first()
+            .map(|l| (l.score.to_cp_clamped(), l.pv.clone()))
+            .unwrap_or((0, Vec::new()));
+        let _ = res_tx.send(AiResponse::Info {
+            req_id,
+            depth: info.depth,
+            score,
+            pv,
+        });
+    });
+    match result {
+        Ok(line) => {
+            let _ = res_tx.send(AiResponse::BestMove {
+                req_id,
+                mv: line.mv,
+                score: line.score.to_cp_clamped(),
+            });
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Run one best-move request against the shared engine.
+fn run_best_move(
+    engine: &SharedEngine,
+    req: &EngineRequest,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let mut guard = engine.lock().expect("engine lock");
+    run_best_move_on(&mut **guard, req, req_id, res_tx)
+}
+
+/// Run one analysis request against an engine and send the `Analysis`
+/// response. Returns the engine error, if any.
+fn run_analyze_on(
+    engine: &mut dyn Engine,
+    req: &EngineRequest,
+    top_n: usize,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let result = engine.analyze(req, top_n, &mut |_| {});
+    match result {
+        Ok(lines) => {
+            if let Ok(pos) = req.position() {
+                let lines = lines.iter().map(|l| to_analysis_line(&pos, l)).collect();
+                let _ = res_tx.send(AiResponse::Analysis { req_id, lines });
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Run one analysis request against the shared engine.
+fn run_analyze(
+    engine: &SharedEngine,
+    req: &EngineRequest,
+    top_n: usize,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let mut guard = engine.lock().expect("engine lock");
+    run_analyze_on(&mut **guard, req, top_n, req_id, res_tx)
+}
+
+/// What to do after an engine error (§7.3).
+enum Fallback {
+    /// Do nothing (user cancelled).
+    None,
+    /// Swap to builtin permanently, then retry on the shared engine.
+    RetryShared,
+    /// Answer this request with a one-off builtin; keep Pikafish.
+    RetryOneOff,
+}
+
+/// Run `f` on the one-off builtin engine (created lazily, level synced
+/// to the shared engine's level) for a single illegal-move fallback.
+fn retry_one_off(
+    engine: &SharedEngine,
+    one_off: &mut Option<BuiltinEngine>,
+    f: impl FnOnce(&mut BuiltinEngine),
+) {
+    let level = engine.lock().expect("engine lock").level();
+    let fb = one_off.get_or_insert_with(|| BuiltinEngine::with_level(level));
+    if fb.level() != level {
+        let _ = fb.set_level(level);
+    }
+    f(fb);
+}
+
+/// Fallback policy for an engine error (§7.3).
+fn fallback_action(
+    e: &EngineError,
+    engine: &SharedEngine,
+    notice: &std::sync::Arc<Mutex<Option<String>>>,
+    illegal_count: &mut u32,
+) -> Fallback {
+    match e {
+        EngineError::Stopped => Fallback::None,
+        EngineError::IllegalMove(m) => {
+            *illegal_count += 1;
+            if *illegal_count > 3 {
+                swap_to_builtin(engine, notice, &format!("nước không hợp lệ: {m}"));
+                Fallback::RetryShared
+            } else {
+                Fallback::RetryOneOff
+            }
+        }
+        _ => {
+            swap_to_builtin(engine, notice, &e.to_string());
+            Fallback::RetryShared
+        }
+    }
 }
 
 impl AiWorker {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(engine: SharedEngine) -> Self {
         let (req_tx, req_rx) = channel::<AiRequest>();
         let (res_tx, res_rx) = channel::<AiResponse>();
-        // The worker sends the Searcher's stop handle back once, so the
-        // main thread can set the exact flag the search loop polls.
-        let (stop_tx, stop_rx) = channel::<Arc<AtomicBool>>();
+        // The stop handle shares the engine's flag, so `request_stop()`
+        // interrupts a running search from the UI thread. The flag lives
+        // in the `SharedEngine`, not in the engine, so it survives swaps.
+        let stop = engine.stop_handle();
+        let stop_for_thread = stop.clone();
+        let fallback_notice = std::sync::Arc::new(Mutex::new(None));
+        let notice_for_thread = std::sync::Arc::clone(&fallback_notice);
         std::thread::spawn(move || {
-            let mut searcher = xq_core::search::Searcher::new(32);
-            let searcher_stop = searcher.stop_handle();
-            let _ = stop_tx.send(Arc::clone(&searcher_stop));
-            while let Ok(req) = req_rx.recv() {
+            // One-off builtin for illegal-move fallbacks (this move only);
+            // the shared engine is swapped only after repeated failures.
+            let mut one_off: Option<BuiltinEngine> = None;
+            let mut illegal_count: u32 = 0;
+            // Latest request waiting while a search runs; older queued
+            // requests are dropped (the UI drops stale responses by
+            // req_id anyway). A search already running cannot be
+            // interrupted from the queue — only the stop flag can.
+            let mut pending: Option<AiRequest> = None;
+            loop {
+                let req = match pending.take() {
+                    Some(r) => r,
+                    None => match req_rx.recv() {
+                        Ok(r) => r,
+                        Err(_) => break,
+                    },
+                };
                 match req {
-                    AiRequest::BestMove {
-                        pos,
-                        history,
-                        limits,
-                        req_id,
-                    } => {
-                        let tx = res_tx.clone();
-                        let result = searcher.search(&pos, &history, limits, &mut |info| {
-                            let _ = tx.send(AiResponse::Info {
-                                req_id,
-                                depth: info.depth,
-                                score: info.score,
-                                pv: info.pv.clone(),
-                            });
-                        });
-                        let _ = res_tx.send(AiResponse::BestMove {
-                            req_id,
-                            mv: result.best,
-                            score: result.score,
-                        });
+                    AiRequest::BestMove { req, req_id } => {
+                        let result = run_best_move(&engine, &req, req_id, &res_tx);
+                        if let Err(e) = result {
+                            let action = fallback_action(
+                                &e,
+                                &engine,
+                                &notice_for_thread,
+                                &mut illegal_count,
+                            );
+                            match action {
+                                Fallback::None => {}
+                                Fallback::RetryShared => {
+                                    let _ = run_best_move(&engine, &req, req_id, &res_tx);
+                                }
+                                Fallback::RetryOneOff => {
+                                    retry_one_off(&engine, &mut one_off, |fb| {
+                                        let _ = run_best_move_on(fb, &req, req_id, &res_tx);
+                                    });
+                                }
+                            }
+                        }
                     }
-                    AiRequest::Analyze {
-                        pos,
-                        history,
-                        top_n,
-                        limits,
-                        req_id,
-                    } => {
-                        let lines = searcher.analyze(&pos, &history, top_n, limits);
-                        let _ = res_tx.send(AiResponse::Analysis { req_id, lines });
+                    AiRequest::Analyze { req, top_n, req_id } => {
+                        let result = run_analyze(&engine, &req, top_n, req_id, &res_tx);
+                        if let Err(e) = result {
+                            let action = fallback_action(
+                                &e,
+                                &engine,
+                                &notice_for_thread,
+                                &mut illegal_count,
+                            );
+                            match action {
+                                Fallback::None => {}
+                                Fallback::RetryShared => {
+                                    let _ = run_analyze(&engine, &req, top_n, req_id, &res_tx);
+                                }
+                                Fallback::RetryOneOff => {
+                                    retry_one_off(&engine, &mut one_off, |fb| {
+                                        let _ = run_analyze_on(fb, &req, top_n, req_id, &res_tx);
+                                    });
+                                }
+                            }
+                        }
                     }
                     AiRequest::Stop => {
-                        searcher_stop.store(true, Ordering::Relaxed);
+                        stop_for_thread.stop();
+                    }
+                }
+                // Drain queued requests, keeping only the latest; a Stop
+                // queued between searches still takes effect.
+                while let Ok(q) = req_rx.try_recv() {
+                    match q {
+                        AiRequest::Stop => stop_for_thread.stop(),
+                        other => pending = Some(other),
                     }
                 }
             }
         });
-        let stop = stop_rx.recv().expect("AI worker thread started");
         Self {
             tx: req_tx,
             rx: res_rx,
             stop,
             next_req_id: 1,
+            fallback_notice,
         }
+    }
+
+    /// Take the fallback notice, if the worker switched engines. The UI
+    /// shows it as a banner once.
+    pub fn take_fallback_notice(&self) -> Option<String> {
+        self.fallback_notice.lock().expect("notice lock").take()
     }
 
     /// Allocate the next request id.
@@ -160,9 +372,9 @@ impl AiWorker {
 
     /// Ask the running search to stop as soon as possible. Sets the flag
     /// the search loop polls directly (no queueing), and also sends the
-    /// `Stop` request so the worker's flag stays set between searches.
+    /// `Stop` request so the flag stays set between searches.
     pub fn request_stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.stop();
         let _ = self.tx.send(AiRequest::Stop);
     }
 
@@ -178,7 +390,9 @@ impl AiWorker {
 
 impl Default for AiWorker {
     fn default() -> Self {
-        Self::new()
+        Self::new(xq_engine::shared_engine(Box::new(
+            xq_engine::BuiltinEngine::new(),
+        )))
     }
 }
 
@@ -186,10 +400,22 @@ impl Default for AiWorker {
 mod tests {
     use super::*;
     use xq_core::board::Position;
+    use xq_engine::Score;
+    use xq_engine::SearchLimits;
+
+    fn test_worker() -> AiWorker {
+        AiWorker::new(xq_engine::shared_engine(Box::new(
+            xq_engine::BuiltinEngine::new(),
+        )))
+    }
+
+    fn startpos_req(limits: SearchLimits) -> EngineRequest {
+        EngineRequest::new(Position::startpos().to_fen(), Vec::new(), limits)
+    }
 
     #[test]
     fn req_ids_increase() {
-        let mut w = AiWorker::new();
+        let mut w = test_worker();
         let a = w.alloc_req_id();
         let b = w.alloc_req_id();
         let c = w.alloc_req_id();
@@ -206,21 +432,19 @@ mod tests {
 
     #[test]
     fn stop_flag_is_set_immediately() {
-        let w = AiWorker::new();
-        assert!(!w.stop.load(Ordering::Relaxed));
+        let w = test_worker();
+        assert!(!w.stop.is_stopped());
         w.request_stop();
-        assert!(w.stop.load(Ordering::Relaxed));
+        assert!(w.stop.is_stopped());
     }
 
     #[test]
     fn worker_returns_a_legal_best_move() {
-        let mut w = AiWorker::new();
+        let mut w = test_worker();
         let pos = Position::startpos();
         let req_id = w.alloc_req_id();
         w.tx.send(AiRequest::BestMove {
-            pos: pos.clone(),
-            history: vec![pos.hash()],
-            limits: SearchLimits::depth(1),
+            req: startpos_req(SearchLimits::depth(1)),
             req_id,
         })
         .unwrap();
@@ -243,18 +467,15 @@ mod tests {
 
     #[test]
     fn stop_returns_quickly_after_a_search_starts() {
-        // With the placeholder depth-1 search (M2 not landed yet) a search
-        // finishes immediately; this test pins the contract that setting
-        // the stop flag is instant and the worker still answers. The real
-        // <=100 ms stop-latency check against a deep search belongs to
-        // the M2 search tests (spec §8.6 `stop_flag`).
-        let mut w = AiWorker::new();
-        let pos = Position::startpos();
+        // With a depth-1 search a search finishes immediately; this test
+        // pins the contract that setting the stop flag is instant and the
+        // worker still answers. The real <=100 ms stop-latency check
+        // against a deep search belongs to the M2 search tests
+        // (spec §8.6 `stop_flag`).
+        let mut w = test_worker();
         let req_id = w.alloc_req_id();
         w.tx.send(AiRequest::BestMove {
-            pos: pos.clone(),
-            history: vec![pos.hash()],
-            limits: SearchLimits::time_ms(8000),
+            req: startpos_req(SearchLimits::time_ms(8000)),
             req_id,
         })
         .unwrap();
@@ -265,5 +486,282 @@ mod tests {
             w.rx.recv_timeout(std::time::Duration::from_secs(5))
                 .expect("worker answers");
         assert_eq!(r.req_id(), req_id);
+    }
+
+    #[test]
+    fn analyze_returns_scored_lines() {
+        let mut w = test_worker();
+        let req_id = w.alloc_req_id();
+        w.tx.send(AiRequest::Analyze {
+            req: startpos_req(SearchLimits::depth(2)),
+            top_n: 3,
+            req_id,
+        })
+        .unwrap();
+        let r =
+            w.rx.recv_timeout(std::time::Duration::from_secs(10))
+                .expect("worker answers");
+        match r {
+            AiResponse::Analysis { lines, .. } => {
+                assert!(!lines.is_empty());
+                assert!(lines.len() <= 3);
+                for window in lines.windows(2) {
+                    assert!(window[0].score >= window[1].score);
+                }
+            }
+            other => panic!("mong đợi Analysis, gặp {other:?}"),
+        }
+    }
+
+    #[test]
+    fn score_type_is_cp() {
+        // Mate scores arrive as clamped centipawns, never as raw MATE.
+        let line = Line {
+            mv: xq_core::notation::parse_iccs("h2e2").unwrap(),
+            score: Score::Mate(3),
+            depth: 10,
+            pv: Vec::new(),
+        };
+        assert_eq!(line.score.to_cp_clamped(), 30000 - 3);
+    }
+
+    // --- Worker-level fallback tests (§7.3) ---
+    //
+    // These use a mock engine instead of fake-uci: the worker lives in
+    // the binary crate `xq-app` and cannot be imported from an
+    // integration test, and the fake-uci binary path is too fragile to
+    // reach from here. The fake-engine behaviour itself is covered by
+    // `xq-pikafish/tests/fake_engine.rs`.
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum FailMode {
+        /// Always crash (exit code 1).
+        Crash,
+        /// Always answer an illegal move.
+        Illegal,
+        /// Answer a legal move after a 2 s sleep.
+        Slow,
+    }
+
+    struct MockEngine {
+        level: xq_engine::Level,
+        fail: FailMode,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl MockEngine {
+        fn new(fail: FailMode) -> Self {
+            Self {
+                level: xq_engine::Level::Medium,
+                fail,
+                stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+
+        fn legal_line(req: &EngineRequest) -> Line {
+            let pos = req.position().expect("vị trí hợp lệ");
+            let mv = pos.legal_moves()[0];
+            Line {
+                mv,
+                score: Score::Cp(35),
+                depth: 1,
+                pv: vec![mv],
+            }
+        }
+    }
+
+    impl Engine for MockEngine {
+        fn name(&self) -> &str {
+            "MockPikafish"
+        }
+
+        fn new_game(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+
+        fn set_level(&mut self, level: xq_engine::Level) -> Result<(), EngineError> {
+            self.level = level;
+            Ok(())
+        }
+
+        fn best_move(
+            &mut self,
+            req: &EngineRequest,
+            _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
+        ) -> Result<Line, EngineError> {
+            match self.fail {
+                FailMode::Crash => Err(EngineError::Crashed(Some(1))),
+                FailMode::Illegal => Err(EngineError::IllegalMove("a0a9".to_string())),
+                FailMode::Slow => {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    Ok(Self::legal_line(req))
+                }
+            }
+        }
+
+        fn analyze(
+            &mut self,
+            req: &EngineRequest,
+            _top_n: usize,
+            _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
+        ) -> Result<Vec<Line>, EngineError> {
+            match self.fail {
+                FailMode::Crash => Err(EngineError::Crashed(Some(1))),
+                FailMode::Illegal => Err(EngineError::IllegalMove("a0a9".to_string())),
+                FailMode::Slow => Ok(vec![Self::legal_line(req)]),
+            }
+        }
+
+        fn score_move(
+            &mut self,
+            _req: &EngineRequest,
+            _mv: xq_core::types::Move,
+        ) -> Result<Score, EngineError> {
+            Ok(Score::Cp(0))
+        }
+
+        fn stop_handle(&self) -> StopHandle {
+            StopHandle::from_flag(std::sync::Arc::clone(&self.stop))
+        }
+
+        fn level(&self) -> xq_engine::Level {
+            self.level
+        }
+    }
+
+    fn mock_worker(fail: FailMode) -> AiWorker {
+        AiWorker::new(xq_engine::shared_engine(Box::new(MockEngine::new(fail))))
+    }
+
+    /// Wait for the next `BestMove` response (ignoring `Info`).
+    fn wait_best_move(w: &AiWorker, secs: u64) -> AiResponse {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            match w.rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(r @ AiResponse::BestMove { .. }) => return r,
+                Ok(_) => {}
+                Err(_) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "worker không trả BestMove trong {secs} s"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn worker_falls_back_to_builtin_on_crash() {
+        let mut w = mock_worker(FailMode::Crash);
+        let req_id = w.alloc_req_id();
+        w.tx.send(AiRequest::BestMove {
+            req: startpos_req(SearchLimits::depth(1)),
+            req_id,
+        })
+        .unwrap();
+        let r = wait_best_move(&w, 10);
+        match r {
+            AiResponse::BestMove {
+                req_id: got, mv, ..
+            } => {
+                assert_eq!(got, req_id);
+                assert!(Position::startpos().legal_moves().contains(&mv));
+            }
+            other => panic!("mong đợi BestMove, gặp {other:?}"),
+        }
+        assert!(
+            w.take_fallback_notice().is_some(),
+            "crash phải để lại banner dự phòng"
+        );
+    }
+
+    #[test]
+    fn illegal_move_uses_one_off_builtin() {
+        let mut w = mock_worker(FailMode::Illegal);
+        let req_id = w.alloc_req_id();
+        w.tx.send(AiRequest::BestMove {
+            req: startpos_req(SearchLimits::depth(1)),
+            req_id,
+        })
+        .unwrap();
+        let r = wait_best_move(&w, 10);
+        match r {
+            AiResponse::BestMove {
+                req_id: got, mv, ..
+            } => {
+                assert_eq!(got, req_id);
+                assert!(Position::startpos().legal_moves().contains(&mv));
+            }
+            other => panic!("mong đợi BestMove, gặp {other:?}"),
+        }
+        assert!(
+            w.take_fallback_notice().is_none(),
+            "một lần IllegalMove chưa được đổi engine"
+        );
+    }
+
+    #[test]
+    fn illegal_move_swaps_after_three() {
+        let mut w = mock_worker(FailMode::Illegal);
+        for _ in 0..4 {
+            let req_id = w.alloc_req_id();
+            w.tx.send(AiRequest::BestMove {
+                req: startpos_req(SearchLimits::depth(1)),
+                req_id,
+            })
+            .unwrap();
+            let r = wait_best_move(&w, 10);
+            match r {
+                AiResponse::BestMove {
+                    req_id: got, mv, ..
+                } => {
+                    assert_eq!(got, req_id);
+                    assert!(Position::startpos().legal_moves().contains(&mv));
+                }
+                other => panic!("mong đợi BestMove, gặp {other:?}"),
+            }
+        }
+        assert!(
+            w.take_fallback_notice().is_some(),
+            "lần IllegalMove thứ 4 phải đổi sang Builtin + banner"
+        );
+    }
+
+    #[test]
+    fn stale_request_dropped() {
+        // req 1 is slow; req 2 and req 3 queue behind it. The drain
+        // keeps only the latest queued request, so req 2 is never
+        // answered and the UI must ignore it by req_id.
+        let mut w = mock_worker(FailMode::Slow);
+        let id1 = w.alloc_req_id();
+        let id2 = w.alloc_req_id();
+        let id3 = w.alloc_req_id();
+        for id in [id1, id2, id3] {
+            w.tx.send(AiRequest::BestMove {
+                req: startpos_req(SearchLimits::depth(1)),
+                req_id: id,
+            })
+            .unwrap();
+        }
+        let mut got = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while got.len() < 2 {
+            match w.rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(AiResponse::BestMove { req_id, mv, .. }) => {
+                    assert!(Position::startpos().legal_moves().contains(&mv));
+                    got.push(req_id);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "worker không trả đủ 2 BestMove trong 10 s (đã có {got:?})"
+                    );
+                }
+            }
+        }
+        assert_eq!(got, vec![id1, id3], "req giữa phải bị bỏ, chỉ còn mới nhất");
+        assert!(!response_is_current(id2, Some(id3)));
+        assert!(response_is_current(id3, Some(id3)));
     }
 }

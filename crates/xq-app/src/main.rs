@@ -3,6 +3,8 @@
 mod ai_worker;
 mod app;
 mod board_view;
+mod engine_log;
+mod engine_manager;
 mod i18n;
 mod screens;
 mod settings;

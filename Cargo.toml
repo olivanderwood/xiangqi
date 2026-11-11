@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/xq-core", "crates/xq-book", "crates/xq-app", "tools/book-check"]
+members = ["crates/xq-core", "crates/xq-book", "crates/xq-engine", "crates/xq-pikafish", "crates/xq-app", "tools/book-check"]
 resolver = "2"
 
 [profile.release]

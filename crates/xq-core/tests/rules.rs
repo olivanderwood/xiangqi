@@ -160,3 +160,43 @@ fn move_struct_helpers() {
     assert_eq!(file_of(m.from), 7);
     assert_eq!(rank_of(m.from), 2);
 }
+
+#[test]
+fn pawn_attacks_forward_not_diagonal() {
+    // Xiangqi pawns attack the squares they can move to: straight
+    // forward, plus sideways once across the river — never diagonally
+    // (unlike western chess). The old `is_attacked` only checked the
+    // two diagonal squares, so a pawn giving check straight ahead was
+    // missed and illegal moves were generated.
+    //
+    // Regression case from the Pikafish integration (§9.3): in this
+    // position the Red pawn on f6 checks the Black king on f7, so the
+    // only legal move is Kf7-f8 — Pikafish agrees, and before the fix
+    // xq-core listed 30 moves here.
+    let pos =
+        Position::from_fen("3a4r/3na4/b3nk3/5P1P1/P3p2cp/4P1B2/PN7/5A2B/9/3K5 b - - 25 1").unwrap();
+    assert!(pos.in_check(xq_core::Color::Black));
+    let legal: Vec<String> = pos.legal_moves().into_iter().map(iccs).collect();
+    assert_eq!(legal, vec!["f7f8"]);
+
+    // Forward attack, both colours: pawn one rank in front of the king.
+    let pos = Position::from_fen("4k4/4P4/9/9/9/9/9/9/9/3K5 b - - 0 1").unwrap();
+    assert!(pos.in_check(xq_core::Color::Black));
+    let pos = Position::from_fen("3k5/9/9/9/9/9/9/9/4p4/4K4 w - - 0 1").unwrap();
+    assert!(pos.in_check(xq_core::Color::Red));
+
+    // Diagonal does NOT attack: a pawn on d8 does not check a king on e9.
+    let pos = Position::from_fen("4k4/3P5/9/9/9/9/9/9/9/3K5 b - - 0 1").unwrap();
+    assert!(!pos.in_check(xq_core::Color::Black));
+
+    // Sideways attack after crossing the river: a Red pawn on e6
+    // attacks f6, and a Black pawn on e3 attacks f3.
+    let pos = Position::from_fen("4k4/9/9/4P4/9/9/9/9/9/3K5 b - - 0 1").unwrap();
+    assert!(pos.is_attacked(sq(5, 6), xq_core::Color::Red));
+    let pos = Position::from_fen("4k4/9/9/9/9/9/4p4/9/9/3K5 w - - 0 1").unwrap();
+    assert!(pos.is_attacked(sq(5, 3), xq_core::Color::Black));
+
+    // ... but not before crossing: a Red pawn on e4 does not attack f4.
+    let pos = Position::from_fen("4k4/9/9/9/9/4P4/9/9/9/3K5 b - - 0 1").unwrap();
+    assert!(!pos.is_attacked(sq(5, 4), xq_core::Color::Red));
+}

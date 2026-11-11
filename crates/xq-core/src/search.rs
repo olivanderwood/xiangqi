@@ -39,7 +39,7 @@ const MAX_PLY: usize = 128;
 /// Maximum quiescence plies (§4.2 item 6).
 const QPLY_MAX: i32 = 12;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchLimits {
     pub max_depth: Option<u8>,
     pub max_time_ms: Option<u64>,
@@ -205,6 +205,14 @@ impl Searcher {
     #[must_use]
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+
+    /// Use an externally owned stop flag (shared by everyone driving
+    /// this searcher) instead of the one created with it. The flag is
+    /// what `search`/`analyze`/`score_move` poll, so swapping engines
+    /// behind one `SharedEngine` must not orphan the stop handle.
+    pub fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.stop = flag;
     }
 
     pub fn clear(&mut self) {

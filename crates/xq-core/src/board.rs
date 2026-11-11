@@ -333,19 +333,39 @@ impl Position {
                 }
             }
         }
-        // 3. Pawn: enemy pawn one rank behind (in its moving direction)
-        // and one file aside attacks the target.
+        // 3. Pawn: a pawn attacks the squares it can move to — straight
+        // forward, plus sideways once it has crossed the river.
+        // Xiangqi pawns never attack diagonally (unlike western chess):
+        // a Red pawn on f6 DOES attack f7, and a crossed pawn on e6
+        // DOES attack f6 — the old code only checked the two diagonal
+        // squares and missed both.
         let pawn_rank = match by {
             Color::Red => tr - 1,
             Color::Black => tr + 1,
         };
-        for df in [-1, 1] {
-            let pf = tf + df;
-            if (0..9).contains(&pf) && (0..10).contains(&pawn_rank) {
-                let s = sq(pf, pawn_rank).unwrap();
-                if let Some(p) = self.board[s as usize] {
-                    if p.color == by && p.kind == PieceKind::Pawn {
-                        return true;
+        if (0..10).contains(&pawn_rank) {
+            let s = sq(tf, pawn_rank).unwrap();
+            if let Some(p) = self.board[s as usize] {
+                if p.color == by && p.kind == PieceKind::Pawn {
+                    return true;
+                }
+            }
+        }
+        // Sideways attack: only a pawn that has crossed the river can
+        // move sideways, and it stands on the target's rank.
+        let crossed = match by {
+            Color::Red => (5..=9).contains(&tr),
+            Color::Black => (0..=4).contains(&tr),
+        };
+        if crossed {
+            for df in [-1, 1] {
+                let pf = tf + df;
+                if (0..9).contains(&pf) {
+                    let s = sq(pf, tr).unwrap();
+                    if let Some(p) = self.board[s as usize] {
+                        if p.color == by && p.kind == PieceKind::Pawn {
+                            return true;
+                        }
                     }
                 }
             }

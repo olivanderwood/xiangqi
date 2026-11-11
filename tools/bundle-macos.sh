@@ -60,6 +60,33 @@ EOF
 
 cp "$ROOT/crates/xq-app/assets/icon.icns" "$APP/Contents/Resources/icon.icns"
 
+# Pikafish engine (spec §8.3): copy engine/ into Resources BEFORE
+# codesign, so the engine ships inside the bundle and is signed with
+# it. The engine dir is gitignored; fetch it first with
+# tools/fetch-engine.sh (or build it with tools/build-engine.sh).
+ENGINE_DIR="$ROOT/engine"
+if [ -d "$ENGINE_DIR" ]; then
+  mkdir -p "$APP/Contents/Resources/engine"
+  if [ -f "$ENGINE_DIR/Pikafish-MacOS-universal" ]; then
+    cp "$ENGINE_DIR/Pikafish-MacOS-universal" "$APP/Contents/Resources/engine/"
+    MACOS_EXE="Pikafish-MacOS-universal"
+  elif [ -f "$ENGINE_DIR/pikafish" ]; then
+    cp "$ENGINE_DIR/pikafish" "$APP/Contents/Resources/engine/"
+    MACOS_EXE="pikafish"
+  else
+    echo "bundle-macos.sh: no macOS Pikafish binary in $ENGINE_DIR" >&2; exit 1
+  fi
+  chmod 755 "$APP/Contents/Resources/engine/$MACOS_EXE"
+  for f in pikafish.nnue Copying.txt NNUE-License.md SOURCE.txt; do
+    [ -f "$ENGINE_DIR/$f" ] || { echo "bundle-macos.sh: missing $ENGINE_DIR/$f" >&2; exit 1; }
+    cp "$ENGINE_DIR/$f" "$APP/Contents/Resources/engine/"
+  done
+  # Sign the engine binary on its own first, then the whole bundle.
+  codesign --force --sign - "$APP/Contents/Resources/engine/$MACOS_EXE"
+else
+  echo "bundle-macos.sh: WARNING: $ENGINE_DIR missing — bundle ships without Pikafish (builtin AI only)" >&2
+fi
+
 # Ad-hoc signature (required to run on Apple Silicon). Developer-ID
 # signing + notarize are out of scope for 1.0 (spec 9.3.7).
 codesign --force --deep --sign - "$APP"

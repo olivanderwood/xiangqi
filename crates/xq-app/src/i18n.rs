@@ -91,6 +91,23 @@ pub enum Key {
     NoHintAvailable,
     LessonNotFound,
     GradeLabel,
+    EngineSection,
+    EngineInUse,
+    EngineThreads,
+    EngineHash,
+    EngineHashAuto,
+    EngineCustomElo,
+    DiffCustom,
+    EngineDiversity,
+    EngineTournament,
+    EnginePath,
+    EngineRetry,
+    EngineTraceLog,
+    AboutEngine,
+    AboutEngineBody,
+    AboutNnue,
+    OpenEngineFolder,
+    OpenEngineLog,
 }
 
 #[must_use]
@@ -182,6 +199,23 @@ pub fn t(key: Key) -> &'static str {
         Key::NoHintAvailable => "Chưa có gợi ý.",
         Key::LessonNotFound => "Không tìm thấy bài học.",
         Key::GradeLabel => "Chấm",
+        Key::EngineSection => "Engine cờ (Pikafish)",
+        Key::EngineInUse => "Engine đang dùng: {n}",
+        Key::EngineThreads => "Số luồng",
+        Key::EngineHash => "Bộ nhớ Hash (MB)",
+        Key::EngineHashAuto => "Tự động (theo RAM)",
+        Key::EngineCustomElo => "Elo tùy chỉnh",
+        Key::DiffCustom => "Tùy chỉnh (Elo)",
+        Key::EngineDiversity => "Đa dạng nước đi (Cao thủ)",
+        Key::EngineTournament => "Chế độ thi đấu (tắt đa dạng)",
+        Key::EnginePath => "Đường dẫn Pikafish (để trống = tự tìm)",
+        Key::EngineRetry => "Thử lại Pikafish",
+        Key::EngineTraceLog => "Ghi chi tiết UCI vào engine.log",
+        Key::AboutEngine => "Engine Pikafish {n} — GPLv3, mã nguồn: github.com/official-pikafish/Pikafish.",
+        Key::AboutEngineBody => "AI mặc định là Pikafish (mạnh nhất hiện nay cho cờ tướng). Khi không chạy được Pikafish, game tự dùng AI tích hợp.",
+        Key::AboutNnue => "Mạng nơ-ron pikafish.nnue chỉ dùng phi thương mại (xem NNUE-License).",
+        Key::OpenEngineFolder => "Mở thư mục engine",
+        Key::OpenEngineLog => "Mở engine.log",
     }
 }
 
@@ -192,6 +226,7 @@ pub fn difficulty_name(d: u8) -> &'static str {
         0 => t(Key::DiffEasy),
         2 => t(Key::DiffHard),
         3 => t(Key::DiffMaster),
+        4 => t(Key::DiffCustom),
         _ => t(Key::DiffMedium),
     }
 }

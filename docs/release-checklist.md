@@ -61,3 +61,33 @@ bằng mắt trên máy thật (hiển thị chữ, co giãn cửa sổ, Retina)
   43,92 s.
 - `engine_sanity` (release): **pass** — toàn bộ nước của người học trong 12 bài (depth 8), 212,54 s, 0 vi phạm delta > 150. Chạy lại sáng 2026-11-11 sau bản sửa search (bỏ LMR ở nút gốc + guard ăn quân treo); chốt lại sách sau bản sửa.
 - Chưa chạy: `nps_benchmark` / `depth_in_3s_probe` (chỉ in số, không assert).
+
+## Pikafish — checklist phát hành (§9.5)
+
+Kiểm trước mỗi bản phát hành có Pikafish. Mục tự động đã chạy trên
+Linux (VM) thì ghi bằng chứng; mục cần máy thật để trống cho Hieu.
+
+- [ ] Gói Windows zip chứa `engine/` đầy đủ: `Pikafish-Windows-x86-64-universal.exe`, `pikafish.nnue`, `Copying.txt`, `NNUE-License.md`, `SOURCE.txt`
+  - Chưa kiểm: cần build gói thật trên Windows (release.yml không chạy CI theo ý Hieu; chạy tay các bước trong file đó).
+- [ ] Gói macOS .app chứa `Contents/Resources/engine/` đầy đủ, binary đã ký riêng trước khi ký bundle
+  - Chưa kiểm: cần chạy `tools/bundle-macos.sh` trên Mac thật.
+- [ ] Mở app lần đầu: Pikafish tự chạy (không banner lỗi), Cài đặt hiện đúng tên engine
+  - Đã kiểm trên Linux: smoke test `vs_ai_plays_with_fake_pikafish` pass (fake-uci được cài lúc khởi động, không banner, AI trả lời nước mở đầu).
+- [ ] Xóa/đổi tên thư mục `engine/`: app vẫn chạy bằng AI tích hợp + banner một lần
+  - Chưa kiểm trên máy thật (cần đổi tên thư mục engine rồi mở app).
+- [ ] Chơi 1 ván trọn vẹn ở mỗi mức Dễ / Trung bình / Khó / Cao thủ với Pikafish
+  - Đã kiểm trên Linux: `levels_ordered` pass — Cao thủ thắng Dễ 10/10; `measure_level_matches` pass — Dễ thắng 1/4 trước Trung bình, Trung bình 0/4 trước Khó, Khó 0/4 trước Cao thủ. Chưa kiểm: chơi tay 1 ván mỗi mức trên máy thật.
+- [ ] Mức Cao thủ: 10 ván liên tiếp không đi y hệt nhau (đa dạng nước đi)
+  - Đã kiểm trên Linux: `diversity_varies` pass — 10 ván seed khác nhau cho 10 chuỗi 12 nửa nước đầu khác nhau.
+- [ ] Tắt đa dạng + cùng seed: AI đi y hệt nhau (tái lập được)
+  - Đã kiểm trên Linux: `diversity_off_deterministic` pass (`go depth 12` cho cùng nước).
+- [ ] Màn Giới thiệu hiện đúng phiên bản Pikafish + GPLv3 + link nguồn + giấy phép NNUE; nút mở thư mục engine/ hoạt động
+  - Chưa kiểm trên máy thật (cần mở màn Giới thiệu và bấm nút).
+- [ ] Kích thước gói < 90 MB (mục tiêu cũ "< 15 MB" đã đổi theo §8.3: NNUE ~50 MB)
+  - Chưa kiểm: cần đo gói thật (zip Windows / DMG macOS) sau khi đóng gói.
+- [ ] Release đính kèm tarball mã nguồn Pikafish ở commit đã ghim (nghĩa vụ GPL)
+  - Chưa kiểm: cần tạo Release thật; job `engine-build` trong release.yml (local, không chạy CI) tạo file `pikafish-<version>-src.tar.gz`.
+- [ ] `tools/fetch-engine.sh` tải + kiểm sha256 được trên máy sạch (không có sẵn `engine/`)
+  - Đã kiểm trên Linux (2026-11-11): tải archive, sha256 archive OK, sha256 NNUE OK, ghi `SOURCE.txt`. Lưu ý: cần trình giải nén 7z (`7z`/`7zz`/`bsdtar`/py7zr); `/tmp` trên VM chỉ 512 MB nên script dùng `target/.fetch-tmp` thay vì `/tmp`.
+- [ ] Build Pikafish từ mã nguồn ở commit đã ghim cho ra binary chạy được (`tools/build-engine.sh`)
+  - Đã kiểm trên Linux (2026-11-11): build xong ở commit 4c17cee, binary 1 arch x86-64-avx2 (gcc, không PGO — `profile-build` universal lỗi vì bench PGO thiếu net, universal Linux cần clang+libc++; xem docs/DECISIONS-pikafish.md §35–§36); `bench` = 2651062 nodes, khớp bản release; thư mục đích có đủ binary + `pikafish.nnue` + giấy phép và chạy độc lập được. Chưa kiểm: build trên Windows/macOS thật.

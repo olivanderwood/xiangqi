@@ -11,12 +11,22 @@ use crate::board_view::{
 };
 use crate::i18n::{self, Key};
 use std::time::{SystemTime, UNIX_EPOCH};
-use xq_core::analysis::{explain_tags, grade_from_delta, tags_for, Grade};
+use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::{Game, GameResult};
-use xq_core::search::{AnalysisLine, Difficulty, Searcher};
+use xq_core::search::AnalysisLine;
 use xq_core::types::{Color, Move, PieceKind};
+use xq_engine::{EngineRequest, Level, SharedEngine};
+use xq_pikafish::{pick_weighted, GameRng, DIVERSITY_MARGIN_CP, DIVERSITY_PLIES};
+
+/// Fresh per-game seed from the clock.
+fn new_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| (u64::from(d.subsec_nanos()) << 32) | u64::from(d.as_secs() as u32))
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StartSide {
@@ -60,11 +70,24 @@ pub struct VsAiState {
     pub from_learn: bool,
     pub last_grade: Option<(Grade, String)>,
     pub last_board: Option<(egui::Rect, BoardGeometry)>,
-    pub searcher: Searcher,
+    /// Seed for this game's diverse/weaken picks (§5: same seed +
+    /// same position → same pick, so a replay reproduces the game).
+    pub game_seed: u64,
+    /// Custom Elo (Settings slider) for difficulty 4.
+    pub custom_elo: u16,
+    /// Request id of a pending diverse/weaken analysis (its `Analysis`
+    /// response is routed to the pick, not to the hint arrows).
+    pub diverse_req_id: Option<u64>,
+    /// §5 settings (P7 adds the UI toggles; defaults here).
+    pub diversity: bool,
+    pub tournament: bool,
+    /// Shared engine (builtin now, Pikafish when available) for the
+    /// synchronous grading in continue-from-learn mode.
+    pub engine: SharedEngine,
 }
 
 impl VsAiState {
-    pub fn new() -> Self {
+    pub fn new(engine: SharedEngine) -> Self {
         Self {
             game: Game::new(Position::startpos()),
             opponent: VsOpponent::Ai {
@@ -96,7 +119,12 @@ impl VsAiState {
             from_learn: false,
             last_grade: None,
             last_board: None,
-            searcher: Searcher::new(8),
+            game_seed: new_seed(),
+            custom_elo: 1900,
+            diverse_req_id: None,
+            diversity: true,
+            tournament: false,
+            engine,
         }
     }
 
@@ -107,22 +135,23 @@ impl VsAiState {
         }
     }
 
-    fn difficulty(&self) -> Difficulty {
+    fn level(&self) -> Level {
         match self.opponent {
             VsOpponent::Ai { difficulty, .. } => match difficulty {
-                0 => Difficulty::Easy,
-                2 => Difficulty::Hard,
-                3 => Difficulty::Master,
-                _ => Difficulty::Medium,
+                0 => Level::Easy,
+                2 => Level::Hard,
+                3 => Level::Master,
+                4 => Level::Elo(self.custom_elo),
+                _ => Level::Medium,
             },
-            VsOpponent::TwoPlayer => Difficulty::Medium,
+            VsOpponent::TwoPlayer => Level::Medium,
         }
     }
 
     /// Play a move: history, animation, hints cleared, check flash armed.
     pub fn play(&mut self, mv: Move, now: f64, animate: bool) {
         let pos_before = self.game.pos.clone();
-        let hashes_before = self.game.hashes().to_vec();
+        let moves_before = self.game.moves.clone();
         let piece = pos_before.piece_at(mv.from);
         let mover = pos_before.side();
         if self.game.play(mv).is_err() {
@@ -130,21 +159,24 @@ impl VsAiState {
         }
         // Grade the move in continue-from-learn mode (§6.5).
         if self.from_learn && Some(mover) == self.human_color() {
-            let best = self.searcher.search(
-                &pos_before,
-                &hashes_before,
-                Difficulty::Medium.limits(),
-                &mut |_| {},
+            let req = EngineRequest::new(
+                self.game.start.to_fen(),
+                moves_before,
+                self.engine.lock().expect("engine lock").grade_limits(),
             );
-            let score_mv = self.searcher.score_move(
-                &pos_before,
-                &hashes_before,
-                mv,
-                Difficulty::Medium.limits(),
-            );
-            let grade = grade_from_delta(best.score - score_mv, false);
-            let expl = explain_tags(&tags_for(&pos_before, mv));
-            self.last_grade = Some((grade, expl));
+            let handle = self.engine.clone();
+            let mut engine = handle.lock().expect("engine lock");
+            if let Ok(best) = engine.best_move(&req, &mut |_| {}) {
+                let best_cp = best.score.to_cp_clamped();
+                let mv_cp = engine
+                    .score_move(&req, mv)
+                    .map(|s| s.to_cp_clamped())
+                    .unwrap_or(best_cp);
+                let grade =
+                    grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
+                let expl = explain_tags(&tags_for(&pos_before, mv));
+                self.last_grade = Some((grade, expl));
+            }
         }
         self.last_move = Some(mv);
         self.anim = if animate {
@@ -205,6 +237,8 @@ impl VsAiState {
         );
         self.ai_thinking = false;
         self.ai_req_id = None;
+        self.game_seed = new_seed();
+        self.diverse_req_id = None;
         self.ai_depth = 0;
         self.hint_arrows.clear();
         self.hint_lines.clear();
@@ -243,6 +277,8 @@ impl VsAiState {
         self.flipped = human == Color::Black;
         self.ai_thinking = false;
         self.ai_req_id = None;
+        self.game_seed = new_seed();
+        self.diverse_req_id = None;
         self.hint_arrows.clear();
         self.hint_lines.clear();
         self.hint_req_id = None;
@@ -269,6 +305,7 @@ impl VsAiState {
             worker.request_stop();
             self.ai_thinking = false;
             self.ai_req_id = None;
+            self.diverse_req_id = None;
         }
         let steps = match self.opponent {
             VsOpponent::Ai { .. } => 2,
@@ -304,11 +341,10 @@ impl VsAiState {
         let req_id = worker.alloc_req_id();
         self.hint_req_id = Some(req_id);
         self.hint_count += 1;
+        let limits = self.engine.lock().expect("engine lock").hint_limits();
         let _ = worker.tx.send(AiRequest::Analyze {
-            pos: self.game.pos.clone(),
-            history: self.game.hashes().to_vec(),
+            req: EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits),
             top_n,
-            limits: Difficulty::Medium.limits(),
             req_id,
         });
     }
@@ -329,7 +365,8 @@ impl VsAiState {
                     response_is_current(*req_id, self.ai_req_id)
                 }
                 AiResponse::Analysis { req_id, .. } => {
-                    response_is_current(*req_id, self.hint_req_id)
+                    response_is_current(*req_id, self.diverse_req_id)
+                        || response_is_current(*req_id, self.hint_req_id)
                 }
             };
             if !mine {
@@ -349,7 +386,20 @@ impl VsAiState {
                     self.play(mv, now, animate);
                     ctx.request_repaint();
                 }
-                AiResponse::Analysis { lines, .. } => {
+                AiResponse::Analysis { req_id, lines } => {
+                    if Some(req_id) == self.diverse_req_id {
+                        self.diverse_req_id = None;
+                        self.ai_req_id = None;
+                        self.ai_thinking = false;
+                        self.ai_depth = 0;
+                        let picked = self.pick_from_lines(&lines);
+                        match picked.or_else(|| lines.first().map(|l| l.mv)) {
+                            Some(mv) => self.play(mv, now, animate),
+                            None => self.ai_thinking = false,
+                        }
+                        ctx.request_repaint();
+                        continue;
+                    }
                     self.hint_req_id = None;
                     self.hint_lines = lines.clone();
                     self.hint_arrows = lines
@@ -371,6 +421,48 @@ impl VsAiState {
         }
     }
 
+    /// (margin_cp, temperature) when this AI move should be picked from
+    /// an analysis instead of playing the best move: the §5 diversity
+    /// pick at Master, or the level weakening at Easy/Medium.
+    fn pick_config(&self) -> Option<(i32, f64)> {
+        let level = self.level();
+        let engine = self.engine.lock().expect("engine lock");
+        if level == Level::Master {
+            if !self.diversity
+                || self.tournament
+                || self.game.moves.len() >= DIVERSITY_PLIES
+                || !engine.supports_diversity()
+            {
+                return None;
+            }
+            // Diversity only when neither side is in check (§5).
+            let pos = &self.game.pos;
+            if pos.in_check(pos.side()) || pos.in_check(pos.side().opposite()) {
+                return None;
+            }
+            return Some((DIVERSITY_MARGIN_CP, 10.0));
+        }
+        engine.weaken(level).map(|w| (w.margin_cp, w.temperature))
+    }
+
+    /// Pick the AI's move from an analysis (diversity/weaken path).
+    /// The RNG is re-derived from (game seed, ply), so a replay with
+    /// the same seed reproduces the same picks.
+    fn pick_from_lines(&self, lines: &[AnalysisLine]) -> Option<Move> {
+        let (margin, temp) = self.pick_config()?;
+        let engine_lines: Vec<xq_engine::Line> = lines
+            .iter()
+            .map(|l| xq_engine::Line {
+                mv: l.mv,
+                score: xq_engine::Score::from_cp(l.score),
+                depth: l.depth,
+                pv: l.pv.clone(),
+            })
+            .collect();
+        let mut rng = GameRng::for_ply(self.game_seed, self.game.moves.len());
+        pick_weighted(&engine_lines, margin, temp, &mut rng)
+    }
+
     fn maybe_trigger_ai(&mut self, worker: &mut crate::ai_worker::AiWorker) {
         let VsOpponent::Ai { human, .. } = self.opponent else {
             return;
@@ -387,12 +479,22 @@ impl VsAiState {
         self.ai_req_id = Some(req_id);
         self.ai_thinking = true;
         self.ai_depth = 0;
-        let _ = worker.tx.send(AiRequest::BestMove {
-            pos: self.game.pos.clone(),
-            history: self.game.hashes().to_vec(),
-            limits: self.difficulty().limits(),
-            req_id,
-        });
+        let limits = self
+            .engine
+            .lock()
+            .expect("engine lock")
+            .limits_for(self.level());
+        let req = EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits);
+        if self.pick_config().is_some() {
+            self.diverse_req_id = Some(req_id);
+            let _ = worker.tx.send(AiRequest::Analyze {
+                req,
+                top_n: 3,
+                req_id,
+            });
+        } else {
+            let _ = worker.tx.send(AiRequest::BestMove { req, req_id });
+        }
     }
 
     fn maybe_auto_hint(&mut self, worker: &mut crate::ai_worker::AiWorker) {
@@ -467,6 +569,10 @@ impl XiangqiApp {
     pub(crate) fn show_vs_ai(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let now = ctx.input(|i| i.time);
         let animate = self.settings.animate;
+        // §5 settings live here (P7 adds the UI toggles).
+        self.vs_ai.diversity = self.settings.diversity;
+        self.vs_ai.tournament = self.settings.tournament;
+        self.vs_ai.custom_elo = self.settings.custom_elo;
         // 1. Poll the worker (non-blocking) and trigger the AI if needed.
         self.vs_ai.poll(&mut self.pending_ai, ctx, now, animate);
         self.vs_ai.maybe_trigger_ai(&mut self.worker);
@@ -746,7 +852,7 @@ impl XiangqiApp {
                     i18n::t(Key::TwoPlayers),
                 );
                 ui.label(i18n::t(Key::Difficulty));
-                for d in 0..=3u8 {
+                for d in 0..=4u8 {
                     ui.radio_value(
                         &mut self.vs_ai.start_difficulty,
                         d,

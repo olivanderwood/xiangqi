@@ -1,0 +1,24 @@
+# Pikafish release pin (integration spec §8.2).
+#
+# Verified live 2026-11-11 against the downloaded binary (see
+# docs/research-pikafish-2026-09-06.md). The release ships a single 7z
+# archive with universal binaries; there are NO separate avx2/sse41
+# builds in this release.
+
+version = "2026-09-06"
+tag = "Pikafish-2026-09-06"
+commit = "4c17cee11f888ae1d48a9494f2e2239f019f0a1f"
+source_url = "https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-09-06/Pikafish.2026-09-06.7z"
+archive_sha256 = "41952bbfe2520faceb5902c69e6ab4845cc999841d2b49a95cc1be7867a25e5b"
+
+# There is NO separate NNUE download and NO upstream-published hash.
+# The net ships inside the archive above; this sha256 was computed
+# locally from the extracted file (see the research report §2). The
+# spec §8.1 template field `nnue_url` therefore has no value here.
+nnue_sha256 = "7d13d73569a9b571ba0eb20cf1596247bc2a42738967e61afef6482b231e900e"
+nnue_bytes = 50706378
+
+# Files inside the archive (universal binaries, one per platform).
+linux_exe = "Pikafish-Linux-x86-64-universal"
+windows_exe = "Pikafish-Windows-x86-64-universal.exe"
+macos_exe = "Pikafish-MacOS-universal"

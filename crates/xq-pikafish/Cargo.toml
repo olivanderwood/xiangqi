@@ -1,0 +1,10 @@
+[package]
+name = "xq-pikafish"
+version = "0.1.0"
+edition = "2021"
+description = "UCI client for the Pikafish Xiangqi engine (subprocess, no network)"
+license = "MIT"
+
+[dependencies]
+xq-core = { path = "../xq-core" }
+xq-engine = { path = "../xq-engine" }

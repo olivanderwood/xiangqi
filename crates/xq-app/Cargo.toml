@@ -12,10 +12,13 @@ path = "src/main.rs"
 [dependencies]
 xq-core = { path = "../xq-core" }
 xq-book = { path = "../xq-book" }
+xq-engine = { path = "../xq-engine" }
+xq-pikafish = { path = "../xq-pikafish" }
 eframe = { version = "0.31", features = ["persistence"] }
 egui = "0.31"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sysinfo = "0.33"
 
 [dev-dependencies]
 egui_kittest = { version = "0.31", features = ["eframe"] }

@@ -1,0 +1,9 @@
+[package]
+name = "xq-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Engine trait + shared types for Xiangqi AI (builtin searcher and Pikafish)"
+license = "MIT"
+
+[dependencies]
+xq-core = { path = "../xq-core" }

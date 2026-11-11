@@ -275,3 +275,92 @@ fn fonts_cover_book() {
         }
     }
 }
+
+/// Find the fake-uci test binary (same profile dir as this test
+/// binary), building it first when it is missing.
+fn fake_uci_path() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("current_exe");
+    let target_dir = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("target/<profile> dir");
+    let bin = target_dir.join("fake-uci");
+    if !bin.is_file() {
+        let workspace = target_dir.parent().expect("workspace root").to_path_buf();
+        let status = std::process::Command::new("cargo")
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(workspace.join("Cargo.toml"))
+            .arg("-p")
+            .arg("xq-pikafish")
+            .arg("--bin")
+            .arg("fake-uci")
+            .status()
+            .expect("chạy cargo build");
+        assert!(status.success(), "không build được fake-uci");
+    }
+    assert!(bin.is_file(), "fake-uci phải tồn tại ở {}", bin.display());
+    bin
+}
+
+/// §9.4: with `XQ_PIKAFISH_PATH` pointing at the fake UCI engine, the
+/// app installs it at startup and the AI answers a human move.
+#[test]
+fn vs_ai_plays_with_fake_pikafish() {
+    // Stage the fake engine in a temp dir with an (empty) NNUE file
+    // next to it, as a real install would have.
+    let dir = std::env::temp_dir().join(format!("xiangqi-smoke-94-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("tạo thư mục test");
+    let staged = dir.join("fake-uci");
+    std::fs::copy(fake_uci_path(), &staged).expect("copy fake-uci");
+    std::fs::write(dir.join("pikafish.nnue"), b"fake").expect("ghi nnue giả");
+    std::env::set_var("XQ_PIKAFISH_PATH", &staged);
+
+    let mut harness = new_harness();
+    // The background pre-warm installs the fake engine.
+    let mut installed = false;
+    for _ in 0..200 {
+        if harness.state().engine_name.starts_with("FakeUci") {
+            installed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        harness.run_steps(2);
+    }
+    assert!(installed, "fake Pikafish phải được cài đặt lúc khởi động");
+    assert!(
+        harness.state().engine_notice.is_none(),
+        "không có banner dự phòng khi Pikafish chạy được"
+    );
+
+    harness.get_by_label("Đấu với AI").click();
+    harness.run_ok();
+    harness.get_by_label("Bắt đầu").click();
+    harness.run_ok();
+    assert!(harness.state().vs_ai.started);
+
+    // Human plays the cannon opening; the fake engine answers.
+    click_square(&mut harness, 25);
+    harness.run_ok();
+    click_square(&mut harness, 22);
+    harness.run_ok();
+    wait_for_ai(&mut harness, 2);
+    let moves = harness.state().vs_ai.game.moves.clone();
+    assert!(
+        moves.len() >= 2,
+        "AI (fake Pikafish) phải trả lời nước mở đầu"
+    );
+    let pos = {
+        let mut p = xq_core::board::Position::startpos();
+        p.make_move(moves[0]);
+        p
+    };
+    assert!(
+        pos.legal_moves().contains(&moves[1]),
+        "nước của AI phải hợp lệ"
+    );
+
+    std::env::remove_var("XQ_PIKAFISH_PATH");
+    let _ = std::fs::remove_dir_all(&dir);
+}
