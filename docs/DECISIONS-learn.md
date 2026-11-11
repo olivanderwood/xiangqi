@@ -211,7 +211,7 @@ lần thử — có 1 bộ dữ liệu nhất quán từ trước cho từng th�
 
 ### Bài mới: Pháo đầu đối Xuyên cung mã
 - **ĐÃ THAY BẰNG §7 (2026-11-11):** bài này bị thay bằng Pháo đầu phá
-  Phi tượng, Mã quỷ (`r-paodau-phituong-maquy`) theo lệnh Hieu — xem
+  Phi tượng, Mã quỳ (`r-paodau-phituong-maquy`) theo lệnh Hieu — xem
   §7. Nội dung dưới đây giữ lại để biết lịch sử: Hieu yêu cầu thêm
   1 thế pháo đầu đối xuyên cung mã. Bài mới
   `r-paodau-xcgma` (Đỏ, cấp 2): "Pháo đầu đối Xuyên cung mã"
@@ -240,9 +240,9 @@ lần thử — có 1 bộ dữ liệu nhất quán từ trước cho từng th�
   chui cung làm chậm triển khai) — nhưng báo cáo trên cho thấy thế
   sau prefix cân bằng, không cần chỉnh prefix thêm.
 
-## §7. Pháo đầu phá Phi tượng, Mã quỷ + biến đối thủ soạn sâu + sửa số mũi tên chồng nhau (Hieu, 2026-11-11)
+## §7. Pháo đầu phá Phi tượng, Mã quỳ + biến đối thủ soạn sâu + sửa số mũi tên chồng nhau (Hieu, 2026-11-11)
 
-### 7.1. Thay bài Xuyên cung mã bằng Pháo đầu phá Phi tượng, Mã quỷ
+### 7.1. Thay bài Xuyên cung mã bằng Pháo đầu phá Phi tượng, Mã quỳ
 
 Hieu: "đổi pháo đầu đối xuyên cung mã thành pháo đầu phá phi tượng
 mã quỳ, nghiên cứu và soạn lại tài liệu dựa trên pikafish cho thế
@@ -255,24 +255,32 @@ trận này, nghiên cứu thật kỹ".
   Mã từ hàng cuối xuyên qua giữa cung tới vị trí góc Sĩ; còn gọi là
   拐角马 (Mã góc). Vậy hệ chuẩn là Tượng phi TRƯỚC, Mã xuyên cung
   SAU — bài cũ (§6) lên Mã trước, chưa phi Tượng, chưa đúng hệ này.
-- Tên gọi tiếng Việt: các bài giảng trên Facebook dùng cụm
-  "PHI TƯỢNG MÃ QUỶ XUYÊN CUNG MÃ" (Pháo đầu tam binh phá trận Phi
-  Tượng Mã Quỷ) — "Mã Quỷ" là con Mã lén qua cung như bóng ma.
+- Tên gọi tiếng Việt: **"Mã quỳ" là tên thật (biệt danh) của Xuyên
+  cung mã trong giới cờ Việt** — licadho.org viết rõ: "Xuyên cung
+  mã hay còn gọi là 'Tượng triều xuyên cung mã', 'Mã giáp sĩ' hay
+  'Mã quỳ'... trước là lên tượng, sau đó nhảy mã cùng phía tượng
+  lên khóa chân tượng lại không cho thoái về."; "63 yếu lĩnh trong
+  cờ tướng" (Thăng Long Kỳ Đạo): "29. Mã quỳ có thể phòng thủ, giữ
+  sĩ hiệu quả."; evbn.org cũng dùng "Mã quỳ" khi phòng thủ chống
+  Pháo đầu. Nói trung thực: chữ 跪马 không có trong danh sách thuật
+  ngữ Wikipedia tiếng Trung (穿宫马 ở đó chỉ ghi "又称拐角马"), nên
+  "Mã quỳ" có thể là tên gọi của giới cờ Việt — nhưng đó đúng là tên
+  Hieu đã viết và giới cờ Việt dùng.
 - Cách phá (Ziga, "Pháo đầu phá phi tượng cục"): Đỏ dùng Pháo đầu +
   Xe hoành (横车) ép trung lộ; Đen thủ bằng Sĩ Tượng cục, một Mã giữ
   Tốt đầu, một Mã ở biên. Đỏ phá bằng cách lên Xe, thí quân gài thế.
 
-**Giả định về "mã quỳ" — cần Hieu xác nhận.** Hieu viết "mã quỳ",
-nhưng tra cứu không thấy thuật ngữ 跪马 (Mã quỳ) trong khai cuộc;
-thuật ngữ có thật trong các bài giảng tiếng Việt là **"Mã Quỷ"**
-(鬼, bóng ma) đi cùng Xuyên Cung Mã — "quỳ" và "quỷ" cùng vần,
-khác dấu, rất dễ nhầm khi gõ/nghe. Em dùng **"Mã quỷ"** cho bài
-mới; nếu anh thật sự muốn "quỳ" theo nghĩa khác thì bảo em sửa lại.
+**Sửa tên (2026-11-11, Hieu xác nhận "ừ mã quỳ").** Bản đầu của
+mục này ghi giả định "quỳ = quỷ do nhầm dấu" và dùng tên "Mã quỷ"
+— giả định đó SAI, đã sửa toàn bộ thành "Mã quỳ" (chỉ đổi tên:
+`name_vi` + `summary_vi` trong `lessons-src.json` và
+`openings.json`; giữ nguyên id `r-paodau-phituong-maquy`, prefix và
+sách đã sinh, không cần sinh lại, không cần đổi font subset).
 
 **Bài mới.** `r-paodau-phituong-maquy` (Đỏ, cấp 2), thay đúng chỗ
 của `r-paodau-xcgma` (sau `r-jingoupao`), tên Hán
 "炮头破飞象穿宫马" (tên Hán dùng thuật ngữ chuẩn 穿宫马, tên Việt
-giữ cách gọi của Hieu: Mã quỷ). Prefix 6 nửa nước (đã kiểm bằng
+giữ cách gọi của Hieu: Mã quỳ). Prefix 6 nửa nước (đã kiểm bằng
 probe tạm dùng đúng parser của `xq-core`, probe đã xóa):
 `炮二平五, 象3进5, 马二进三, 马2进3, 车一平二, 马3退5`
 — Tượng phi giữ trung lộ ngay nước 1, Mã lên rồi lùi vào giữa cung
@@ -287,7 +295,8 @@ trước (象3进5 ở nước 1).
   `validate_book.rs` cập nhật (`EXPECTED_IDS` + test
   `twenty_five_lessons`). Font subset: chữ Hán mới duy nhất là
   破 (U+7834, trong tên Hán 炮头破飞象穿宫马) — 飞 đã có từ bài
-  r-feixiang, còn 鬼 không cần vì "Mã quỷ" viết bằng chữ Việt;
+  r-feixiang, còn chữ 鬼 không xuất hiện trong sách vì "Mã quỳ"
+  viết bằng chữ Việt;
   test `fonts_cover_book` xác nhận font phủ đủ 60 chữ Hán trong sách.
 
 ### 7.2. Biến của đối thủ soạn sẵn 3-4 biến, sâu hơn

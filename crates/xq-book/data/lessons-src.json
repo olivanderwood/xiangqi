@@ -521,11 +521,11 @@
   },
   {
     "id": "r-paodau-phituong-maquy",
-    "name_vi": "Pháo đầu phá Phi tượng, Mã quỷ",
+    "name_vi": "Pháo đầu phá Phi tượng, Mã quỳ",
     "name_zh": "炮头破飞象穿宫马",
     "learner": "red",
     "level": 2,
-    "summary_vi": "Pháo đầu phá Phi tượng, Mã quỷ: sau 1.炮二平五, Đen không lên Mã mà phi Tượng giữ trung lộ (象3进5); Mã đen lên rồi lùi vào giữa cung (马2进3, 马3退5) — con Mã quỷ xuyên qua cung rồi lao ra trung lộ; Đỏ phát triển Xe và Mã, dùng Pháo đầu và Xe hoành ép trung lộ, tìm cách vây bắt Mã và khoét vào điểm yếu triển khai chậm của Đen.",
+    "summary_vi": "Pháo đầu phá Phi tượng, Mã quỳ: sau 1.炮二平五, Đen không lên Mã mà phi Tượng giữ trung lộ (象3进5); Mã đen lên rồi lùi vào giữa cung (马2进3, 马3退5) — con Mã quỳ xuyên qua cung rồi lao ra trung lộ; Đỏ phát triển Xe và Mã, dùng Pháo đầu và Xe hoành ép trung lộ, tìm cách vây bắt Mã và khoét vào điểm yếu triển khai chậm của Đen.",
     "sources": [
       {
         "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
