@@ -20,6 +20,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use xq_book::Book;
 use xq_core::board::Position;
+use xq_core::eval;
 use xq_core::game::Game;
 use xq_core::notation;
 use xq_core::types::Move;
@@ -109,31 +110,103 @@ fn install_fonts(ctx: &egui::Context) {
         vec!["cjk-bold".into(), "noto-sans-bold".into()],
     );
     ctx.set_fonts(fonts);
-    // Larger, clearer type throughout the app (§7.5): the egui
+    // One type scale for the whole app (§7.5): every screen reads from
+    // these styles, so text and buttons stay big and uniform. The egui
     // defaults (Body 14, Heading 22) read small on a game-board UI.
     let mut style = (*ctx.style()).clone();
     style.text_styles.insert(
         egui::TextStyle::Heading,
-        egui::FontId::new(28.0, egui::FontFamily::Proportional),
+        egui::FontId::new(32.0, egui::FontFamily::Proportional),
     );
     style.text_styles.insert(
         egui::TextStyle::Body,
-        egui::FontId::new(18.0, egui::FontFamily::Proportional),
+        egui::FontId::new(20.0, egui::FontFamily::Proportional),
     );
     style.text_styles.insert(
         egui::TextStyle::Button,
-        egui::FontId::new(18.0, egui::FontFamily::Proportional),
+        egui::FontId::new(20.0, egui::FontFamily::Proportional),
     );
     style.text_styles.insert(
         egui::TextStyle::Small,
-        egui::FontId::new(15.0, egui::FontFamily::Proportional),
+        egui::FontId::new(17.0, egui::FontFamily::Proportional),
     );
     style.text_styles.insert(
         egui::TextStyle::Monospace,
-        egui::FontId::new(16.0, egui::FontFamily::Monospace),
+        egui::FontId::new(18.0, egui::FontFamily::Monospace),
     );
-    style.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
+    // Generous button padding + spacing, so every button and row has
+    // the same substantial feel on every screen.
+    style.spacing.button_padding = egui::Vec2::new(18.0, 12.0);
+    style.spacing.item_spacing = egui::Vec2::new(10.0, 8.0);
     ctx.set_style(style);
+}
+
+/// A button with the app's uniform minimum size (§7.5): every action
+/// button on every screen is at least 120 x 46 px, so buttons look
+/// equally big and are easy to tap. Use for all panel/dialog buttons;
+/// the Menu and lesson-picker cards use their own larger `add_sized`.
+#[must_use]
+pub fn big_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Button::new(text).min_size(egui::Vec2::new(120.0, 46.0)))
+}
+
+/// A section title, the same on every screen: strong 24 px, then a
+/// small gap. Sections themselves are separated by `ui.separator()`.
+pub fn section_title(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).strong().size(24.0));
+    ui.add_space(4.0);
+}
+
+/// Advantage of a hint score (centipawns, side-to-move's perspective)
+/// as a short pawn string: `+0.8`, `-0.3`, `M3` for mate in 3.
+#[must_use]
+pub fn format_advantage(cp: i32) -> String {
+    if cp >= eval::MATE - 500 {
+        return format!("M{}", (eval::MATE - cp + 1) / 2);
+    }
+    if cp <= -eval::MATE + 500 {
+        return format!("-M{}", (eval::MATE + cp + 1) / 2);
+    }
+    format!("{:+.1}", cp as f32 / 100.0)
+}
+
+/// Cell colour for an advantage score: green when the learner is
+/// better, red when worse, grey when level.
+#[must_use]
+pub fn advantage_color(cp: i32) -> egui::Color32 {
+    if cp > 0 {
+        egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
+    } else if cp < 0 {
+        egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
+    } else {
+        egui::Color32::GRAY
+    }
+}
+
+/// A big, clear score cell (§7.5): a tinted rounded chip with the
+/// advantage number in bold 28 px, at least 110 px wide so the column
+/// lines up across hint rows. The number is the point — it must read
+/// at a glance, unlike a plain 18 px label.
+pub fn advantage_chip_ui(ui: &mut egui::Ui, cp: i32) -> egui::Response {
+    let color = advantage_color(cp);
+    let bg = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 36);
+    egui::Frame::default()
+        .fill(bg)
+        .stroke(egui::Stroke::new(1.5_f32, color))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(16, 6))
+        .show(ui, |ui| {
+            ui.set_min_width(96.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(format_advantage(cp))
+                        .strong()
+                        .size(28.0)
+                        .color(color),
+                );
+            });
+        })
+        .response
 }
 
 impl XiangqiApp {
@@ -276,7 +349,7 @@ impl XiangqiApp {
                         i18n::t(Key::NotationCn),
                     )
                     .changed();
-                ui.label(i18n::t(Key::Difficulty));
+                section_title(ui, i18n::t(Key::Difficulty));
                 for d in 0..=4u8 {
                     changed |= ui
                         .radio_value(&mut self.settings.difficulty, d, i18n::difficulty_name(d))
@@ -336,7 +409,7 @@ impl XiangqiApp {
                 changed |= ui
                     .text_edit_singleline(&mut self.settings.pikafish_path)
                     .changed();
-                if ui.button(i18n::t(Key::EngineRetry)).clicked() {
+                if big_button(ui, i18n::t(Key::EngineRetry)).clicked() {
                     // Re-run the install with the current settings; the
                     // outcome arrives via `engine_install_rx` like the
                     // startup pre-warm. Disabled while one is running.
@@ -378,12 +451,12 @@ impl XiangqiApp {
                 ui.label(i18n::t(Key::AboutNnue));
                 ui.horizontal(|ui| {
                     if let Some(dir) = &self.engine_dir {
-                        if ui.button(i18n::t(Key::OpenEngineFolder)).clicked() {
+                        if big_button(ui, i18n::t(Key::OpenEngineFolder)).clicked() {
                             open_folder(dir);
                         }
                     }
                     if let Some(log) = &self.engine_log {
-                        if ui.button(i18n::t(Key::OpenEngineLog)).clicked() {
+                        if big_button(ui, i18n::t(Key::OpenEngineLog)).clicked() {
                             if let Some(parent) = log.path().parent() {
                                 open_folder(parent);
                             }
@@ -479,14 +552,14 @@ impl eframe::App for XiangqiApp {
 /// Two-column (Red / Black) scrollable move list (§7.4).
 /// Clicking a row enters review mode at that ply (`review` = ply count).
 pub fn move_list_ui(ui: &mut egui::Ui, moves: &[String], review: &mut Option<usize>) {
-    ui.label(i18n::t(Key::MovesTitle));
-    let height = 180.0;
+    section_title(ui, i18n::t(Key::MovesTitle));
+    let height = 200.0;
     egui::ScrollArea::vertical()
         .max_height(height)
         .show(ui, |ui| {
             egui::Grid::new("move_list_grid")
                 .num_columns(3)
-                .spacing([8.0, 2.0])
+                .spacing([10.0, 4.0])
                 .show(ui, |ui| {
                     let mut i = 0;
                     while i < moves.len() {
@@ -515,7 +588,7 @@ pub fn move_list_ui(ui: &mut egui::Ui, moves: &[String], review: &mut Option<usi
 /// offers the current row height as available height (~one line), so
 /// reading it there shrinks the bar to ~16 px.
 pub fn eval_bar_ui(ui: &mut egui::Ui, score_red: i32, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(16.0, height), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(20.0, height), egui::Sense::hover());
     let frac = eval_bar_fraction(score_red);
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::BLACK);
@@ -540,4 +613,37 @@ pub fn eval_bar_ui(ui: &mut egui::Ui, score_red: i32, height: f32) {
 #[must_use]
 pub fn is_narrow(ctx: &egui::Context) -> bool {
     ctx.screen_rect().width() < 1100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{advantage_color, format_advantage};
+
+    #[test]
+    fn advantage_formats_as_pawns_with_sign() {
+        assert_eq!(format_advantage(80), "+0.8");
+        assert_eq!(format_advantage(-30), "-0.3");
+        assert_eq!(format_advantage(0), "+0.0");
+        assert_eq!(format_advantage(150), "+1.5");
+    }
+
+    #[test]
+    fn advantage_formats_mate() {
+        assert_eq!(format_advantage(29_999), "M1");
+        assert_eq!(format_advantage(-29_999), "-M1");
+        assert_eq!(format_advantage(29_901), "M50");
+    }
+
+    #[test]
+    fn advantage_colours_follow_the_learner() {
+        assert_eq!(
+            advantage_color(10),
+            egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
+        );
+        assert_eq!(
+            advantage_color(-10),
+            egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
+        );
+        assert_eq!(advantage_color(0), egui::Color32::GRAY);
+    }
 }

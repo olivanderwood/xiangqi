@@ -1,7 +1,7 @@
 //! Summary screen (§6.5): per-move grade table, position viewer,
 //! Learn again / Other lesson / Menu.
 
-use crate::app::{Screen, XiangqiApp};
+use crate::app::{big_button, section_title, Screen, XiangqiApp};
 use crate::board_view::{draw_board, BoardDraw, BoardGeometry};
 use crate::i18n::{self, Key};
 use xq_core::analysis::Grade;
@@ -76,7 +76,7 @@ impl XiangqiApp {
             ui.label(note.clone());
         }
         ui.label(i18n::t(Key::EngineScore).replace("{n}", &self.summary.final_score.to_string()));
-        ui.label(i18n::t(Key::ViewPosition));
+        section_title(ui, i18n::t(Key::ViewPosition));
         ui.separator();
 
         ui.horizontal(|ui| {
@@ -129,17 +129,17 @@ impl XiangqiApp {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button(i18n::t(Key::LearnAgain)).clicked() {
+            if big_button(ui, i18n::t(Key::LearnAgain)).clicked() {
                 if let Some(lesson) = self.book.by_id(&self.summary.lesson_id).cloned() {
                     let now = ctx.input(|i| i.time);
                     self.learn.start_lesson(lesson, now);
                     self.goto(Screen::Learn);
                 }
             }
-            if ui.button(i18n::t(Key::OtherLesson)).clicked() {
+            if big_button(ui, i18n::t(Key::OtherLesson)).clicked() {
                 self.goto(Screen::LearnSelect);
             }
-            if ui.button(i18n::t(Key::BackToMenu)).clicked() {
+            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });

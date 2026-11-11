@@ -39,6 +39,15 @@ pub struct BookNode {
     pub source_ref: Option<usize>,
     #[serde(default)]
     pub end: Option<End>,
+    /// Pikafish score of this move (centipawns, from the mover's
+    /// perspective at the parent position — the same convention as the
+    /// UCI MultiPV line scores). Written by `tools/gen-book` for EVERY
+    /// node: the dataset is the book (Hieu, 2026-11-11), so the Tutor
+    /// never calls a live engine for hints or grading — the same
+    /// position always shows the same directions, scores and order.
+    /// `None` only in hand-written books; `validate_book` requires it.
+    #[serde(default)]
+    pub score_cp: Option<i32>,
 }
 
 fn default_weight() -> f64 {

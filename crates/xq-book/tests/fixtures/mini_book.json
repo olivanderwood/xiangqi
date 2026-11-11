@@ -38,20 +38,25 @@
                                 "verdict": "equal"
                               },
                               "mv": "车9平8",
-                              "note_vi": "Đen ra Xe, giữ Pháo biên."
+                              "note_vi": "Đen ra Xe, giữ Pháo biên.",
+                              "score_cp": 5
                             }
                           ],
-                          "note_vi": "Đỏ ra Xe thẳng, dồn áp lực lên cánh phải của Đen."
+                          "note_vi": "Đỏ ra Xe thẳng, dồn áp lực lên cánh phải của Đen.",
+                          "score_cp": 20
                         }
                       ],
-                      "note_vi": "Đen lên Mã thứ hai, hoàn thành bố trận."
+                      "note_vi": "Đen lên Mã thứ hai, hoàn thành bố trận.",
+                      "score_cp": 10
                     }
                   ],
-                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa và mở đường cho Xe."
+                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa và mở đường cho Xe.",
+                  "score_cp": 25
                 }
               ],
               "note_vi": "Đen lên Mã, giữ Tốt giữa.",
-              "weight": 1.0
+              "weight": 1.0,
+              "score_cp": 20
             },
             {
               "mv": "马2进3",
@@ -69,20 +74,25 @@
                           "end": {
                             "note_vi": "Hai bên triển khai xong, thế cân bằng.",
                             "verdict": "equal"
-                          }
+                          },
+                          "score_cp": 25
                         }
                       ],
-                      "note_vi": "Đen bình Xe sang, giữ Mã vừa lên."
+                      "note_vi": "Đen bình Xe sang, giữ Mã vừa lên.",
+                      "score_cp": 8
                     }
                   ],
-                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa bị Pháo Đen nhắm."
+                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa bị Pháo Đen nhắm.",
+                  "score_cp": 12
                 }
               ],
               "note_vi": "Đen lên Mã biên trước, giữ Tốt giữa.",
-              "weight": 3.0
+              "weight": 3.0,
+              "score_cp": 10
             }
           ],
-          "note_vi": "Đỏ vào Pháo đầu, nhắm thẳng Tốt giữa của Đen."
+          "note_vi": "Đỏ vào Pháo đầu, nhắm thẳng Tốt giữa của Đen.",
+          "score_cp": 30
         }
       ]
     }

@@ -13,8 +13,11 @@
 //! plies, and every side direction carries its principal variation as a
 //! short chain (`--side-plies` plies). Every leaf gets an `end` verdict
 //! from a final analysis, and every learner-turn node gets a `note_vi`.
-//! The output is self-checked (every move legal, notes/ends present, no
-//! duplicate siblings) before it is written.
+//! Every node — prefix, spine, side chain — carries its Pikafish score
+//! (`BookNode::score_cp`): the dataset IS the book, so the Tutor never
+//! re-scores a move with a live engine and every attempt is identical.
+//! The output is self-checked (every move legal, notes/ends/scores
+//! present, no duplicate siblings) before it is written.
 
 use std::collections::HashSet;
 use std::fs;
@@ -201,6 +204,24 @@ impl<'a> Gen<'a> {
             .collect())
     }
 
+    /// Score ONE move at `moves` (the path to the position): the move's
+    /// Pikafish score from the mover's perspective — the same convention
+    /// as the MultiPV line scores. Used for the hand-written prefix
+    /// moves, which no analysis covers.
+    fn score_move(&mut self, moves: &[Move], mv: Move) -> Result<i32, String> {
+        let req = EngineRequest::new(
+            self.start_fen.clone(),
+            moves.to_vec(),
+            SearchLimits::depth(self.depth),
+        );
+        let score = self
+            .engine
+            .score_move(&req, mv)
+            .map_err(|e| format!("Pikafish lỗi: {e}"))?;
+        self.analyses += 1;
+        Ok(score.to_cp_clamped())
+    }
+
     /// Children of `pos`: the top directions from Pikafish. The best
     /// direction grows the spine (`remaining` plies left); side directions
     /// carry their PV as a short chain. `moves` is the path from the start
@@ -260,7 +281,7 @@ impl<'a> Gen<'a> {
                 }
             } else {
                 let cap = self.side_plies.min(remaining - 1);
-                self.side_chain(mv, &next_pos, &pv, cap, seen)?
+                self.side_chain(mv, &next_pos, &pv, score, cap, seen)?
             };
             children.push(BookNode {
                 mv: mv_cn,
@@ -271,6 +292,10 @@ impl<'a> Gen<'a> {
                 trap: false,
                 source_ref: None,
                 end: None,
+                // The dataset IS the book: every direction carries the
+                // Pikafish score it was generated with, so the Tutor
+                // never re-scores a move with a live engine.
+                score_cp: Some(score),
             });
         }
         Ok(children)
@@ -280,18 +305,25 @@ impl<'a> Gen<'a> {
     /// nodes (at most `cap` plies). `pv[0]` must be the child move itself,
     /// so the chain is `pv[1..]` played from `pos_after_child`; every move
     /// is validated as legal, and the chain stops at a repeated position.
+    /// Each chain node's score is the line score propagated down the PV
+    /// with alternating sign (`-S, +S, -S, ...`): the PV is optimal play,
+    /// so the position after the first PV move is worth `-S` to the new
+    /// side to move, and so on. An approximation (a fresh analysis would
+    /// differ by a few dozen cp), but deterministic — and the dataset
+    /// must be identical on every run.
     fn side_chain(
         &mut self,
         first: Move,
         pos_after_child: &Position,
         pv: &[Move],
+        line_score: i32,
         cap: usize,
         seen: &HashSet<String>,
     ) -> Result<Vec<BookNode>, String> {
         if pv.first() != Some(&first) {
             return Ok(Vec::new());
         }
-        let mut chain: Vec<(Position, Move)> = Vec::new();
+        let mut chain: Vec<(Position, Move, i32)> = Vec::new();
         let mut cur = pos_after_child.clone();
         let mut chain_seen: HashSet<String> = seen.clone();
         chain_seen.insert(cur.to_fen());
@@ -305,12 +337,19 @@ impl<'a> Gen<'a> {
                 break;
             }
             chain_seen.insert(after.to_fen());
-            chain.push((cur.clone(), mv));
+            // chain[j] is pv[j+1]: its score is (-1)^(j+1) * line_score.
+            let j = chain.len();
+            let score = if j.is_multiple_of(2) {
+                -line_score
+            } else {
+                line_score
+            };
+            chain.push((cur.clone(), mv, score));
             cur = after;
         }
         // Build the chain inside-out: the last node has no children.
         let mut next: Vec<BookNode> = Vec::new();
-        for (p, mv) in chain.into_iter().rev() {
+        for (p, mv, score) in chain.into_iter().rev() {
             let note = if p.side() == self.learner {
                 Some("Hướng theo Pikafish".to_string())
             } else {
@@ -325,6 +364,7 @@ impl<'a> Gen<'a> {
                 trap: false,
                 source_ref: None,
                 end: None,
+                score_cp: Some(score),
             }];
         }
         Ok(next)
@@ -411,7 +451,7 @@ fn count_nodes(nodes: &[BookNode], leaves: &mut usize) -> usize {
 
 /// Self-check mirroring `validate_book.rs`: every move legal, learner
 /// nodes have notes (<=160 chars), leaves have ends, no duplicate
-/// siblings, `end` only on leaves.
+/// siblings, `end` only on leaves, every node has a Pikafish score.
 fn self_check(lesson: &Lesson) -> Result<(), String> {
     fn walk(
         lesson: &Lesson,
@@ -432,6 +472,14 @@ fn self_check(lesson: &Lesson) -> Result<(), String> {
             }
             let mv = parse_cn(pos, &node.mv)
                 .map_err(|e| format!("{}: nước {:?} không hợp lệ: {e:?}", lesson.id, node.mv))?;
+            if node.score_cp.is_none() {
+                return Err(format!(
+                    "{}: đường {}: nút {:?} thiếu score_cp",
+                    lesson.id,
+                    path.join(" > "),
+                    node.mv
+                ));
+            }
             if pos.side() == learner {
                 match &node.note_vi {
                     Some(note) if !note.trim().is_empty() && note.chars().count() <= 160 => {}
@@ -509,15 +557,35 @@ fn run() -> Result<(), String> {
     for def in &defs {
         let lt0 = Instant::now();
         let learner = def.learner.color();
+        let mut gen = Gen {
+            engine: &mut engine,
+            start_fen: start_fen.clone(),
+            depth: args.depth,
+            leaf_depth: args.leaf_depth,
+            side_plies: args.side_plies,
+            learner,
+            analyses: 0,
+            leaf_analyses: 0,
+            max_gap: args.max_gap,
+            dropped_far: 0,
+            worst_gap: 0,
+        };
         // Play the prefix; every move must be legal. `positions[i]` is
-        // the position before prefix move `i`.
+        // the position before prefix move `i`. Each prefix move is scored
+        // with Pikafish (`score_move`, same depth as the spine) — the
+        // prefix is part of the dataset too, so its nodes need scores.
         let mut positions: Vec<Position> = vec![Position::startpos()];
         let mut moves: Vec<Move> = Vec::new();
+        let mut prefix_scores: Vec<i32> = Vec::new();
         {
             let mut p = Position::startpos();
             for s in &def.prefix {
                 let mv = parse_cn(&p, s)
                     .map_err(|e| format!("{}: prefix {:?} không hợp lệ: {e:?}", def.id, s))?;
+                let score = gen
+                    .score_move(&moves, mv)
+                    .map_err(|e| format!("{}: prefix {:?}: {e}", def.id, s))?;
+                prefix_scores.push(score);
                 p.make_move(mv);
                 moves.push(mv);
                 positions.push(p.clone());
@@ -532,19 +600,6 @@ fn run() -> Result<(), String> {
             ));
         }
         let pos = positions.last().expect("prefix đã đi").clone();
-        let mut gen = Gen {
-            engine: &mut engine,
-            start_fen: start_fen.clone(),
-            depth: args.depth,
-            leaf_depth: args.leaf_depth,
-            side_plies: args.side_plies,
-            learner,
-            analyses: 0,
-            leaf_analyses: 0,
-            max_gap: args.max_gap,
-            dropped_far: 0,
-            worst_gap: 0,
-        };
         let mut seen: HashSet<String> = positions.iter().map(|p| p.to_fen()).collect();
         let remaining = args.plies - moves.len();
         let grown = gen.children_at(&pos, &moves, remaining, &mut seen)?;
@@ -568,6 +623,7 @@ fn run() -> Result<(), String> {
                 trap: false,
                 source_ref: None,
                 end: None,
+                score_cp: Some(prefix_scores[i]),
             }];
         }
         gen.finish_leaves(&mut tree, &Position::startpos(), &[])?;

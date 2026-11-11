@@ -141,7 +141,11 @@ fn off_book_retry() {
         _ => panic!("mong đợi Graded sau nước ngoài sách"),
     };
     assert!(t.out_of_book);
-    assert_ne!(grade, Grade::Book, "nước ngoài sách không được chấm Book");
+    assert_eq!(
+        grade,
+        Grade::Acceptable,
+        "nước ngoài sách chấm Acceptable (không chấm bằng engine live)"
+    );
     // Best phải là nước main của nút hiện tại: 马二进三.
     let best_cn = best.map(|m| render_cn(&pos_before, m));
     assert_eq!(
@@ -275,89 +279,84 @@ fn learner_black_starts_with_ai() {
     assert_eq!(t.book_moves, 1);
 }
 
-/// Mock engine with fixed scores, for grading tests (spec §9.4).
-struct MockEngine;
-
-impl xq_engine::Engine for MockEngine {
-    fn name(&self) -> &str {
-        "Mock"
-    }
-
-    fn new_game(&mut self) -> Result<(), xq_engine::EngineError> {
-        Ok(())
-    }
-
-    fn set_level(&mut self, _level: xq_engine::Level) -> Result<(), xq_engine::EngineError> {
-        Ok(())
-    }
-
-    fn best_move(
-        &mut self,
-        req: &xq_engine::EngineRequest,
-        _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
-    ) -> Result<xq_engine::Line, xq_engine::EngineError> {
-        let pos = req.position()?;
-        let mv = pos.legal_moves().into_iter().next().unwrap();
-        Ok(xq_engine::Line {
-            mv,
-            score: xq_engine::Score::Cp(50),
-            depth: 4,
-            pv: vec![mv],
-        })
-    }
-
-    fn analyze(
-        &mut self,
-        req: &xq_engine::EngineRequest,
-        _top_n: usize,
-        _on_info: &mut dyn FnMut(&xq_engine::SearchInfo),
-    ) -> Result<Vec<xq_engine::Line>, xq_engine::EngineError> {
-        Ok(vec![self.best_move(req, &mut |_| {})?])
-    }
-
-    fn score_move(
-        &mut self,
-        _req: &xq_engine::EngineRequest,
-        _mv: Move,
-    ) -> Result<xq_engine::Score, xq_engine::EngineError> {
-        Ok(xq_engine::Score::Cp(-250))
-    }
-
-    fn stop_handle(&self) -> xq_engine::StopHandle {
-        xq_engine::StopHandle::new()
-    }
-
-    fn level(&self) -> xq_engine::Level {
-        xq_engine::Level::Medium
-    }
-
-    fn grade_thresholds(&self) -> xq_engine::GradeThresholds {
-        xq_engine::GradeThresholds::PIKAFISH
-    }
-}
-
+/// Pikafish IS the book (Hieu, 2026-11-11): hints come only from the
+/// stored dataset — the Tutor calls no live engine. At the root the only
+/// direction is 炮二平五 with its stored score (30).
 #[test]
-fn tutor_with_mock_engine_grades() {
-    // NOTE (spec §9.4 example): mock best = Cp(50) and learner move =
-    // Cp(-200) gives delta 250, which is exactly the Inaccurate edge of
-    // the Pikafish thresholds — not a Blunder. The test uses Cp(-250)
-    // (delta 300 > 250) so the expected label really is Blunder.
+fn suggestions_use_stored_scores() {
     let book = load_mini();
     let lesson = book.by_id("r-mini").unwrap();
-    let engine = xq_engine::shared_engine(Box::new(MockEngine));
-    let mut t = Tutor::with_engine(lesson, 1, engine);
-    // "马二进三" is legal from the start position but not in the book.
-    let e = play_learner(&mut t, "马二进三");
+    let mut t = Tutor::new(lesson, 1);
+    let hints = t.suggestions();
+    assert_eq!(hints.len(), 1, "gốc chỉ có 1 hướng trong sách");
+    assert_eq!(hints[0].mv_cn, "炮二平五");
+    assert_eq!(hints[0].score, 30, "điểm phải là điểm đã lưu trong sách");
+}
+
+/// The conflict this change fixes: a suggested move must never be
+/// reported as "not in the book". Follow the first suggestion at every
+/// learner turn (branch A) — every move grades Book, never off-book.
+#[test]
+fn suggested_moves_are_always_in_book() {
+    let book = load_mini();
+    let lesson = book.by_id("r-mini").unwrap();
+    let mut t = tutor_branch_a(lesson);
+    let mut played = 0;
+    while !t.is_complete() {
+        if t.game.pos.side() == lesson.learner.color() {
+            let hints = t.suggestions();
+            assert!(!hints.is_empty(), "lượt người học phải có gợi ý trong sách");
+            // Scores are the stored ones (branch A: 25, then 20).
+            assert!(
+                hints.iter().all(|h| h.score == 25 || h.score == 20),
+                "điểm gợi ý phải là điểm đã lưu trong sách"
+            );
+            let mv = hints[0].mv;
+            match t.on_user_move(mv) {
+                TutorEvent::Graded {
+                    grade: Grade::Book, ..
+                } => {}
+                TutorEvent::OpeningComplete { .. } => break,
+                _ => panic!("nước gợi ý phải chấm Book, không được ngoài sách"),
+            }
+            assert!(!t.out_of_book, "đi theo gợi ý không được ra khỏi sách");
+            played += 1;
+        } else {
+            play_ai(&mut t);
+        }
+    }
+    assert_eq!(played, 2, "nhánh A có 2 nước người học sau nước đầu");
+    assert!(t.is_complete(), "đi hết nhánh A phải hoàn thành");
+}
+
+/// Off-book moves are not engine-graded (no live engine in lessons):
+/// they grade `Acceptable` and the best move shown is the book's main
+/// child — no engine is constructed at all.
+#[test]
+fn off_book_move_is_acceptable_with_book_best() {
+    let book = load_mini();
+    let lesson = book.by_id("r-mini").unwrap();
+    let mut t = tutor_branch_a(lesson);
+    // "马八进九" is legal here but in neither branch of the book.
+    let wrong = mv(&t, "马八进九");
+    let pos_before = t.game.pos.clone();
+    let e = t.on_user_move(wrong);
     match e {
         TutorEvent::Graded {
-            grade: Grade::Blunder,
-            best: Some(_),
+            grade: Grade::Acceptable,
+            best: Some(best),
             ..
-        } => {}
-        TutorEvent::Graded { grade, .. } => {
-            panic!("mong đợi Grade::Blunder, gặp {grade:?}")
+        } => {
+            assert_eq!(
+                render_cn(&pos_before, best),
+                "马二进三",
+                "best phải là nước main của sách"
+            );
         }
-        other => panic!("mong đợi Graded, gặp {}", event_name(&Some(other))),
+        TutorEvent::Graded { grade, .. } => {
+            panic!("nước ngoài sách phải chấm Acceptable, gặp {grade:?}")
+        }
+        _ => panic!("mong đợi Graded sau nước ngoài sách"),
     }
     assert!(t.out_of_book);
 }

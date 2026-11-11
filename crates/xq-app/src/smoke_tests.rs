@@ -166,7 +166,7 @@ fn menu_to_learn_plays_book_move() {
             .learn
             .hints
             .iter()
-            .any(|h| h.mv_cn == "炮二平五" && h.in_book),
+            .any(|h| h.mv_cn == "炮二平五"),
         "first hint should be the book move 炮二平五"
     );
 

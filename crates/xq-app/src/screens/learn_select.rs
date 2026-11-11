@@ -1,6 +1,6 @@
 //! Lesson picker screen (§6.3): Red/Black cards, lesson list, intro panel.
 
-use crate::app::{Screen, XiangqiApp};
+use crate::app::{big_button, section_title, Screen, XiangqiApp};
 use crate::board_view::{draw_board, BoardDraw, BoardGeometry};
 use crate::i18n::{self, Key};
 use xq_book::Lesson;
@@ -48,14 +48,14 @@ pub fn main_branch_position(lesson: &Lesson, plies: usize) -> Position {
 impl XiangqiApp {
     pub(crate) fn show_learn_select(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button(i18n::t(Key::BackToMenu)).clicked() {
+            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });
         ui.add_space(8.0);
         // Two big side cards.
         ui.horizontal(|ui| {
-            let size = egui::Vec2::new(280.0, 64.0);
+            let size = egui::Vec2::new(300.0, 72.0);
             if ui
                 .add_sized(size, egui::Button::new(i18n::t(Key::LearnFirst)))
                 .clicked()
@@ -119,7 +119,7 @@ impl XiangqiApp {
                         ui.label(
                             i18n::t(Key::LevelStars).replace("{n}", &lesson.level.to_string()),
                         );
-                        ui.label(i18n::t(Key::IntroTitle));
+                        section_title(ui, i18n::t(Key::IntroTitle));
                         ui.label(lesson.summary_vi.clone());
                         // Mini board after the first 3 main-branch plies.
                         let pos = main_branch_position(lesson, 3);
@@ -133,11 +133,11 @@ impl XiangqiApp {
                             &pos,
                             &BoardDraw::default(),
                         );
-                        ui.label(i18n::t(Key::SourcesTitle));
+                        section_title(ui, i18n::t(Key::SourcesTitle));
                         for src in &lesson.sources {
                             ui.hyperlink_to(src.title.clone(), src.url.clone());
                         }
-                        if ui.button(i18n::t(Key::StartLesson)).clicked() {
+                        if big_button(ui, i18n::t(Key::StartLesson)).clicked() {
                             let lesson = lesson.clone();
                             self.learn.start_lesson(lesson, ctx.input(|i| i.time));
                             self.goto(Screen::Learn);

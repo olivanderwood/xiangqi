@@ -10,7 +10,10 @@
 //! played by the AI worker).
 
 use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
-use crate::app::{eval_bar_ui, is_narrow, move_list_ui, Screen, XiangqiApp};
+use crate::app::{
+    advantage_chip_ui, big_button, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen,
+    XiangqiApp,
+};
 use crate::board_view::{
     draw_board, legal_targets, BoardDraw, BoardGeometry, BoardInteraction, HintArrow, MoveAnim,
 };
@@ -19,37 +22,13 @@ use std::time::Duration;
 use xq_book::schema::{BookNode, Lesson};
 use xq_book::tree::node_at;
 use xq_book::{BookHint, LessonSummary, Tutor, TutorEvent};
-use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
+use xq_core::analysis::{explain_tags, tags_for, Grade};
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::Game;
 use xq_core::notation;
 use xq_core::types::{Color, Move, PieceKind};
 use xq_engine::{EngineRequest, Level, SharedEngine};
-
-/// Advantage of a hint score (centipawns, side-to-move's perspective)
-/// as a short pawn string: `+0.8`, `-0.3`, `M3` for mate in 3.
-fn format_advantage(cp: i32) -> String {
-    if cp >= eval::MATE - 500 {
-        return format!("M{}", (eval::MATE - cp + 1) / 2);
-    }
-    if cp <= -eval::MATE + 500 {
-        return format!("-M{}", (eval::MATE + cp + 1) / 2);
-    }
-    format!("{:+.1}", cp as f32 / 100.0)
-}
-
-/// Cell colour for an advantage score: green when the learner is
-/// better, red when worse, grey when level.
-fn advantage_color(cp: i32) -> egui::Color32 {
-    if cp > 0 {
-        egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
-    } else if cp < 0 {
-        egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
-    } else {
-        egui::Color32::GRAY
-    }
-}
 
 pub struct LearnState {
     pub lesson: Option<Lesson>,
@@ -186,7 +165,7 @@ impl LearnState {
     /// `lesson_box` is replaced.
     fn make_tutor(&self, lesson: &Lesson) -> Tutor<'static> {
         let lesson: &'static Lesson = unsafe { &*(lesson as *const Lesson) };
-        Tutor::with_engine(lesson, 0x1234_5678, self.engine.clone())
+        Tutor::new(lesson, 0x1234_5678)
     }
 
     pub fn start_lesson(&mut self, lesson: Lesson, now: f64) {
@@ -241,9 +220,10 @@ impl LearnState {
 
     /// Book hints for the learner's turn + an engine top-4 request (§6.4.2).
     /// Hints for the learner's turn (§6.4.2). The Tutor's
-    /// `hints_for_learner_turn` is canonical: book moves plus engine
-    /// lines, ordered by score, keeping 3 directions (or 4 when equally
-    /// good); the Tutor's engine pass runs synchronously here.
+    /// `hints_for_learner_turn` is canonical: book moves with their stored
+    /// Pikafish scores, ordered best-first, keeping 3 directions (or 4
+    /// when equally good). No live engine is consulted in lessons — the
+    /// book IS Pikafish, so the hints are identical on every attempt.
     fn refresh_hints(&mut self) {
         if !self.is_learner_turn() || self.complete.is_some() {
             return;
@@ -253,32 +233,19 @@ impl LearnState {
         }
         self.hint_ply = Some(self.game.moves.len());
         if let Some(tutor) = &mut self.tutor {
-            if let TutorEvent::YourTurn { book_moves, .. } = tutor.hints_for_learner_turn() {
+            if let TutorEvent::YourTurn { book_moves } = tutor.hints_for_learner_turn() {
                 self.hints = book_moves;
                 return;
             }
         }
-        // Fallback (no Tutor attached): book children scored locally.
+        // Fallback (no Tutor attached): book children with their stored
+        // scores — same rule as the Tutor, no live engine.
         let pos = self.game.pos.clone();
-        let handle = self.engine.clone();
-        let mut engine = handle.lock().expect("engine lock");
-        let req = EngineRequest::new(
-            self.game.start.to_fen(),
-            self.game.moves.clone(),
-            engine.hint_limits(),
-        );
         let mut hints: Vec<BookHint> = Vec::new();
-        let mut children: Vec<(usize, BookNode)> =
-            self.children().iter().cloned().enumerate().collect();
-        children.sort_by_key(|(_, n)| !n.main);
-        for (_, node) in &children {
+        for node in self.children() {
             let Ok(mv) = notation::parse_cn(&pos, &node.mv) else {
                 continue;
             };
-            let Ok(score) = engine.score_move(&req, mv) else {
-                continue;
-            };
-            let score = score.to_cp_clamped();
             let explanation = node
                 .note_vi
                 .clone()
@@ -286,12 +253,11 @@ impl LearnState {
             hints.push(BookHint {
                 mv,
                 mv_cn: node.mv.clone(),
-                in_book: true,
-                score,
+                // `validate_book` requires every node to carry a score.
+                score: node.score_cp.unwrap_or(0),
                 explanation_vi: explanation,
             });
         }
-        drop(engine);
         // 1 = best by score; keep 3 directions, or 4 when equally good.
         hints.sort_by_key(|a| std::cmp::Reverse(a.score));
         let scores: Vec<i32> = hints.iter().map(|h| h.score).collect();
@@ -363,33 +329,39 @@ impl LearnState {
                 self.maybe_complete();
             }
             _ => {
-                // No Tutor attached: local engine grading, same §4.5 rule.
-                // NOTE: `play_move_common` above already played `mv`, so
-                // the request must use the moves *before* it.
-                let mut moves_before = self.game.moves.clone();
-                moves_before.pop();
-                let handle = self.engine.clone();
-                let mut engine = handle.lock().expect("engine lock");
-                let req = EngineRequest::new(
-                    self.game.start.to_fen(),
-                    moves_before,
-                    engine.grade_limits(),
-                );
-                if let Ok(best) = engine.best_move(&req, &mut |_| {}) {
-                    let best_cp = best.score.to_cp_clamped();
-                    let mv_cp = engine
-                        .score_move(&req, mv)
-                        .map(|s| s.to_cp_clamped())
-                        .unwrap_or(best_cp);
-                    let grade =
-                        grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
-                    let expl = explain_tags(&tags_for(&pos_before, mv));
-                    self.grades.push((mv, grade));
-                    self.last_grade = Some((grade, expl.clone(), Some(best.mv)));
-                    self.grade_pos = Some(pos_before.clone());
-                    self.graded_best.push(Some((best.mv, pos_before.clone())));
-                    self.tutor_message = expl;
-                }
+                // No Tutor attached: grade from the book alone (same rule
+                // as the Tutor — Pikafish IS the book, no live engine in
+                // lessons). In-book: the node's note; off-book: Acceptable
+                // ("not in the book") with the book's main child as the
+                // correct move.
+                let best = self
+                    .children()
+                    .iter()
+                    .find(|n| n.main)
+                    .and_then(|n| notation::parse_cn(&pos_before, &n.mv).ok());
+                let (grade, expl) = if in_book {
+                    let note = self
+                        .children()
+                        .iter()
+                        .find(|n| {
+                            notation::parse_cn(&pos_before, &n.mv)
+                                .map(|m| m == mv)
+                                .unwrap_or(false)
+                        })
+                        .and_then(|n| n.note_vi.clone())
+                        .unwrap_or_else(|| "Đúng sách.".to_string());
+                    (Grade::Book, note)
+                } else {
+                    (
+                        Grade::Acceptable,
+                        "Nước này không có trong sách khai cuộc.".to_string(),
+                    )
+                };
+                self.grades.push((mv, grade));
+                self.last_grade = Some((grade, expl.clone(), best));
+                self.grade_pos = Some(pos_before.clone());
+                self.graded_best.push(best.map(|b| (b, pos_before.clone())));
+                self.tutor_message = expl;
                 if in_book {
                     self.opponent_due = Some(now + 0.6);
                 } else {
@@ -611,7 +583,7 @@ impl XiangqiApp {
 
         if self.learn.lesson.is_none() {
             ui.label(i18n::t(Key::LessonNotFound));
-            if ui.button(i18n::t(Key::BackToMenu)).clicked() {
+            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
             return;
@@ -633,11 +605,11 @@ impl XiangqiApp {
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
                 eval_bar_ui(ui, score_red, avail.y);
-                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 360.0 - 24.0, avail.y);
+                let budget = egui::Vec2::new(avail.x - 20.0 - 12.0 - 380.0 - 24.0, avail.y);
                 self.learn_board(ctx, ui, budget);
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.set_width(360.0);
+                    ui.set_width(380.0);
                     self.learn_panel(ctx, ui);
                 });
             });
@@ -726,7 +698,7 @@ impl XiangqiApp {
                 .replace("{m}", &total_est.to_string()),
         );
         ui.separator();
-        ui.label(i18n::t(Key::TutorTitle));
+        section_title(ui, i18n::t(Key::TutorTitle));
         ui.label(self.learn.tutor_message.clone());
         if let Some((grade, expl, best)) = &self.learn.last_grade {
             let color = match grade {
@@ -737,11 +709,12 @@ impl XiangqiApp {
             };
             ui.colored_label(
                 color,
-                format!(
+                egui::RichText::new(format!(
                     "{}: {} — {expl}",
                     i18n::t(Key::GradeLabel),
                     grade.label_vi()
-                ),
+                ))
+                .strong(),
             );
             if let (Some(best), Some(pos_before)) = (best, &self.learn.grade_pos) {
                 ui.label(
@@ -752,16 +725,16 @@ impl XiangqiApp {
         }
         ui.separator();
         // Hints (§6.4.2): the top 3 directions (or 4 when equally good),
-        // numbered 1–4 (1 = best), each with an advantage cell coloured
-        // green/red for the learner.
+        // numbered 1–4 (1 = best), each with a big advantage chip on the
+        // right — the score number is bold 28 px so it reads at a glance.
         if self.learn.hide_hints {
-            if ui.button(i18n::t(Key::ShowHints)).clicked() {
+            if big_button(ui, i18n::t(Key::ShowHints)).clicked() {
                 self.learn.hide_hints = false;
             }
         } else {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(i18n::t(Key::BestDirections)).strong());
-                if ui.button(i18n::t(Key::HideHints)).clicked() {
+                section_title(ui, i18n::t(Key::BestDirections));
+                if big_button(ui, i18n::t(Key::HideHints)).clicked() {
                     self.learn.hide_hints = true;
                 }
             });
@@ -771,11 +744,6 @@ impl XiangqiApp {
             let mut clicked_hint: Option<Move> = None;
             let mut hovered: Option<usize> = None;
             for (i, hint) in self.learn.hints.iter().take(4).enumerate() {
-                let tag = if hint.in_book {
-                    i18n::t(Key::SuggestionBook)
-                } else {
-                    i18n::t(Key::SuggestionEngine)
-                };
                 // Row highlight from the previous frame's hover state;
                 // the frame paints the fill before the row content.
                 let fill = if self.learn.hint_hover == Some(i) {
@@ -785,27 +753,26 @@ impl XiangqiApp {
                 };
                 let row = egui::Frame::default()
                     .fill(fill)
-                    .inner_margin(egui::Margin::symmetric(6, 4))
-                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .corner_radius(egui::CornerRadius::same(8))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{}.", i + 1))
                                         .strong()
-                                        .size(20.0),
+                                        .size(24.0),
                                 );
-                                ui.label(egui::RichText::new(&hint.mv_cn).strong().size(18.0));
-                                ui.colored_label(
-                                    advantage_color(hint.score),
-                                    egui::RichText::new(format_advantage(hint.score))
-                                        .strong()
-                                        .size(18.0),
+                                ui.label(egui::RichText::new(&hint.mv_cn).strong().size(22.0));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        advantage_chip_ui(ui, hint.score);
+                                    },
                                 );
-                                ui.label(egui::RichText::new(tag).small());
                             });
                             ui.horizontal(|ui| {
-                                ui.add_space(28.0);
+                                ui.add_space(34.0);
                                 ui.label(
                                     egui::RichText::new(&hint.explanation_vi)
                                         .small()
@@ -839,13 +806,13 @@ impl XiangqiApp {
         move_list_ui(ui, &moves, &mut dummy_review);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            if ui.button(i18n::t(Key::FlipBoard)).clicked() {
+            if big_button(ui, i18n::t(Key::FlipBoard)).clicked() {
                 self.learn.flipped = !self.learn.flipped;
             }
-            if ui.button(i18n::t(Key::OtherLesson)).clicked() {
+            if big_button(ui, i18n::t(Key::OtherLesson)).clicked() {
                 self.goto(Screen::LearnSelect);
             }
-            if ui.button(i18n::t(Key::BackToMenu)).clicked() {
+            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });
@@ -871,10 +838,10 @@ impl XiangqiApp {
                     }
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(i18n::t(Key::RetryMove)).clicked() {
+                    if big_button(ui, i18n::t(Key::RetryMove)).clicked() {
                         retry = true;
                     }
-                    if ui.button(i18n::t(Key::ContinueMove)).clicked() {
+                    if big_button(ui, i18n::t(Key::ContinueMove)).clicked() {
                         cont = true;
                     }
                 });
@@ -928,7 +895,7 @@ impl XiangqiApp {
                 ui.label(
                     i18n::t(Key::EngineScore).replace("{n}", &summary.final_score.to_string()),
                 );
-                ui.label(i18n::t(Key::Difficulty));
+                section_title(ui, i18n::t(Key::Difficulty));
                 for d in 0..=3u8 {
                     ui.radio_value(
                         &mut self.learn.continue_difficulty,
@@ -937,10 +904,10 @@ impl XiangqiApp {
                     );
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(i18n::t(Key::StopAndSummary)).clicked() {
+                    if big_button(ui, i18n::t(Key::StopAndSummary)).clicked() {
                         to_summary = true;
                     }
-                    if ui.button(i18n::t(Key::ContinueWithAi)).clicked() {
+                    if big_button(ui, i18n::t(Key::ContinueWithAi)).clicked() {
                         to_vs_ai = true;
                     }
                 });
@@ -1055,38 +1022,5 @@ impl XiangqiApp {
         self.summary.start = self.learn.game.start.clone();
         self.learn.show_complete_dialog = false;
         self.goto(Screen::Summary);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{advantage_color, format_advantage};
-
-    #[test]
-    fn advantage_formats_as_pawns_with_sign() {
-        assert_eq!(format_advantage(80), "+0.8");
-        assert_eq!(format_advantage(-30), "-0.3");
-        assert_eq!(format_advantage(0), "+0.0");
-        assert_eq!(format_advantage(150), "+1.5");
-    }
-
-    #[test]
-    fn advantage_formats_mate() {
-        assert_eq!(format_advantage(29_999), "M1");
-        assert_eq!(format_advantage(-29_999), "-M1");
-        assert_eq!(format_advantage(29_901), "M50");
-    }
-
-    #[test]
-    fn advantage_colours_follow_the_learner() {
-        assert_eq!(
-            advantage_color(10),
-            egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
-        );
-        assert_eq!(
-            advantage_color(-10),
-            egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
-        );
-        assert_eq!(advantage_color(0), egui::Color32::GRAY);
     }
 }

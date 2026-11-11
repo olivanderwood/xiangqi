@@ -1,11 +1,20 @@
 //! `Tutor`: guided opening study (§5.3, T5.1).
 //!
 //! Flow: the learner plays a move (`on_user_move`); if it is in the book
-//! it grades `Book` and follows the tree, otherwise the engine grades it
-//! (§4.5) and the lesson leaves the book. The AI replies with
-//! `next_opponent_move`, picking a child weighted by `weight`. The lesson
-//! ends at a leaf (`end`), at `max_plies`, or 8 plies after leaving the
-//! book; the UI checks `is_complete()` and reads `summary()`.
+//! it grades `Book` and follows the tree, otherwise it is off-book — the
+//! UI offers Retry (back to the book move) or Continue. The AI replies
+//! with `next_opponent_move`, picking a child weighted by `weight`. The
+//! lesson ends at a leaf (`end`), at `max_plies`, or 8 plies after leaving
+//! the book; the UI checks `is_complete()` and reads `summary()`.
+//!
+//! Pikafish IS the book (Hieu, 2026-11-11): the book is generated from
+//! Pikafish in advance (`tools/gen-book`), and every node carries its
+//! Pikafish score (`BookNode::score_cp`). The Tutor calls NO live engine
+//! — hints, order and grading all come from the stored dataset, so the
+//! same position always shows the same directions in the same order with
+//! the same scores, on every attempt. (Before this, hints mixed book
+//! children with live engine lines, and playing a live line was then
+//! reported as "not in the book" — the two sources conflicted.)
 //!
 //! One deliberate extension of §5.3 rule 3 (see `docs/DECISIONS-m4.md`):
 //! a book move that walks into a branch whose every leaf is bad for the
@@ -13,13 +22,12 @@
 //! instead of `Book`, so a bad book line is not praised.
 
 use crate::schema::{BookNode, Lesson, Verdict};
-use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_with_mate, Grade};
+use xq_core::analysis::Grade;
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::Game;
 use xq_core::notation::{parse_cn, parse_wxf, render_cn};
 use xq_core::types::{Color, Move};
-use xq_engine::{shared_engine, BuiltinEngine, EngineRequest, SharedEngine};
 
 /// Plies allowed after leaving the book before the lesson ends (§5.3).
 const OFF_BOOK_LIMIT: usize = 8;
@@ -43,7 +51,8 @@ pub fn direction_count(scores: &[i32]) -> usize {
 pub struct BookHint {
     pub mv: Move,
     pub mv_cn: String,
-    pub in_book: bool,
+    /// Pikafish score of this move, from the stored dataset
+    /// (`BookNode::score_cp`) — never a live engine call.
     pub score: i32,
     pub explanation_vi: String,
 }
@@ -59,7 +68,6 @@ pub struct LessonSummary {
 pub enum TutorEvent {
     YourTurn {
         book_moves: Vec<BookHint>,
-        engine_needed: bool,
     },
     OpponentMoves {
         mv: Move,
@@ -98,11 +106,6 @@ pub struct Tutor<'a> {
     pub book_moves: usize,
     rng_state: u64,
     pub plies_after_book: usize,
-    /// Engine used for off-book grading and hints, shared with the app's
-    /// worker thread (see `xq-engine::SharedEngine`). Lazily created as a
-    /// `BuiltinEngine` — a 32 MB TT per `Tutor::new` would be wasteful:
-    /// the weight test alone builds 1000 tutors.
-    engine: Option<SharedEngine>,
     snapshot: Option<Snapshot>,
     exit_ply: usize,
 }
@@ -128,19 +131,9 @@ impl<'a> Tutor<'a> {
                 rng_seed
             },
             plies_after_book: 0,
-            engine: None,
             snapshot: None,
             exit_ply: usize::MAX,
         }
-    }
-
-    /// Build with a shared engine (e.g. the app's active engine, Pikafish
-    /// when available) instead of a lazily created builtin one.
-    #[must_use]
-    pub fn with_engine(lesson: &'a Lesson, rng_seed: u64, engine: SharedEngine) -> Self {
-        let mut t = Self::new(lesson, rng_seed);
-        t.engine = Some(engine);
-        t
     }
 
     /// xorshift64star: uniform enough for weighted child picks.
@@ -156,21 +149,6 @@ impl<'a> Tutor<'a> {
     /// Uniform double in [0, 1) from the high 53 bits.
     fn next_unit(&mut self) -> f64 {
         ((self.next_rand() >> 11) as f64) / ((1u64 << 53) as f64)
-    }
-
-    /// Lazily built engine (a 32 MB TT per `Tutor::new` would be wasteful:
-    /// the weight test alone builds 1000 tutors).
-    fn engine(&mut self) -> SharedEngine {
-        if self.engine.is_none() {
-            self.engine = Some(shared_engine(Box::new(BuiltinEngine::new())));
-        }
-        self.engine.as_ref().unwrap().clone()
-    }
-
-    /// Tags for an analysed line: the rule-based tags plus `MateIn` when
-    /// the line mates (mirrors `Searcher::analyze`).
-    fn line_tags(pos: &Position, line: &xq_engine::Line) -> Vec<xq_core::search::MoveTag> {
-        tags_with_mate(pos, line.mv, line.score.to_cp_clamped())
     }
 
     /// Current tree node (children = legal book replies here).
@@ -297,7 +275,12 @@ impl<'a> Tutor<'a> {
                 explanation_vi: explanation,
             };
         }
-        // Off-book: snapshot once, before the first mistake.
+        // Off-book: snapshot once, before the first mistake. The lesson
+        // teaches the book, so an off-book move is not engine-graded
+        // (no live engine in lessons — see the module docs): it grades
+        // `Acceptable` ("not in the book, quality not judged"), the best
+        // move shown is the book's main child, and the UI offers Retry
+        // (back to the book move) or Continue.
         if self.snapshot.is_none() {
             self.snapshot = Some(Snapshot {
                 moves_len: self.game.moves.len(),
@@ -309,41 +292,15 @@ impl<'a> Tutor<'a> {
                 exit_ply: self.exit_ply,
             });
         }
-        let best_main = self.main_child_move();
-        let handle = self.engine();
-        let mut engine = handle.lock().expect("engine lock");
-        let req = EngineRequest::new(
-            self.game.start.to_fen(),
-            self.game.moves.clone(),
-            engine.grade_limits(),
-        );
-        let (grade, engine_best, delta) = match engine.best_move(&req, &mut |_| {}) {
-            Ok(best_line) => {
-                let best_score = best_line.score.to_cp_clamped();
-                let mv_score = engine
-                    .score_move(&req, mv)
-                    .map(|s| s.to_cp_clamped())
-                    .unwrap_or(best_score);
-                let delta = best_score - mv_score;
-                let grade = grade_from_delta_with(delta, false, engine.grade_thresholds());
-                (grade, Some(best_line.mv), delta)
-            }
-            Err(_) => (Grade::Acceptable, None, 0),
-        };
-        drop(engine);
-        let best = best_main.or(engine_best);
-        let explanation = format!(
-            "{} (chênh {} so với nước tốt nhất).",
-            grade.label_vi(),
-            delta.max(0)
-        );
+        let best = self.main_child_move();
+        let explanation = "Nước này không có trong sách khai cuộc.".to_string();
         self.game.play(mv).expect("nước ngoài sách hợp lệ");
         if !self.out_of_book {
             self.exit_ply = self.game.moves.len() - 1;
             self.out_of_book = true;
         }
         self.plies_after_book = self.game.moves.len() - self.exit_ply;
-        self.grades.push((mv, grade));
+        self.grades.push((mv, Grade::Acceptable));
         if self.is_complete() {
             return TutorEvent::OpeningComplete {
                 summary: self.summary(),
@@ -351,7 +308,7 @@ impl<'a> Tutor<'a> {
         }
         TutorEvent::Graded {
             mv,
-            grade,
+            grade: Grade::Acceptable,
             best,
             explanation_vi: explanation,
         }
@@ -433,69 +390,33 @@ impl<'a> Tutor<'a> {
         false
     }
 
-    /// Hints for the learner's turn: book children plus engine lines,
-    /// ordered by engine score (1 = best), keeping 3 directions, or 4
-    /// when the 4th is evaluated as equally good as the 3rd (§5.3).
+    /// Hints for the learner's turn: the book children at this node,
+    /// ordered by their stored Pikafish score (1 = best), keeping 3
+    /// directions, or 4 when the 4th is within `DIRECTION_EQUAL_CP` of
+    /// the 3rd (§5.3). Every hint is a book move — a suggested move can
+    /// never be reported as "not in the book" — and the list is identical
+    /// on every attempt, because it comes from the stored dataset only.
     #[must_use]
     pub fn suggestions(&mut self) -> Vec<BookHint> {
         let pos = self.game.pos.clone();
-        // Copy the child data first: scoring needs `&mut self` (engine).
-        let child_data: Vec<(bool, String, String)> = self
+        let mut hints: Vec<BookHint> = self
             .current_children()
             .iter()
-            .map(|n| (n.main, n.mv.clone(), n.note_vi.clone().unwrap_or_default()))
+            .filter_map(|n| {
+                let mv = self.parse_book_mv(&n.mv)?;
+                Some(BookHint {
+                    mv,
+                    mv_cn: render_cn(&pos, mv),
+                    // `validate_book` requires every node to carry a
+                    // score; 0 is only a defensive fallback for
+                    // hand-written books that predate the field.
+                    score: n.score_cp.unwrap_or(0),
+                    explanation_vi: n.note_vi.clone().unwrap_or_default(),
+                })
+            })
             .collect();
-        let handle = self.engine();
-        let mut engine = handle.lock().expect("engine lock");
-        let req = EngineRequest::new(
-            self.game.start.to_fen(),
-            self.game.moves.clone(),
-            engine.hint_limits(),
-        );
-        let mut hints: Vec<BookHint> = Vec::new();
-        let mut book_moves: Vec<Move> = Vec::new();
-        let mut scored: Vec<(i32, Move, String)> = Vec::new();
-        for (_is_main, mv_str, note) in &child_data {
-            let Some(mv) = self.parse_book_mv(mv_str) else {
-                continue;
-            };
-            let Ok(score) = engine.score_move(&req, mv) else {
-                continue;
-            };
-            scored.push((score.to_cp_clamped(), mv, note.clone()));
-            book_moves.push(mv);
-        }
-        // Ordered by engine score, so #1 is always the best move.
-        scored.sort_by_key(|a| std::cmp::Reverse(a.0));
-        for (score, mv, note) in scored {
-            hints.push(BookHint {
-                mv,
-                mv_cn: render_cn(&pos, mv),
-                in_book: true,
-                score,
-                explanation_vi: note,
-            });
-        }
-        if !self.out_of_book {
-            // Top 4 engine lines; the 4th survives only when it scores
-            // within `DIRECTION_EQUAL_CP` of the 3rd (see below).
-            let lines = engine.analyze(&req, 4, &mut |_| {}).unwrap_or_default();
-            for line in lines {
-                if book_moves.contains(&line.mv) {
-                    continue;
-                }
-                let tags = Self::line_tags(&pos, &line);
-                hints.push(BookHint {
-                    mv: line.mv,
-                    mv_cn: render_cn(&pos, line.mv),
-                    in_book: false,
-                    score: line.score.to_cp_clamped(),
-                    explanation_vi: explain_tags(&tags),
-                });
-            }
-        }
-        // 1 = best by score; keep 3 directions, or 4 when the 4th is
-        // evaluated as equally good as the 3rd.
+        // 1 = best by stored score; keep 3 directions, or 4 when the
+        // 4th is within `DIRECTION_EQUAL_CP` of the 3rd.
         hints.sort_by_key(|a| std::cmp::Reverse(a.score));
         let scores: Vec<i32> = hints.iter().map(|h| h.score).collect();
         hints.truncate(direction_count(&scores));
@@ -505,12 +426,8 @@ impl<'a> Tutor<'a> {
     /// The `YourTurn` event for the UI to ask when the learner should move.
     #[must_use]
     pub fn hints_for_learner_turn(&mut self) -> TutorEvent {
-        let engine_needed = self.out_of_book || self.current_children().is_empty();
         let book_moves = self.suggestions();
-        TutorEvent::YourTurn {
-            book_moves,
-            engine_needed,
-        }
+        TutorEvent::YourTurn { book_moves }
     }
 
     #[must_use]

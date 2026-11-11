@@ -1,6 +1,6 @@
 //! Menu screen (§6.1): two big buttons + Settings + About.
 
-use crate::app::{Screen, XiangqiApp};
+use crate::app::{big_button, Screen, XiangqiApp};
 use crate::i18n::{self, Key};
 
 impl XiangqiApp {
@@ -10,7 +10,7 @@ impl XiangqiApp {
             ui.heading(i18n::t(Key::AppTitle));
             ui.label(i18n::t(Key::AppSubtitle));
             ui.add_space(40.0);
-            let btn = egui::Vec2::new(320.0, 56.0);
+            let btn = egui::Vec2::new(340.0, 64.0);
             if ui
                 .add_sized(btn, egui::Button::new(i18n::t(Key::PlayVsAi)))
                 .clicked()
@@ -29,10 +29,10 @@ impl XiangqiApp {
             }
             ui.add_space(24.0);
             ui.horizontal(|ui| {
-                if ui.button(i18n::t(Key::Settings)).clicked() {
+                if big_button(ui, i18n::t(Key::Settings)).clicked() {
                     self.show_settings = true;
                 }
-                if ui.button(i18n::t(Key::About)).clicked() {
+                if big_button(ui, i18n::t(Key::About)).clicked() {
                     self.show_about = true;
                 }
             });

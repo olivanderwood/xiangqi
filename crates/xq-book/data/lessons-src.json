@@ -520,6 +520,28 @@
     ]
   },
   {
+    "id": "r-paodau-xcgma",
+    "name_vi": "Pháo đầu đối Xuyên cung mã",
+    "name_zh": "炮头对穿宫马",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Pháo đầu đối Xuyên cung mã: sau 1.炮二平五, Đen không ra Xe mà lên Mã xuyên cung (马2进3 rồi 马3退5 chui vào giữa cung, 马5进4 lao ra trung lộ); Đỏ phát triển Xe và Pháo, tìm cách vây bắt Mã.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马2进3",
+      "马二进三",
+      "马3退5",
+      "车一平二",
+      "马5进4"
+    ]
+  },
+  {
     "id": "b-dantima",
     "name_vi": "Đơn đề mã",
     "name_zh": "单提马",

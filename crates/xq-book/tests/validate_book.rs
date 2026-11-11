@@ -9,7 +9,7 @@ use xq_core::board::Position;
 use xq_core::notation::{parse_cn, parse_wxf};
 use xq_core::types::Move;
 
-const EXPECTED_IDS: [&str; 24] = [
+const EXPECTED_IDS: [&str; 25] = [
     "r-zhongpao-pingfeng",
     "r-shunpao-hengche",
     "r-vs-yuanyang",
@@ -22,6 +22,7 @@ const EXPECTED_IDS: [&str; 24] = [
     "r-xunhepao",
     "r-shijiaopao",
     "r-jingoupao",
+    "r-paodau-xcgma",
     "b-pingfeng",
     "b-yuanyang",
     "b-chuangong",
@@ -89,7 +90,7 @@ fn is_cjk(c: char) -> bool {
 #[test]
 fn book_parses() {
     let book = load();
-    assert_eq!(book.lessons.len(), 24, "phải có 24 bài học");
+    assert_eq!(book.lessons.len(), 25, "phải có 25 bài học");
 }
 
 #[test]
@@ -295,15 +296,49 @@ fn sources_present() {
 }
 
 #[test]
-fn twenty_four_lessons() {
+fn twenty_five_lessons() {
     let book = load();
     let reds = book.by_learner(xq_core::Color::Red).len();
     let blacks = book.by_learner(xq_core::Color::Black).len();
-    assert_eq!(reds, 12, "phải có đúng 12 bài red, gặp {reds}");
+    assert_eq!(reds, 13, "phải có đúng 13 bài red, gặp {reds}");
     assert_eq!(blacks, 12, "phải có đúng 12 bài black, gặp {blacks}");
     for id in EXPECTED_IDS {
         assert!(book.by_id(id).is_some(), "thiếu bài {id}");
     }
+}
+
+/// Pikafish IS the book (Hieu, 2026-11-11): every node must carry the
+/// Pikafish score it was generated with, so the Tutor never re-scores a
+/// move with a live engine and every attempt is identical.
+#[test]
+fn every_node_has_score() {
+    let book = load();
+    let mut errors: Vec<String> = Vec::new();
+    for lesson in &book.lessons {
+        let start = start_pos(lesson);
+        let mut path = Vec::new();
+        walk(
+            lesson,
+            &lesson.tree,
+            &start,
+            &mut path,
+            &mut |les, p, node, _pos| {
+                if node.score_cp.is_none() {
+                    errors.push(format!(
+                        "{}: đường {}: nút {:?} thiếu score_cp",
+                        les.id,
+                        p.join(" > "),
+                        node.mv
+                    ));
+                }
+            },
+        );
+    }
+    assert!(
+        errors.is_empty(),
+        "nút thiếu score_cp:\n{}",
+        errors.join("\n")
+    );
 }
 
 #[test]

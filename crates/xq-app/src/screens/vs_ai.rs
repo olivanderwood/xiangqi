@@ -5,7 +5,10 @@
 //! the start dialog (see `docs/DECISIONS-m3.md`).
 
 use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
-use crate::app::{eval_bar_ui, is_narrow, move_list_ui, Screen, XiangqiApp};
+use crate::app::{
+    advantage_chip_ui, big_button, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen,
+    XiangqiApp,
+};
 use crate::board_view::{
     draw_board, legal_targets, BoardDraw, BoardGeometry, BoardInteraction, HintArrow, MoveAnim,
 };
@@ -628,13 +631,13 @@ impl XiangqiApp {
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
                 eval_bar_ui(ui, score_red, avail.y);
-                // Board budget: full height, width left after eval bar (16),
-                // gap (12), panel (340) and row spacing.
-                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 340.0 - 24.0, avail.y);
+                // Board budget: full height, width left after eval bar (20),
+                // gap (12), panel (380) and row spacing.
+                let budget = egui::Vec2::new(avail.x - 20.0 - 12.0 - 380.0 - 24.0, avail.y);
                 self.vs_ai_board(ctx, ui, budget);
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.set_width(340.0);
+                    ui.set_width(380.0);
                     self.vs_ai_panel(ctx, ui);
                 });
             });
@@ -733,16 +736,43 @@ impl XiangqiApp {
     }
 
     fn vs_ai_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.label(self.vs_ai.status_text());
+        ui.label(egui::RichText::new(self.vs_ai.status_text()).strong());
         if self.vs_ai.from_learn {
             ui.label(i18n::t(Key::VsAiContinueNote));
         }
+        // Current advantage as a big chip (same component as the Learn
+        // hint scores): the eval bar shows the shape, the chip shows the
+        // number. From the human's perspective in AI games, Red's in
+        // two-player mode.
+        let pos = self.vs_ai_display_pos();
+        let score_red = if pos.side() == Color::Red {
+            eval::eval(&pos)
+        } else {
+            -eval::eval(&pos)
+        };
+        let human_score = match self.vs_ai.opponent {
+            VsOpponent::Ai { human, .. } => {
+                if human == Color::Red {
+                    score_red
+                } else {
+                    -score_red
+                }
+            }
+            VsOpponent::TwoPlayer => score_red,
+        };
+        ui.horizontal(|ui| {
+            ui.label(i18n::t(Key::AdvantageScore));
+            advantage_chip_ui(ui, human_score);
+        });
         if let Some((grade, expl)) = &self.vs_ai.last_grade {
-            ui.label(format!(
-                "{}: {} — {expl}",
-                i18n::t(Key::GradeLabel),
-                grade.label_vi()
-            ));
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}: {} — {expl}",
+                    i18n::t(Key::GradeLabel),
+                    grade.label_vi()
+                ))
+                .strong(),
+            );
         }
         if let Some(msg) = &self.vs_ai.draw_message {
             ui.label(msg.clone());
@@ -767,25 +797,25 @@ impl XiangqiApp {
         let mut review = self.vs_ai.review;
         move_list_ui(ui, &moves, &mut review);
         self.vs_ai.review = review;
-        if self.vs_ai.review.is_some() && ui.button(i18n::t(Key::BackToEnd)).clicked() {
+        if self.vs_ai.review.is_some() && big_button(ui, i18n::t(Key::BackToEnd)).clicked() {
             self.vs_ai.review = None;
         }
         ui.separator();
         // Buttons.
         ui.horizontal_wrapped(|ui| {
-            if ui.button(i18n::t(Key::Undo)).clicked() {
+            if big_button(ui, i18n::t(Key::Undo)).clicked() {
                 let w = &self.worker;
                 self.vs_ai.undo(w);
             }
-            if ui.button(i18n::t(Key::Hint)).clicked() {
+            if big_button(ui, i18n::t(Key::Hint)).clicked() {
                 self.vs_ai.request_hint(&mut self.worker, 1);
             }
             if matches!(self.vs_ai.opponent, VsOpponent::Ai { .. })
-                && ui.button(i18n::t(Key::DrawOffer)).clicked()
+                && big_button(ui, i18n::t(Key::DrawOffer)).clicked()
             {
                 self.vs_ai.offer_draw();
             }
-            if ui.button(i18n::t(Key::Resign)).clicked() {
+            if big_button(ui, i18n::t(Key::Resign)).clicked() {
                 let side = match self.vs_ai.opponent {
                     VsOpponent::Ai { human, .. } => human,
                     VsOpponent::TwoPlayer => self.vs_ai.game.pos.side(),
@@ -793,13 +823,13 @@ impl XiangqiApp {
                 self.vs_ai.game.resign(side);
                 self.vs_ai.result_ack = false;
             }
-            if ui.button(i18n::t(Key::NewGame)).clicked() {
+            if big_button(ui, i18n::t(Key::NewGame)).clicked() {
                 self.vs_ai.show_start_dialog = true;
             }
-            if ui.button(i18n::t(Key::FlipBoard)).clicked() {
+            if big_button(ui, i18n::t(Key::FlipBoard)).clicked() {
                 self.vs_ai.flipped = !self.vs_ai.flipped;
             }
-            if ui.button(i18n::t(Key::BackToMenu)).clicked() {
+            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });
@@ -830,7 +860,7 @@ impl XiangqiApp {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label(i18n::t(Key::Side));
+                section_title(ui, i18n::t(Key::Side));
                 ui.radio_value(
                     &mut self.vs_ai.start_side,
                     StartSide::Red,
@@ -851,7 +881,7 @@ impl XiangqiApp {
                     StartSide::TwoPlayer,
                     i18n::t(Key::TwoPlayers),
                 );
-                ui.label(i18n::t(Key::Difficulty));
+                section_title(ui, i18n::t(Key::Difficulty));
                 for d in 0..=4u8 {
                     ui.radio_value(
                         &mut self.vs_ai.start_difficulty,
@@ -860,10 +890,10 @@ impl XiangqiApp {
                     );
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(i18n::t(Key::Start)).clicked() {
+                    if big_button(ui, i18n::t(Key::Start)).clicked() {
                         start = true;
                     }
-                    if ui.button(i18n::t(Key::Cancel)).clicked() {
+                    if big_button(ui, i18n::t(Key::Cancel)).clicked() {
                         cancel = true;
                     }
                 });
@@ -904,13 +934,13 @@ impl XiangqiApp {
             .show(ctx, |ui| {
                 ui.label(result.describe_vi());
                 ui.horizontal(|ui| {
-                    if ui.button(i18n::t(Key::NewGame)).clicked() {
+                    if big_button(ui, i18n::t(Key::NewGame)).clicked() {
                         new_game = true;
                     }
-                    if ui.button(i18n::t(Key::ReviewGame)).clicked() {
+                    if big_button(ui, i18n::t(Key::ReviewGame)).clicked() {
                         review = true;
                     }
-                    if ui.button(i18n::t(Key::Close)).clicked() {
+                    if big_button(ui, i18n::t(Key::Close)).clicked() {
                         close = true;
                     }
                 });
