@@ -191,6 +191,9 @@ impl MoveAnim {
 }
 
 /// One hint arrow (§7.3).
+///
+/// All three ranks share one colour: the rank is shown by the number
+/// badge drawn on the arrow (1 = best), not by colour.
 #[derive(Clone, Copy, Debug)]
 pub struct HintArrow {
     pub from: u8,
@@ -198,28 +201,28 @@ pub struct HintArrow {
     pub color: Color32,
     /// Whether the moving piece is a horse (arrow bends through the leg).
     pub horse: bool,
+    /// 0-based rank among the hints (0 = best). Drawn as `rank + 1`.
+    pub rank: usize,
 }
 
 impl HintArrow {
     #[must_use]
-    pub fn new(from: u8, to: u8, color: Color32, horse: bool) -> Self {
+    pub fn new(from: u8, to: u8, color: Color32, horse: bool, rank: usize) -> Self {
         Self {
             from,
             to,
             color,
             horse,
+            rank,
         }
     }
 
-    /// Hint #1: green, alpha 0.8; hints #2–3: blue, alpha 0.45.
+    /// Hint arrow for a ranked hint: one shared colour for every rank;
+    /// the rank is carried in `rank` and drawn as a number badge.
     #[must_use]
     pub fn for_rank(from: u8, to: u8, rank: usize, horse: bool) -> Self {
-        let color = if rank == 0 {
-            Color32::from_rgba_unmultiplied(0x2E, 0x7D, 0x32, 204)
-        } else {
-            Color32::from_rgba_unmultiplied(0x1E, 0x5A, 0xC8, 115)
-        };
-        Self::new(from, to, color, horse)
+        let color = Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xC8, 170);
+        Self::new(from, to, color, horse, rank)
     }
 }
 
@@ -361,6 +364,28 @@ fn draw_arrow(painter: &Painter, geom: &BoardGeometry, rect_min: Pos2, arrow: &H
         arrow.color,
         Stroke::NONE,
     ));
+    // Number badge at the bend (horse) or the middle of the arrow:
+    // a dark disc with the rank number (1-based), so the three hints
+    // are told apart by number, not by colour.
+    let badge_at = if arrow.horse {
+        horse_leg(arrow.from, arrow.to)
+            .map(at)
+            .unwrap_or_else(|| a.lerp(b, 0.5))
+    } else {
+        a.lerp(b, 0.5)
+    };
+    painter.circle_filled(
+        badge_at,
+        0.22 * cell,
+        Color32::from_rgba_unmultiplied(0x1A, 0x1A, 0x1A, 220),
+    );
+    painter.text(
+        badge_at,
+        Align2::CENTER_CENTER,
+        (arrow.rank + 1).to_string(),
+        cjk_bold(0.34 * cell),
+        Color32::WHITE,
+    );
 }
 
 /// Draw the whole board into `rect` (whose size must fit `geom`).

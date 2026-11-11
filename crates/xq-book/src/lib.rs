@@ -5,7 +5,7 @@ pub mod tree;
 pub mod tutor;
 
 pub use schema::{BookFile, BookNode, Lesson, Source};
-pub use tutor::{BookHint, LessonSummary, Tutor, TutorEvent};
+pub use tutor::{direction_count, BookHint, LessonSummary, Tutor, TutorEvent};
 
 use xq_core::Color;
 

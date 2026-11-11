@@ -229,7 +229,7 @@ fn menu_to_learn_select_shows_lessons_for_each_side() {
             "empty side should show the empty-state text"
         );
     } else {
-        assert_eq!(black_count, 6, "full book has 6 black lessons (§5.1)");
+        assert_eq!(black_count, 12, "full book has 12 black lessons (§5.1)");
     }
 }
 

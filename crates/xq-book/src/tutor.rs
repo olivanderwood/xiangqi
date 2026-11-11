@@ -24,6 +24,22 @@ use xq_engine::{shared_engine, BuiltinEngine, EngineRequest, SharedEngine};
 /// Plies allowed after leaving the book before the lesson ends (§5.3).
 const OFF_BOOK_LIMIT: usize = 8;
 
+/// How close the 4th direction must be to the 3rd to be shown: within
+/// 20 cp (~0.2 pawn) counts as "equally good" (Hieu, 2026-11-11).
+pub const DIRECTION_EQUAL_CP: i32 = 20;
+
+/// Number of directions to show for scores sorted best-first: 3, or 4
+/// when the 4th scores within `DIRECTION_EQUAL_CP` of the 3rd.
+#[must_use]
+pub fn direction_count(scores: &[i32]) -> usize {
+    let n = scores.len().min(3);
+    if scores.len() >= 4 && scores[3] >= scores[2] - DIRECTION_EQUAL_CP {
+        4
+    } else {
+        n
+    }
+}
+
 pub struct BookHint {
     pub mv: Move,
     pub mv_cn: String,
@@ -417,8 +433,9 @@ impl<'a> Tutor<'a> {
         false
     }
 
-    /// Hints for the learner's turn: book children (main first), then up
-    /// to 2 engine moves not in the book (§5.3).
+    /// Hints for the learner's turn: book children plus engine lines,
+    /// ordered by engine score (1 = best), keeping 3 directions, or 4
+    /// when the 4th is evaluated as equally good as the 3rd (§5.3).
     #[must_use]
     pub fn suggestions(&mut self) -> Vec<BookHint> {
         let pos = self.game.pos.clone();
@@ -437,20 +454,20 @@ impl<'a> Tutor<'a> {
         );
         let mut hints: Vec<BookHint> = Vec::new();
         let mut book_moves: Vec<Move> = Vec::new();
-        let mut scored: Vec<(bool, i32, Move, String)> = Vec::new();
-        for (is_main, mv_str, note) in &child_data {
+        let mut scored: Vec<(i32, Move, String)> = Vec::new();
+        for (_is_main, mv_str, note) in &child_data {
             let Some(mv) = self.parse_book_mv(mv_str) else {
                 continue;
             };
             let Ok(score) = engine.score_move(&req, mv) else {
                 continue;
             };
-            scored.push((*is_main, score.to_cp_clamped(), mv, note.clone()));
+            scored.push((score.to_cp_clamped(), mv, note.clone()));
             book_moves.push(mv);
         }
-        // Main first, then by engine score.
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-        for (_, score, mv, note) in scored {
+        // Ordered by engine score, so #1 is always the best move.
+        scored.sort_by_key(|a| std::cmp::Reverse(a.0));
+        for (score, mv, note) in scored {
             hints.push(BookHint {
                 mv,
                 mv_cn: render_cn(&pos, mv),
@@ -460,10 +477,11 @@ impl<'a> Tutor<'a> {
             });
         }
         if !self.out_of_book {
-            let lines = engine.analyze(&req, 3, &mut |_| {}).unwrap_or_default();
-            let mut added = 0;
+            // Top 4 engine lines; the 4th survives only when it scores
+            // within `DIRECTION_EQUAL_CP` of the 3rd (see below).
+            let lines = engine.analyze(&req, 4, &mut |_| {}).unwrap_or_default();
             for line in lines {
-                if added >= 2 || book_moves.contains(&line.mv) {
+                if book_moves.contains(&line.mv) {
                     continue;
                 }
                 let tags = Self::line_tags(&pos, &line);
@@ -474,9 +492,13 @@ impl<'a> Tutor<'a> {
                     score: line.score.to_cp_clamped(),
                     explanation_vi: explain_tags(&tags),
                 });
-                added += 1;
             }
         }
+        // 1 = best by score; keep 3 directions, or 4 when the 4th is
+        // evaluated as equally good as the 3rd.
+        hints.sort_by_key(|a| std::cmp::Reverse(a.score));
+        let scores: Vec<i32> = hints.iter().map(|h| h.score).collect();
+        hints.truncate(direction_count(&scores));
         hints
     }
 
@@ -498,5 +520,31 @@ impl<'a> Tutor<'a> {
             self.game.moves.len(),
             self.lesson.max_plies
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::direction_count;
+
+    #[test]
+    fn direction_count_keeps_three() {
+        assert_eq!(direction_count(&[]), 0);
+        assert_eq!(direction_count(&[50]), 1);
+        assert_eq!(direction_count(&[50, 30]), 2);
+        assert_eq!(direction_count(&[50, 30, 10]), 3);
+        // 4th far below the 3rd: still 3.
+        assert_eq!(direction_count(&[50, 30, 10, -50]), 3);
+    }
+
+    #[test]
+    fn direction_count_keeps_four_when_equal() {
+        // 4th within 20 cp of the 3rd: equally good, show it.
+        assert_eq!(direction_count(&[50, 30, 10, 0]), 4);
+        assert_eq!(direction_count(&[50, 30, 10, -10]), 4);
+        // Exactly at the boundary (20 cp): still equal.
+        assert_eq!(direction_count(&[50, 30, 10, -10]), 4);
+        // 21 cp below: not equal.
+        assert_eq!(direction_count(&[50, 30, 10, -11]), 3);
     }
 }

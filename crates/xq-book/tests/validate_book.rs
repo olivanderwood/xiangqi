@@ -9,19 +9,31 @@ use xq_core::board::Position;
 use xq_core::notation::{parse_cn, parse_wxf};
 use xq_core::types::Move;
 
-const EXPECTED_IDS: [&str; 12] = [
+const EXPECTED_IDS: [&str; 24] = [
     "r-zhongpao-pingfeng",
     "r-shunpao-hengche",
     "r-vs-yuanyang",
     "r-feixiang",
     "r-xianren",
     "r-guogong",
+    "r-shunpao",
+    "r-liepao",
+    "r-qima",
+    "r-xunhepao",
+    "r-shijiaopao",
+    "r-jingoupao",
     "b-pingfeng",
     "b-yuanyang",
     "b-chuangong",
     "b-fangong",
     "b-shunpao",
     "b-zudipao",
+    "b-dantima",
+    "b-vs-feixiang",
+    "b-vs-guogong",
+    "b-vs-qima",
+    "b-vs-xunhepao",
+    "b-vs-liepao",
 ];
 
 fn load() -> Book {
@@ -77,7 +89,7 @@ fn is_cjk(c: char) -> bool {
 #[test]
 fn book_parses() {
     let book = load();
-    assert_eq!(book.lessons.len(), 12, "phải có 12 bài học");
+    assert_eq!(book.lessons.len(), 24, "phải có 24 bài học");
 }
 
 #[test]
@@ -283,12 +295,12 @@ fn sources_present() {
 }
 
 #[test]
-fn twelve_lessons() {
+fn twenty_four_lessons() {
     let book = load();
     let reds = book.by_learner(xq_core::Color::Red).len();
     let blacks = book.by_learner(xq_core::Color::Black).len();
-    assert_eq!(reds, 6, "phải có đúng 6 bài red, gặp {reds}");
-    assert_eq!(blacks, 6, "phải có đúng 6 bài black, gặp {blacks}");
+    assert_eq!(reds, 12, "phải có đúng 12 bài red, gặp {reds}");
+    assert_eq!(blacks, 12, "phải có đúng 12 bài black, gặp {blacks}");
     for id in EXPECTED_IDS {
         assert!(book.by_id(id).is_some(), "thiếu bài {id}");
     }

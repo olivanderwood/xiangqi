@@ -109,6 +109,31 @@ fn install_fonts(ctx: &egui::Context) {
         vec!["cjk-bold".into(), "noto-sans-bold".into()],
     );
     ctx.set_fonts(fonts);
+    // Larger, clearer type throughout the app (§7.5): the egui
+    // defaults (Body 14, Heading 22) read small on a game-board UI.
+    let mut style = (*ctx.style()).clone();
+    style.text_styles.insert(
+        egui::TextStyle::Heading,
+        egui::FontId::new(28.0, egui::FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Body,
+        egui::FontId::new(18.0, egui::FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Button,
+        egui::FontId::new(18.0, egui::FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Small,
+        egui::FontId::new(15.0, egui::FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Monospace,
+        egui::FontId::new(16.0, egui::FontFamily::Monospace),
+    );
+    style.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
+    ctx.set_style(style);
 }
 
 impl XiangqiApp {

@@ -1,0 +1,654 @@
+[
+  {
+    "id": "r-zhongpao-pingfeng",
+    "name_vi": "Pháo đầu Xe qua hà đối Bình phong mã",
+    "name_zh": "中炮过河车对屏风马",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Pháo đầu, Xe qua hà đối Bình phong mã: Đỏ tiến Tốt giữa, đưa Xe qua hà rồi ra Pháo tám.",
+    "sources": [
+      {
+        "title": "Sohu: Bình phong mã — Mã 3 thoái 5 đối tiến Tốt giữa",
+        "url": "https://www.sohu.com/a/242522309_495634"
+      },
+      {
+        "title": "Bilibili: Pháo đầu Tốt 7 Xe qua hà đối Bình phong mã",
+        "url": "https://www.bilibili.com/opus/509413680002884939"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马8进7",
+      "马二进三",
+      "车9平8",
+      "车一平二",
+      "卒7进1"
+    ]
+  },
+  {
+    "id": "r-shunpao-hengche",
+    "name_vi": "Thuận pháo: Hoành xa phá Trực xa",
+    "name_zh": "顺炮横车破直车",
+    "learner": "red",
+    "level": 3,
+    "summary_vi": "Thuận pháo, Hoành xa phá Trực xa: bẫy cổ thí Mã rồi thí Xe, kết thúc bằng song Pháo chiếu hết.",
+    "sources": [
+      {
+        "title": "xiangqi.com: Bẫy Thuận pháo Hoành xa phá Trực xa",
+        "url": "https://www.xiangqi.com/articles/basic-xiangqi-chinese-chess-midgame-tactics-05-sacrificing-material"
+      },
+      {
+        "title": "Paper Generals: Bẫy thí Mã 13 nước (Quất trung bí)",
+        "url": "https://papergenerals.com/games/xiangqi/juzhongmi-horse-sacrifice"
+      },
+      {
+        "title": "Teach Yourself Xiangqi (教你学象棋) — sách điện tử",
+        "url": "https://ivantsoi.myds.me/web/schoolebook/pdf/088042.pdf"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "炮8平5",
+      "马二进三",
+      "马8进7",
+      "车一进一",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "r-vs-yuanyang",
+    "name_vi": "Pháo đầu phá Uyên ương pháo",
+    "name_zh": "中炮对鸳鸯炮",
+    "learner": "red",
+    "level": 3,
+    "summary_vi": "Pháo đầu phá Uyên ương pháo: bốn hướng tấn công, Pháo tuần hà là nước chính.",
+    "sources": [
+      {
+        "title": "NetEase: 4 cách phá Uyên ương pháo",
+        "url": "https://m.163.com/dy/article/E5EULFEG0529D122.html"
+      },
+      {
+        "title": "XiangQiPu: Trung pháo đối Uyên ương pháo",
+        "url": "https://www.xiangqiqipu.com/Category/View-2240.html"
+      },
+      {
+        "title": "Teach Yourself Xiangqi (教你学象棋) — sách điện tử",
+        "url": "https://ivantsoi.myds.me/web/schoolebook/pdf/088042.pdf"
+      },
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马2进3",
+      "马二进三",
+      "卒7进1",
+      "车一平二",
+      "车9进2"
+    ]
+  },
+  {
+    "id": "r-feixiang",
+    "name_vi": "Phi tượng cục",
+    "name_zh": "飞相局",
+    "learner": "red",
+    "level": 1,
+    "summary_vi": "Phi tượng cục: Tượng lên giữa giữ trận, rồi mới ra Mã, ra Xe.",
+    "sources": [
+      {
+        "title": "Xiangqi Arena: Phi tượng cục",
+        "url": "https://www.xqarena.com/zh-hant/guides/flying-elephant"
+      },
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Teach Yourself Xiangqi (教你学象棋) — sách điện tử",
+        "url": "https://ivantsoi.myds.me/web/schoolebook/pdf/088042.pdf"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "相三进五",
+      "炮2平5",
+      "马八进七",
+      "马2进3",
+      "车九平八",
+      "车1平2"
+    ]
+  },
+  {
+    "id": "r-xianren",
+    "name_vi": "Tiên nhân chỉ lộ",
+    "name_zh": "仙人指路",
+    "learner": "red",
+    "level": 1,
+    "summary_vi": "Tiên nhân chỉ lộ: tiến Tốt dò đường, chờ Đen bộc lộ ý đồ rồi mới định hướng.",
+    "sources": [
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Xiangqi Arena: Tiên nhân chỉ lộ",
+        "url": "https://www.xqarena.com/zh-hant/guides/pawn-opening"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "兵七进一",
+      "炮2平3",
+      "炮二平五",
+      "象3进5",
+      "马二进三",
+      "卒3进1"
+    ]
+  },
+  {
+    "id": "r-guogong",
+    "name_vi": "Quá cung pháo",
+    "name_zh": "过宫炮",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Quá cung pháo: bình Pháo qua cung, dồn hai Pháo về một cánh rồi ra Mã, ra Xe.",
+    "sources": [
+      {
+        "title": "Xiangqi Arena: Quá cung pháo",
+        "url": "https://www.xqarena.com/zh-hant/guides/palace-corner-cannon"
+      },
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平六",
+      "马8进7",
+      "马二进三",
+      "车9平8",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "b-pingfeng",
+    "name_vi": "Bình phong mã đối Pháo đầu",
+    "name_zh": "屏风马",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Bình phong mã đối Pháo đầu: hai Mã giữ Tốt giữa, Xe qua hà đối công.",
+    "sources": [
+      {
+        "title": "Sohu: Bình phong mã — Mã 3 thoái 5 đối tiến Tốt giữa",
+        "url": "https://www.sohu.com/a/242522309_495634"
+      },
+      {
+        "title": "Bilibili: Pháo đầu Tốt 7 Xe qua hà đối Bình phong mã",
+        "url": "https://www.bilibili.com/opus/509413680002884939"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马8进7",
+      "马二进三",
+      "车9平8",
+      "车一平二",
+      "卒7进1"
+    ]
+  },
+  {
+    "id": "b-yuanyang",
+    "name_vi": "Uyên ương pháo",
+    "name_zh": "鸳鸯炮",
+    "learner": "black",
+    "level": 3,
+    "summary_vi": "Uyên ương pháo: lui Pháo rồi bình sang, hai Pháo cùng đánh Xe trực của Đỏ.",
+    "sources": [
+      {
+        "title": "NetEase: 4 cách phá Uyên ương pháo",
+        "url": "https://m.163.com/dy/article/E5EULFEG0529D122.html"
+      },
+      {
+        "title": "XiangQiPu: Trung pháo đối Uyên ương pháo",
+        "url": "https://www.xiangqiqipu.com/Category/View-2240.html"
+      },
+      {
+        "title": "Teach Yourself Xiangqi (教你学象棋) — sách điện tử",
+        "url": "https://ivantsoi.myds.me/web/schoolebook/pdf/088042.pdf"
+      },
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马2进3",
+      "马二进三",
+      "卒7进1",
+      "车一平二",
+      "车9进2"
+    ]
+  },
+  {
+    "id": "b-chuangong",
+    "name_vi": "Xuyên cung mã",
+    "name_zh": "穿宫马",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Phi Tượng rồi đưa Mã lên góc Sĩ, sau đó Mã xuyên qua cung sang phía bên kia.",
+    "sources": [
+      {
+        "title": "Zhihu: Xuyên cung mã nên bố trận thế nào",
+        "url": "https://www.zhihu.com/question/3598929784"
+      },
+      {
+        "title": "xiangqi.com: Thuật ngữ khai cuộc (Xuyên cung mã)",
+        "url": "https://www.xiangqi.com/articles/glossary-of-basic-xiangqi-chinese-chess-opening-terms"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "象7进5",
+      "马二进三",
+      "马8进6",
+      "车一平二",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "b-fangong",
+    "name_vi": "Phản cung mã",
+    "name_zh": "反宫马",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Phản cung mã: Mã biên lên trước, Pháo vào góc Sĩ kẹp giữa hai Mã.",
+    "sources": [
+      {
+        "title": "Xiangqi Arena: Phản cung mã",
+        "url": "https://www.xqarena.com/zh-hant/guides/counter-palace-horse"
+      },
+      {
+        "title": "Wikipedia: Phản cung mã",
+        "url": "https://zh.wikipedia.org/zh-hans/%E5%8F%8D%E5%AE%AB%E9%A9%AC"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马2进3",
+      "马二进三",
+      "炮8平6",
+      "车一平二",
+      "马8进7"
+    ]
+  },
+  {
+    "id": "b-shunpao",
+    "name_vi": "Thuận pháo, bên hậu",
+    "name_zh": "顺炮",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Thuận pháo bên hậu: cũng vào Pháo đầu, hai Pháo đối nhau, Xe ngang đối Xe thẳng.",
+    "sources": [
+      {
+        "title": "Xiangqi Arena: Thuận pháo",
+        "url": "https://www.xqarena.com/zh-hans/guides/same-cannons"
+      },
+      {
+        "title": "Teach Yourself Xiangqi (教你学象棋) — sách điện tử",
+        "url": "https://ivantsoi.myds.me/web/schoolebook/pdf/088042.pdf"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "炮8平5",
+      "马二进三",
+      "车9进1",
+      "车一平二",
+      "马8进7"
+    ]
+  },
+  {
+    "id": "b-zudipao",
+    "name_vi": "Tốt để pháo đối Tiên nhân chỉ lộ",
+    "name_zh": "卒底炮",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Tốt để pháo đối Tiên nhân chỉ lộ: bình Pháo vào sau Tốt, dọa ăn Tốt Đỏ đã tiến.",
+    "sources": [
+      {
+        "title": "Wikibooks: Khai cuộc cờ tướng",
+        "url": "https://zh.wikibooks.org/zh-hans/%E4%B8%AD%E5%9C%8B%E8%B1%A1%E6%A3%8B/%E9%96%8B%E5%B1%80"
+      },
+      {
+        "title": "Xiangqi Arena: Tiên nhân chỉ lộ",
+        "url": "https://www.xqarena.com/zh-hant/guides/pawn-opening"
+      },
+      {
+        "title": "Scribd: Trung cục — Tiên nhân chỉ lộ đối Tốt để pháo",
+        "url": "https://www.scribd.com/document/753646277/%E4%B8%AD%E5%B1%80"
+      },
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "兵七进一",
+      "炮2平3",
+      "炮二平五",
+      "象3进5",
+      "马二进三",
+      "卒3进1"
+    ]
+  },
+  {
+    "id": "r-shunpao",
+    "name_vi": "Thuận pháo",
+    "name_zh": "顺炮",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Thuận pháo: hai pháo cùng đóng trung lộ, tranh tiên bằng tốc độ xuất xe. Bài học theo nước tốt nhất của Pikafish.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "炮8平5",
+      "马二进三",
+      "马8进7",
+      "车一平二",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "r-liepao",
+    "name_vi": "Liệt pháo",
+    "name_zh": "列炮",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Liệt pháo: Đen đưa pháo cánh sang trung lộ đối đầu, thế cờ sắc bén, hai bên đều phải tính chính xác.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "炮2平5",
+      "马二进三",
+      "马8进7",
+      "车一平二",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "r-qima",
+    "name_vi": "Khởi mã cục",
+    "name_zh": "起马局",
+    "learner": "red",
+    "level": 1,
+    "summary_vi": "Khởi mã cục: lên Mã trước rồi mới đóng Pháo, chắc chắn, dễ chơi cho người mới.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "马二进三",
+      "马8进7",
+      "炮八平五",
+      "炮2平5",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "r-xunhepao",
+    "name_vi": "Tuần hà pháo",
+    "name_zh": "巡河炮",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Tuần hà pháo: Pháo tuần hà khống chế trung lộ, chờ thời cơ phản công.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二进二",
+      "马8进7",
+      "马二进三",
+      "炮2平5",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "r-shijiaopao",
+    "name_vi": "Sĩ giác pháo",
+    "name_zh": "仕角炮",
+    "learner": "red",
+    "level": 2,
+    "summary_vi": "Sĩ giác pháo: Pháo lên góc Sĩ, kín đáo mà hiểm, thường chuyển sang thế công cánh.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮八进二",
+      "马8进7",
+      "马二进三",
+      "炮2平5",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "r-jingoupao",
+    "name_vi": "Kim câu pháo",
+    "name_zh": "金钩炮",
+    "learner": "red",
+    "level": 3,
+    "summary_vi": "Kim câu pháo: Pháo móc sang biên như lưỡi câu, lối chơi táo bạo, cần tính toán sâu.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平七",
+      "炮8平5",
+      "马二进三",
+      "马8进7",
+      "车一平二",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "b-dantima",
+    "name_vi": "Đơn đề mã",
+    "name_zh": "单提马",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Đơn đề mã: Đen lên một Mã sớm để giữ trung lộ, thế trận linh hoạt, dễ chuyển hướng.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "马2进3",
+      "马二进三",
+      "炮8平5",
+      "车一平二",
+      "车9进1"
+    ]
+  },
+  {
+    "id": "b-vs-feixiang",
+    "name_vi": "Phi tượng, bên hậu",
+    "name_zh": "飞相局",
+    "learner": "black",
+    "level": 1,
+    "summary_vi": "Đối phó Phi tượng từ bên Đen: đóng Pháo đầu, phát triển đều, không vội vàng.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "相三进五",
+      "炮8平5",
+      "马二进三",
+      "马8进7",
+      "车一平二",
+      "车9平8"
+    ]
+  },
+  {
+    "id": "b-vs-guogong",
+    "name_vi": "Quá cung pháo, bên hậu",
+    "name_zh": "过宫炮",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Đối phó Quá cung pháo từ bên Đen: giữ vững trung lộ, chờ Đỏ bộc lộ ý đồ.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平六",
+      "马8进7",
+      "马二进三",
+      "车9平8",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "b-vs-qima",
+    "name_vi": "Khởi mã, bên hậu",
+    "name_zh": "起马局",
+    "learner": "black",
+    "level": 1,
+    "summary_vi": "Đối phó Khởi mã cục từ bên Đen: phát triển cân bằng, không để Đỏ chiếm tiên dễ dàng.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "马二进三",
+      "马8进7",
+      "炮八平五",
+      "炮2平5",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "b-vs-xunhepao",
+    "name_vi": "Tuần hà pháo, bên hậu",
+    "name_zh": "巡河炮",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Đối phó Tuần hà pháo từ bên Đen: Mã lên giữ hà, Pháo đóng trung lộ phản công.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二进二",
+      "马8进7",
+      "马二进三",
+      "炮2平5",
+      "车一平二",
+      "马2进3"
+    ]
+  },
+  {
+    "id": "b-vs-liepao",
+    "name_vi": "Liệt pháo, bên hậu",
+    "name_zh": "列炮",
+    "learner": "black",
+    "level": 2,
+    "summary_vi": "Liệt pháo từ bên Đen: pháo cánh sang trung lộ, thế cờ đối công quyết liệt.",
+    "sources": [
+      {
+        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+        "url": "https://github.com/official-pikafish/Pikafish"
+      }
+    ],
+    "prefix": [
+      "炮二平五",
+      "炮2平5",
+      "马二进三",
+      "马8进7",
+      "车一平二",
+      "车9平8"
+    ]
+  }
+]

@@ -27,6 +27,30 @@ use xq_core::notation;
 use xq_core::types::{Color, Move, PieceKind};
 use xq_engine::{EngineRequest, Level, SharedEngine};
 
+/// Advantage of a hint score (centipawns, side-to-move's perspective)
+/// as a short pawn string: `+0.8`, `-0.3`, `M3` for mate in 3.
+fn format_advantage(cp: i32) -> String {
+    if cp >= eval::MATE - 500 {
+        return format!("M{}", (eval::MATE - cp + 1) / 2);
+    }
+    if cp <= -eval::MATE + 500 {
+        return format!("-M{}", (eval::MATE + cp + 1) / 2);
+    }
+    format!("{:+.1}", cp as f32 / 100.0)
+}
+
+/// Cell colour for an advantage score: green when the learner is
+/// better, red when worse, grey when level.
+fn advantage_color(cp: i32) -> egui::Color32 {
+    if cp > 0 {
+        egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
+    } else if cp < 0 {
+        egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
+    } else {
+        egui::Color32::GRAY
+    }
+}
+
 pub struct LearnState {
     pub lesson: Option<Lesson>,
     // Declared before `lesson_box`: Tutor is dropped first, so the
@@ -215,11 +239,11 @@ impl LearnState {
         self.learner_color() == Some(self.game.pos.side())
     }
 
-    /// Book hints for the learner's turn + an engine top-3 request (§6.4.2).
+    /// Book hints for the learner's turn + an engine top-4 request (§6.4.2).
     /// Hints for the learner's turn (§6.4.2). The Tutor's
-    /// `hints_for_learner_turn` is canonical: book moves (main first) plus
-    /// up to 2 engine lines. Runs once per learner turn (guarded by
-    /// `hint_ply`); the Tutor's engine pass runs synchronously here.
+    /// `hints_for_learner_turn` is canonical: book moves plus engine
+    /// lines, ordered by score, keeping 3 directions (or 4 when equally
+    /// good); the Tutor's engine pass runs synchronously here.
     fn refresh_hints(&mut self) {
         if !self.is_learner_turn() || self.complete.is_some() {
             return;
@@ -268,6 +292,10 @@ impl LearnState {
             });
         }
         drop(engine);
+        // 1 = best by score; keep 3 directions, or 4 when equally good.
+        hints.sort_by_key(|a| std::cmp::Reverse(a.score));
+        let scores: Vec<i32> = hints.iter().map(|h| h.score).collect();
+        hints.truncate(xq_book::direction_count(&scores));
         self.hints = hints;
     }
 
@@ -605,11 +633,11 @@ impl XiangqiApp {
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
                 eval_bar_ui(ui, score_red, avail.y);
-                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 340.0 - 24.0, avail.y);
+                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 360.0 - 24.0, avail.y);
                 self.learn_board(ctx, ui, budget);
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.set_width(340.0);
+                    ui.set_width(360.0);
                     self.learn_panel(ctx, ui);
                 });
             });
@@ -649,10 +677,10 @@ impl XiangqiApp {
             .board
             .drag_sq
             .map(|sq| (sq, self.learn.board.drag_pos));
-        // Hint arrows: up to 3, hovered one brighter (§6.4.2, §7.3).
+        // Hint arrows: up to 4, hovered one brighter (§6.4.2, §7.3).
         let mut arrows: Vec<HintArrow> = Vec::new();
         if !self.learn.hide_hints && enabled {
-            for (i, hint) in self.learn.hints.iter().take(3).enumerate() {
+            for (i, hint) in self.learn.hints.iter().take(4).enumerate() {
                 let horse = pos
                     .piece_at(hint.mv.from)
                     .map(|p| p.kind == PieceKind::Horse)
@@ -723,14 +751,16 @@ impl XiangqiApp {
             }
         }
         ui.separator();
-        // Hints (§6.4.2).
+        // Hints (§6.4.2): the top 3 directions (or 4 when equally good),
+        // numbered 1–4 (1 = best), each with an advantage cell coloured
+        // green/red for the learner.
         if self.learn.hide_hints {
             if ui.button(i18n::t(Key::ShowHints)).clicked() {
                 self.learn.hide_hints = false;
             }
         } else {
             ui.horizontal(|ui| {
-                ui.label(i18n::t(Key::Hint));
+                ui.label(egui::RichText::new(i18n::t(Key::BestDirections)).strong());
                 if ui.button(i18n::t(Key::HideHints)).clicked() {
                     self.learn.hide_hints = true;
                 }
@@ -740,21 +770,59 @@ impl XiangqiApp {
             }
             let mut clicked_hint: Option<Move> = None;
             let mut hovered: Option<usize> = None;
-            for (i, hint) in self.learn.hints.iter().take(3).enumerate() {
+            for (i, hint) in self.learn.hints.iter().take(4).enumerate() {
                 let tag = if hint.in_book {
                     i18n::t(Key::SuggestionBook)
                 } else {
                     i18n::t(Key::SuggestionEngine)
                 };
-                let text = format!(
-                    "{} • {tag} • {} — {}",
-                    hint.mv_cn, hint.score, hint.explanation_vi
+                // Row highlight from the previous frame's hover state;
+                // the frame paints the fill before the row content.
+                let fill = if self.learn.hint_hover == Some(i) {
+                    egui::Color32::from_rgba_unmultiplied(0x1E, 0x5A, 0xC8, 28)
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                let row = egui::Frame::default()
+                    .fill(fill)
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{}.", i + 1))
+                                        .strong()
+                                        .size(20.0),
+                                );
+                                ui.label(egui::RichText::new(&hint.mv_cn).strong().size(18.0));
+                                ui.colored_label(
+                                    advantage_color(hint.score),
+                                    egui::RichText::new(format_advantage(hint.score))
+                                        .strong()
+                                        .size(18.0),
+                                );
+                                ui.label(egui::RichText::new(tag).small());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add_space(28.0);
+                                ui.label(
+                                    egui::RichText::new(&hint.explanation_vi)
+                                        .small()
+                                        .color(egui::Color32::GRAY),
+                                );
+                            });
+                        });
+                    });
+                let click = ui.interact(
+                    row.response.rect,
+                    ui.id().with(("hint-row", i)),
+                    egui::Sense::click(),
                 );
-                let resp = ui.selectable_label(self.learn.hint_hover == Some(i), text);
-                if resp.hovered() {
+                if click.hovered() {
                     hovered = Some(i);
                 }
-                if resp.clicked() && self.learn.is_learner_turn() && !self.learn.off_book_pending {
+                if click.clicked() && self.learn.is_learner_turn() && !self.learn.off_book_pending {
                     clicked_hint = Some(hint.mv);
                 }
             }
@@ -987,5 +1055,38 @@ impl XiangqiApp {
         self.summary.start = self.learn.game.start.clone();
         self.learn.show_complete_dialog = false;
         self.goto(Screen::Summary);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{advantage_color, format_advantage};
+
+    #[test]
+    fn advantage_formats_as_pawns_with_sign() {
+        assert_eq!(format_advantage(80), "+0.8");
+        assert_eq!(format_advantage(-30), "-0.3");
+        assert_eq!(format_advantage(0), "+0.0");
+        assert_eq!(format_advantage(150), "+1.5");
+    }
+
+    #[test]
+    fn advantage_formats_mate() {
+        assert_eq!(format_advantage(29_999), "M1");
+        assert_eq!(format_advantage(-29_999), "-M1");
+        assert_eq!(format_advantage(29_901), "M50");
+    }
+
+    #[test]
+    fn advantage_colours_follow_the_learner() {
+        assert_eq!(
+            advantage_color(10),
+            egui::Color32::from_rgb(0x2E, 0x7D, 0x32)
+        );
+        assert_eq!(
+            advantage_color(-10),
+            egui::Color32::from_rgb(0xC0, 0x39, 0x2B)
+        );
+        assert_eq!(advantage_color(0), egui::Color32::GRAY);
     }
 }

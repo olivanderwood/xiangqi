@@ -1321,6 +1321,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-book"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "xq-book",
+ "xq-core",
+ "xq-engine",
+ "xq-pikafish",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

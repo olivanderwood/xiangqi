@@ -526,3 +526,50 @@ trình (file vẫn nằm local, gitignored, không bao giờ chạy trên GitHub
   `target/build-engine-verify5.log`. Build từ mã nguồn coi như đã
   kiểm chứng xong trên Linux (binary 1 arch x86-64-avx2, gcc, không
   PGO, không universal — xem §35–§36).
+
+## 39. Binary Pikafish + NNUE đưa vào repo (đảo quyết định P8, theo lệnh Hieu 2026-11-11)
+
+- Trước đây (§33, P8): `engine/` gitignore, chỉ commit
+  `PIKAFISH_VERSION.toml`; binary + net lấy bằng `fetch-engine.sh`
+  lúc đóng gói.
+- Hieu yêu cầu gắn thẳng vào repo ("tải luôn và gắn vào đi"). Đổi:
+  bỏ rule `engine/*` khỏi `.gitignore`, commit toàn bộ `engine/`
+  (binary Linux universal 6.875.464 byte + `pikafish.nnue`
+  50.706.378 byte + `Copying.txt` + `NNUE-License.md` + `SOURCE.txt`
+  + `PIKAFISH_VERSION.toml`). README cập nhật theo.
+- Hệ quả chấp nhận được: repo nặng thêm ~57 MB; mỗi lần đổi phiên
+  bản engine sẽ thêm một blob ~50 MB vào lịch sử. Bù lại clone xong
+  chạy được ngay, không cần bước tải riêng. `fetch-engine.sh` vẫn
+  giữ để tải lại/kiểm tra hash; `build-engine.sh` không đổi.
+- Lưu ý: file `.nnue` 50,7 MB vẫn dưới giới hạn 100 MB/file của
+  GitHub nên push qua Git Data API được (blob base64 ~68 MB);
+  timeout của helper push tăng 30 s → 300 s cho lần này.
+
+## 40. tools/fetch-engine.bat: bản Command Prompt cho Windows (P8)
+
+- Hieu dùng Command Prompt nên viết thêm `tools/fetch-engine.bat`
+  (2026-11-11): tương đương `fetch-engine.sh` — tải archive bằng
+  `curl` (có sẵn trên Windows 10/11), kiểm sha256 archive + NNUE
+  bằng `certutil`, giải nén bằng 7-Zip (`7z.exe` trong PATH hoặc ở
+  `C:\Program Files\7-Zip`) hoặc Python `py7zr`, copy binary Windows
+  + net + giấy phép vào `engine/`, ghi `SOURCE.txt`, xóa file 7z.
+- Chưa test trên Windows thật (VM này Linux); commit cùng đợt học
+  khai cuộc v2 (push 2026-11-11), vì engine không vào repo nên script
+  này là cách lấy engine trên Windows.
+
+## 41. Engine KHÔNG vào repo (đảo lại §39, theo lệnh Hieu 2026-11-11 15:03)
+
+- Commit 54b11b7 (đưa toàn bộ `engine/` vào repo) KHÔNG BAO GIỜ được
+  push: GitHub API trả 422 với file `pikafish.nnue` 50 MB (base64
+  ~68 MB) cả 2 đường thử — giả định trong §39 ("dưới 100 MB nên push
+  được") là SAI. SSH cũng chết ở proxy trước cả xác thực.
+- Hieu quyết định: push code, chừa engine ra. Xử lý: `git reset --soft`
+  về 4948257 (commit đã push), trả `.gitignore`/`README.md` về bản
+  cũ (engine/* lại bị ignore, chỉ `PIKAFISH_VERSION.toml` được commit),
+  file `engine/` trên máy vẫn giữ nguyên để dev, chỉ không vào repo.
+  Commit 54b11b7 bị bỏ (chỉ local, chưa từng push nên không cần
+  force-push hay viết lại lịch sử đã push).
+- Từ nay engine lấy bằng `tools/fetch-engine.sh` (Linux/macOS) hoặc
+  `tools/fetch-engine.bat` (Windows), ghim ở `PIKAFISH_VERSION.toml`
+  — đúng quyết định gốc P8 (§33). Đóng gói release vẫn cần bước tải
+  engine này; không có cách nào để GitHub API nhận file 50 MB.
