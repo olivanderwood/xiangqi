@@ -5,10 +5,12 @@
 #   ./tools/fetch-engine.sh
 #
 # Downloads the release archive, verifies its sha256, extracts the
-# Linux binary + pikafish.nnue + licenses into engine/, verifies the
-# NNUE sha256, and writes engine/SOURCE.txt. The NNUE file is never
-# committed to git (see .gitignore). Requires curl + sha256sum and a
-# 7z extractor (7z, 7zz or bsdtar).
+# binary for THIS platform (Linux: Pikafish-Linux-x86-64-universal;
+# macOS: Pikafish-MacOS-universal) + pikafish.nnue + licenses into
+# engine/, verifies the NNUE sha256, and writes engine/SOURCE.txt. The
+# NNUE file is never committed to git (see .gitignore). Requires curl +
+# a sha256 tool (sha256sum, or shasum on macOS) and a 7z extractor
+# (7z, 7zz, bsdtar or python3 py7zr).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,14 +25,30 @@ VERSION="$(toml version)"
 SOURCE_URL="$(toml source_url)"
 ARCHIVE_SHA256="$(toml archive_sha256)"
 NNUE_SHA256="$(toml nnue_sha256)"
-LINUX_EXE="$(toml linux_exe)"
+# The binary for THIS platform. The script used to always take
+# linux_exe, so on macOS it fetched a Linux ELF the app could not even
+# see (locate() looks for Pikafish-MacOS-universal there) — the app
+# fell back to the builtin engine even after fetch-engine.sh "worked".
+OS="$(uname -s)"
+case "$OS" in
+    Linux)  EXE="$(toml linux_exe)" ;;
+    Darwin) EXE="$(toml macos_exe)" ;;
+    *) echo "fetch-engine.sh: unsupported OS: $OS (Linux/macOS only; Windows: fetch-engine.bat)" >&2; exit 1 ;;
+esac
 
 [ -n "$VERSION" ] && [ -n "$SOURCE_URL" ] && [ -n "$ARCHIVE_SHA256" ] \
-    && [ -n "$NNUE_SHA256" ] && [ -n "$LINUX_EXE" ] \
+    && [ -n "$NNUE_SHA256" ] && [ -n "$EXE" ] \
     || { echo "fetch-engine.sh: pin file $TOML is incomplete" >&2; exit 1; }
 
 command -v curl >/dev/null || { echo "fetch-engine.sh needs curl" >&2; exit 1; }
-command -v sha256sum >/dev/null || { echo "fetch-engine.sh needs sha256sum" >&2; exit 1; }
+# Portable sha256: stock macOS has no sha256sum, it has shasum.
+if command -v sha256sum >/dev/null; then
+    SHA256="sha256sum"
+elif command -v shasum >/dev/null; then
+    SHA256="shasum -a 256"
+else
+    echo "fetch-engine.sh needs sha256sum or shasum" >&2; exit 1
+fi
 
 EXTRACT=""
 if command -v 7z >/dev/null; then EXTRACT="7z x -y";
@@ -50,7 +68,7 @@ echo "downloading $SOURCE_URL ..."
 curl -fSL --retry 3 -o "$ARCHIVE" "$SOURCE_URL"
 
 echo "verifying archive sha256 ..."
-echo "$ARCHIVE_SHA256  $ARCHIVE" | sha256sum -c - || {
+echo "$ARCHIVE_SHA256  $ARCHIVE" | $SHA256 -c - || {
     echo "fetch-engine.sh: archive sha256 MISMATCH — refusing to extract" >&2
     exit 1
 }
@@ -64,14 +82,14 @@ else
 fi
 
 mkdir -p "$ENGINE_DIR"
-for f in "$LINUX_EXE" pikafish.nnue Copying.txt NNUE-License.md; do
+for f in "$EXE" pikafish.nnue Copying.txt NNUE-License.md; do
     [ -f "$TMP/extract/$f" ] || { echo "fetch-engine.sh: $f missing from archive" >&2; exit 1; }
     cp "$TMP/extract/$f" "$ENGINE_DIR/"
 done
-chmod +x "$ENGINE_DIR/$LINUX_EXE"
+chmod +x "$ENGINE_DIR/$EXE"
 
 echo "verifying NNUE sha256 ..."
-echo "$NNUE_SHA256  $ENGINE_DIR/pikafish.nnue" | sha256sum -c - || {
+echo "$NNUE_SHA256  $ENGINE_DIR/pikafish.nnue" | $SHA256 -c - || {
     echo "fetch-engine.sh: NNUE sha256 MISMATCH" >&2
     exit 1
 }
@@ -93,4 +111,4 @@ License: engine is GPLv3 (Copying.txt); pikafish.nnue is NNUE-License,
 non-commercial use only (NNUE-License.md).
 EOF
 
-echo "done: $ENGINE_DIR/$LINUX_EXE + pikafish.nnue (Pikafish $VERSION)"
+echo "done: $ENGINE_DIR/$EXE + pikafish.nnue (Pikafish $VERSION)"

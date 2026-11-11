@@ -573,3 +573,41 @@ trình (file vẫn nằm local, gitignored, không bao giờ chạy trên GitHub
   `tools/fetch-engine.bat` (Windows), ghim ở `PIKAFISH_VERSION.toml`
   — đúng quyết định gốc P8 (§33). Đóng gói release vẫn cần bước tải
   engine này; không có cách nào để GitHub API nhận file 50 MB.
+
+## 42. fetch-engine.sh chỉ tải binary Linux — app trên Mac không thấy Pikafish (Hieu, 2026-11-11)
+
+- Triệu chứng: Hieu chạy trên Mac, đã chạy `fetch-engine.sh` rồi mà
+  app vẫn không access được Pikafish (banner "Không tìm thấy
+  Pikafish, đang dùng AI tích hợp", fallback về builtin).
+- Nguyên nhân: script luôn đọc `linux_exe` trong
+  `PIKAFISH_VERSION.toml` và chỉ copy `Pikafish-Linux-x86-64-universal`
+  vào `engine/` — trên Mac nó tải về một file ELF Linux. App trên
+  macOS (`locate()`, `exe_name()` = `Pikafish-MacOS-universal`) không
+  tìm đúng tên đó nên trả `NotFound`; dù có tìm thấy thì ELF cũng
+  không chạy được trên macOS. Ghi chú "(Linux/macOS)" ở §41 là SAI —
+  script chưa từng chạy đúng trên macOS (còn một lỗi nữa: máy Mac
+  mặc định không có `sha256sum`, chỉ có `shasum -a 256`, nên script
+  cũ thoát ngay ở bước kiểm tra nếu chưa cài coreutils).
+- Sửa `tools/fetch-engine.sh` (chưa push): chọn binary theo
+  `uname -s` — `Linux` → `linux_exe`, `Darwin` → `macos_exe`
+  (`Pikafish-MacOS-universal`), OS khác thì báo lỗi; sha256 dùng
+  `sha256sum` nếu có, không thì `shasum -a 256` (macOS). Cập nhật
+  comment đầu file. `fetch-engine.bat` không bị lỗi này (đã đúng
+  Windows, dùng `WIN_EXE` + `certutil`).
+- Kiểm chứng trên VM (không có Mac thật): giả lập Darwin bằng fake
+  `uname` (in `Darwin`) + fake `shasum` (chuyển sang `sha256sum`)
+  đặt đầu PATH, chạy script thật — tải archive, kiểm sha256 archive
+  + NNUE đều OK, giải nén bằng `py7zr` (VM không có 7z/bsdtar;
+  cài `pip install --user py7zr` để test), cài được
+  `Pikafish-MacOS-universal` và `file` xác nhận là **Mach-O
+  universal binary 2 arch (x86_64 + arm64)**. Đường Linux chạy lại
+  vẫn đúng (cài lại ELF Linux). Binary macOS test xong đã xóa khỏi
+  `engine/` trên VM (VM chỉ cần binary Linux).
+- Hieu cần: pull bản sửa này rồi chạy lại `./tools/fetch-engine.sh`
+  trên Mac (script tải lại archive ~50 MB, kiểm hash, cài đúng
+  binary macOS vào `engine/`), rồi build/chạy lại app. Binary cũ
+  Linux nằm sẵn trong `engine/` trên Mac không ảnh hưởng gì
+  (`locate()` trên macOS bỏ qua nó) nhưng có thể xóa cho gọn.
+  Lưu ý: file tải bằng `curl` không bị gắn quarantine nên Gatekeeper
+  không chặn; nếu sau này tải archive bằng trình duyệt thì mới cần
+  `xattr -d com.apple.quarantine`.
