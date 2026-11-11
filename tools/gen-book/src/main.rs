@@ -58,6 +58,14 @@ struct Args {
     /// A direction this far below the best (cp) is not stored: beyond
     /// ~3 pawns it is a mistake, not a direction to teach.
     max_gap: i32,
+    /// A side direction of the OPPONENT grows a branching sub-spine
+    /// this deep (plies) instead of a single PV chain, so the opponent's
+    /// prepared variations stay deep (§7). One level only.
+    side_spine_plies: usize,
+    /// Only spine nodes within the first that many plies of the lesson
+    /// grow opponent sub-spines: the opening phase, where the lesson
+    /// lives. Deeper spine nodes keep single PV chains.
+    branch_plies: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -69,6 +77,8 @@ fn parse_args() -> Result<Args, String> {
         side_plies: 8,
         leaf_depth: 8,
         max_gap: 300,
+        side_spine_plies: 8,
+        branch_plies: 16,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
@@ -119,6 +129,20 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or_else(|| "--max-gap cần một số".to_string())?
                     .parse()
                     .map_err(|_| "--max-gap phải là số".to_string())?;
+            }
+            "--side-spine-plies" => {
+                args.side_spine_plies = it
+                    .next()
+                    .ok_or_else(|| "--side-spine-plies cần một số".to_string())?
+                    .parse()
+                    .map_err(|_| "--side-spine-plies phải là số".to_string())?;
+            }
+            "--branch-plies" => {
+                args.branch_plies = it
+                    .next()
+                    .ok_or_else(|| "--branch-plies cần một số".to_string())?
+                    .parse()
+                    .map_err(|_| "--branch-plies phải là số".to_string())?;
             }
             _ => return Err(format!("tham số lạ: {a}")),
         }
@@ -174,6 +198,10 @@ struct Gen<'a> {
     analyses: usize,
     leaf_analyses: usize,
     max_gap: i32,
+    side_spine_plies: usize,
+    branch_plies: usize,
+    /// Opponent sub-spines grown in this lesson (for the report).
+    sub_spines: usize,
     /// Directions dropped for being more than `max_gap` below the best.
     dropped_far: usize,
     /// Worst (largest) gap between the best direction and a stored
@@ -224,14 +252,22 @@ impl<'a> Gen<'a> {
 
     /// Children of `pos`: the top directions from Pikafish. The best
     /// direction grows the spine (`remaining` plies left); side directions
-    /// carry their PV as a short chain. `moves` is the path from the start
-    /// to `pos`; `seen` holds the spine-path FENs (repetition guard).
+    /// of the LEARNER carry their PV as a short chain, while side
+    /// directions of the OPPONENT (in the opening phase, `depth == 0`)
+    /// grow a branching sub-spine of `side_spine_plies` plies (§7), so
+    /// the opponent's 3-4 strongest variations stay deep and the learner
+    /// keeps facing choices no matter which variation the opponent plays.
+    /// Inside a sub-spine (`depth == 1`) side directions go back to
+    /// single chains: one level of branching only, to bound the tree.
+    /// `moves` is the path from the start to `pos`; `seen` holds the
+    /// path FENs (repetition guard).
     fn children_at(
         &mut self,
         pos: &Position,
         moves: &[Move],
         remaining: usize,
         seen: &mut HashSet<String>,
+        depth: u8,
     ) -> Result<Vec<BookNode>, String> {
         if remaining == 0 {
             return Ok(Vec::new());
@@ -273,11 +309,28 @@ impl<'a> Gen<'a> {
             let next = if is_main {
                 if grow && !seen.contains(&next_pos.to_fen()) {
                     seen.insert(next_pos.to_fen());
-                    let sub = self.children_at(&next_pos, &next_moves, remaining - 1, seen)?;
+                    let sub =
+                        self.children_at(&next_pos, &next_moves, remaining - 1, seen, depth)?;
                     seen.remove(&next_pos.to_fen());
                     sub
                 } else {
                     Vec::new()
+                }
+            } else if depth == 0 && pos.side() != self.learner && moves.len() < self.branch_plies {
+                // Opponent's variation, prepared deep (§7): the side
+                // direction grows its own branching sub-spine instead of
+                // a single PV chain. One level only; deeper nodes in the
+                // sub-spine fall back to chains below.
+                let sub_remaining = self.side_spine_plies.min(remaining - 1);
+                if sub_remaining > 0 && !seen.contains(&next_pos.to_fen()) {
+                    self.sub_spines += 1;
+                    seen.insert(next_pos.to_fen());
+                    let sub = self.children_at(&next_pos, &next_moves, sub_remaining, seen, 1)?;
+                    seen.remove(&next_pos.to_fen());
+                    sub
+                } else {
+                    let cap = self.side_plies.min(remaining - 1);
+                    self.side_chain(mv, &next_pos, &pv, score, cap, seen)?
                 }
             } else {
                 let cap = self.side_plies.min(remaining - 1);
@@ -567,6 +620,9 @@ fn run() -> Result<(), String> {
             analyses: 0,
             leaf_analyses: 0,
             max_gap: args.max_gap,
+            side_spine_plies: args.side_spine_plies,
+            branch_plies: args.branch_plies,
+            sub_spines: 0,
             dropped_far: 0,
             worst_gap: 0,
         };
@@ -602,7 +658,7 @@ fn run() -> Result<(), String> {
         let pos = positions.last().expect("prefix đã đi").clone();
         let mut seen: HashSet<String> = positions.iter().map(|p| p.to_fen()).collect();
         let remaining = args.plies - moves.len();
-        let grown = gen.children_at(&pos, &moves, remaining, &mut seen)?;
+        let grown = gen.children_at(&pos, &moves, remaining, &mut seen, 0)?;
         // Wrap the prefix as a chain of single-child nodes above `grown`.
         let mut tree = grown;
         for (i, s) in def.prefix.iter().enumerate().rev() {
@@ -643,12 +699,13 @@ fn run() -> Result<(), String> {
         };
         self_check(&lesson)?;
         println!(
-            "{}: {} nút, {} lá, {} phân tích (+{} lá), lệch lớn nhất {} cp ({} hướng bỏ vì lệch >{} cp), {:.1}s",
+            "{}: {} nút, {} lá, {} phân tích (+{} lá), {} sub-spine đối thủ, lệch lớn nhất {} cp ({} hướng bỏ vì lệch >{} cp), {:.1}s",
             lesson.id,
             nodes,
             leaves,
             gen.analyses,
             gen.leaf_analyses,
+            gen.sub_spines,
             gen.worst_gap,
             gen.dropped_far,
             args.max_gap,

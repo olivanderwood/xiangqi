@@ -364,26 +364,46 @@ fn draw_arrow(painter: &Painter, geom: &BoardGeometry, rect_min: Pos2, arrow: &H
         arrow.color,
         Stroke::NONE,
     ));
-    // Number badge at the bend (horse) or the middle of the arrow:
-    // a dark disc with the rank number (1-based), so the three hints
-    // are told apart by number, not by colour.
-    let badge_at = if arrow.horse {
-        horse_leg(arrow.from, arrow.to)
-            .map(at)
-            .unwrap_or_else(|| a.lerp(b, 0.5))
-    } else {
-        a.lerp(b, 0.5)
-    };
+    // Number badge (1-based rank): spread along the arrow by rank and
+    // fanned slightly across it, so the 1-4 badges never sit on top of
+    // each other — they used to collide on shared horse legs and on the
+    // midpoints of parallel arrows. The badge stays on its arrow line,
+    // so the number still reads as "this arrow is hint N".
+    let frac = [0.30, 0.45, 0.60, 0.75][arrow.rank.min(3)];
+    let total: f32 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+    let mut target = frac * total;
+    let mut badge_at = *points.last().unwrap_or(&b);
+    let mut seg_dir = (b - before).normalized();
+    for w in points.windows(2) {
+        let (p, q) = (w[0], w[1]);
+        let len = (q - p).length();
+        if target <= len {
+            seg_dir = (q - p).normalized();
+            badge_at = p + seg_dir * target;
+            break;
+        }
+        target -= len;
+    }
+    let perp = Vec2::new(-seg_dir.y, seg_dir.x);
+    badge_at += perp * (arrow.rank as f32 - 1.5_f32) * 0.28 * cell;
     painter.circle_filled(
         badge_at,
-        0.22 * cell,
+        0.19 * cell,
         Color32::from_rgba_unmultiplied(0x1A, 0x1A, 0x1A, 220),
+    );
+    painter.circle_stroke(
+        badge_at,
+        0.19 * cell,
+        Stroke::new(
+            1.5_f32,
+            Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 220),
+        ),
     );
     painter.text(
         badge_at,
         Align2::CENTER_CENTER,
         (arrow.rank + 1).to_string(),
-        cjk_bold(0.34 * cell),
+        cjk_bold(0.30 * cell),
         Color32::WHITE,
     );
 }

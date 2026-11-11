@@ -70,6 +70,11 @@ pub struct LearnState {
     /// synchronous grading/hint fallbacks and for the `Tutor`.
     pub engine: SharedEngine,
     pub rng_state: u64,
+    /// Fresh starts of a lesson (picker or "Học lại"): each one rotates
+    /// the Tutor's seed, so the opponent faces the learner with a
+    /// different one of its prepared variations (§7). The book itself —
+    /// hints, scores, grading — is identical on every attempt.
+    pub attempt: u64,
 }
 
 impl LearnState {
@@ -106,6 +111,7 @@ impl LearnState {
             last_board: None,
             engine,
             rng_state: 0x9E3779B97F4A7C15,
+            attempt: 0,
         }
     }
 
@@ -163,15 +169,20 @@ impl LearnState {
     /// SAFETY: a `Box`'s pointee never moves; `tutor` is declared before
     /// `lesson_box` (dropped first) and is always cleared before
     /// `lesson_box` is replaced.
-    fn make_tutor(&self, lesson: &Lesson) -> Tutor<'static> {
+    fn make_tutor(&self, lesson: &Lesson, seed: u64) -> Tutor<'static> {
         let lesson: &'static Lesson = unsafe { &*(lesson as *const Lesson) };
-        Tutor::new(lesson, 0x1234_5678)
+        Tutor::new(lesson, seed)
     }
 
     pub fn start_lesson(&mut self, lesson: Lesson, now: f64) {
         self.tutor = None;
         self.lesson_box = Some(Box::new(lesson.clone()));
-        self.tutor = Some(self.make_tutor(self.lesson_box.as_ref().unwrap()));
+        // First start keeps the old seed (same first experience); each
+        // later start rotates it, so the opponent varies its prepared
+        // reply between attempts (§7).
+        let seed = 0x1234_5678u64.wrapping_add(self.attempt);
+        self.attempt += 1;
+        self.tutor = Some(self.make_tutor(self.lesson_box.as_ref().unwrap(), seed));
         let start = lesson
             .start_fen
             .as_deref()

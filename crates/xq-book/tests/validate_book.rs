@@ -22,7 +22,7 @@ const EXPECTED_IDS: [&str; 25] = [
     "r-xunhepao",
     "r-shijiaopao",
     "r-jingoupao",
-    "r-paodau-xcgma",
+    "r-paodau-phituong-maquy",
     "b-pingfeng",
     "b-yuanyang",
     "b-chuangong",
@@ -304,6 +304,45 @@ fn twenty_five_lessons() {
     assert_eq!(blacks, 12, "phải có đúng 12 bài black, gặp {blacks}");
     for id in EXPECTED_IDS {
         assert!(book.by_id(id).is_some(), "thiếu bài {id}");
+    }
+}
+
+/// §7: the opponent's prepared variations are deep. Along the main spine
+/// (first 16 plies, the opening phase), an opponent node must have at
+/// least one side direction whose subtree is a branching sub-spine, not
+/// a single PV chain: a chain holds at most 8 nodes, a sub-spine ~100.
+#[test]
+fn opponent_variations_are_deep() {
+    let book = load();
+    fn count(nodes: &[BookNode]) -> usize {
+        nodes.iter().map(|n| 1 + count(&n.next)).sum()
+    }
+    for lesson in &book.lessons {
+        let learner = lesson.learner.color();
+        let mut pos = start_pos(lesson);
+        let mut level: &[BookNode] = &lesson.tree;
+        let mut best = 0;
+        for _ply in 0..16 {
+            if pos.side() != learner {
+                for child in level.iter().filter(|n| !n.main) {
+                    best = best.max(count(&child.next));
+                }
+            }
+            let Some(next) = level.iter().find(|n| n.main).or_else(|| level.first()) else {
+                break;
+            };
+            let mv = parse_move(&pos, &next.mv).unwrap_or_else(|e| panic!("{}: {e}", lesson.id));
+            pos.make_move(mv);
+            level = &next.next;
+            if level.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            best >= 20,
+            "{}: biến đối thủ sâu nhất chỉ có {best} nút (chuỗi PV tối đa 8, sub-spine ~100)",
+            lesson.id
+        );
     }
 }
 

@@ -210,7 +210,10 @@ lần thử — có 1 bộ dữ liệu nhất quán từ trước cho từng th�
   Test cũ dùng MockEngine (`tutor_with_mock_engine_grades`) đã xóa.
 
 ### Bài mới: Pháo đầu đối Xuyên cung mã
-- Hieu yêu cầu thêm 1 thế pháo đầu đối xuyên cung mã. Bài mới
+- **ĐÃ THAY BẰNG §7 (2026-11-11):** bài này bị thay bằng Pháo đầu phá
+  Phi tượng, Mã quỷ (`r-paodau-phituong-maquy`) theo lệnh Hieu — xem
+  §7. Nội dung dưới đây giữ lại để biết lịch sử: Hieu yêu cầu thêm
+  1 thế pháo đầu đối xuyên cung mã. Bài mới
   `r-paodau-xcgma` (Đỏ, cấp 2): "Pháo đầu đối Xuyên cung mã"
   (炮头对穿宫马), prefix 6 nửa nước:
   `炮二平五, 马2进3, 马二进三, 马3退5, 车一平二, 马5进4`.
@@ -236,6 +239,131 @@ lần thử — có 1 bộ dữ liệu nhất quán từ trước cho từng th�
 - Lưu ý về tính cân bằng: Xuyên cung mã là hệ Đen hơi mạo hiểm (Mã
   chui cung làm chậm triển khai) — nhưng báo cáo trên cho thấy thế
   sau prefix cân bằng, không cần chỉnh prefix thêm.
+
+## §7. Pháo đầu phá Phi tượng, Mã quỷ + biến đối thủ soạn sâu + sửa số mũi tên chồng nhau (Hieu, 2026-11-11)
+
+### 7.1. Thay bài Xuyên cung mã bằng Pháo đầu phá Phi tượng, Mã quỷ
+
+Hieu: "đổi pháo đầu đối xuyên cung mã thành pháo đầu phá phi tượng
+mã quỳ, nghiên cứu và soạn lại tài liệu dựa trên pikafish cho thế
+trận này, nghiên cứu thật kỹ".
+
+**Nghiên cứu.** Ba nguồn chính:
+- Định nghĩa 穿宫马 (Wikipedia, thuật ngữ cờ tướng Trung Quốc):
+  "马从九宫的一边跳到九宫的另一边；开局泛指飞象后马由底线穿过
+  九宫中路到士角位，又称拐角马" — tức là: **sau khi phi Tượng**,
+  Mã từ hàng cuối xuyên qua giữa cung tới vị trí góc Sĩ; còn gọi là
+  拐角马 (Mã góc). Vậy hệ chuẩn là Tượng phi TRƯỚC, Mã xuyên cung
+  SAU — bài cũ (§6) lên Mã trước, chưa phi Tượng, chưa đúng hệ này.
+- Tên gọi tiếng Việt: các bài giảng trên Facebook dùng cụm
+  "PHI TƯỢNG MÃ QUỶ XUYÊN CUNG MÃ" (Pháo đầu tam binh phá trận Phi
+  Tượng Mã Quỷ) — "Mã Quỷ" là con Mã lén qua cung như bóng ma.
+- Cách phá (Ziga, "Pháo đầu phá phi tượng cục"): Đỏ dùng Pháo đầu +
+  Xe hoành (横车) ép trung lộ; Đen thủ bằng Sĩ Tượng cục, một Mã giữ
+  Tốt đầu, một Mã ở biên. Đỏ phá bằng cách lên Xe, thí quân gài thế.
+
+**Giả định về "mã quỳ" — cần Hieu xác nhận.** Hieu viết "mã quỳ",
+nhưng tra cứu không thấy thuật ngữ 跪马 (Mã quỳ) trong khai cuộc;
+thuật ngữ có thật trong các bài giảng tiếng Việt là **"Mã Quỷ"**
+(鬼, bóng ma) đi cùng Xuyên Cung Mã — "quỳ" và "quỷ" cùng vần,
+khác dấu, rất dễ nhầm khi gõ/nghe. Em dùng **"Mã quỷ"** cho bài
+mới; nếu anh thật sự muốn "quỳ" theo nghĩa khác thì bảo em sửa lại.
+
+**Bài mới.** `r-paodau-phituong-maquy` (Đỏ, cấp 2), thay đúng chỗ
+của `r-paodau-xcgma` (sau `r-jingoupao`), tên Hán
+"炮头破飞象穿宫马" (tên Hán dùng thuật ngữ chuẩn 穿宫马, tên Việt
+giữ cách gọi của Hieu: Mã quỷ). Prefix 6 nửa nước (đã kiểm bằng
+probe tạm dùng đúng parser của `xq-core`, probe đã xóa):
+`炮二平五, 象3进5, 马二进三, 马2进3, 车一平二, 马3退5`
+— Tượng phi giữ trung lộ ngay nước 1, Mã lên rồi lùi vào giữa cung
+(马3退5 tới (4,8), FEN sau nước này có `4n4` ở hàng 8), rồi spine
+của Pikafish sẽ cho Mã lao ra trung lộ (马5进4/进6). Khác bài cũ ở
+thứ tự: bài cũ Mã lên trước (马2进3 ở nước 1), bài mới Tượng phi
+trước (象3进5 ở nước 1).
+- Kết quả sinh lại (2026-11-11, cùng đợt sinh toàn bộ sách §7.2):
+  bài mới **1.849 nút, 348 lá, 13 sub-spine đối thủ**, lệch lớn nhất
+  299 cp, 18 hướng bị bỏ vì lệch > 300 cp — thế sau prefix cân
+  bằng, spine mọc đủ. Tổng sách vẫn **25 bài** (13 Đỏ / 12 Đen);
+  `validate_book.rs` cập nhật (`EXPECTED_IDS` + test
+  `twenty_five_lessons`). Font subset: chữ Hán mới duy nhất là
+  破 (U+7834, trong tên Hán 炮头破飞象穿宫马) — 飞 đã có từ bài
+  r-feixiang, còn 鬼 không cần vì "Mã quỷ" viết bằng chữ Việt;
+  test `fonts_cover_book` xác nhận font phủ đủ 60 chữ Hán trong sách.
+
+### 7.2. Biến của đối thủ soạn sẵn 3-4 biến, sâu hơn
+
+Hieu: "ở mode học khai cuộc, đối với đối thủ cũng phải soạn sẵn từ
+3-4 biến mạnh nhất, từ đó mở rộng độ sâu của thế cờ".
+
+**Vấn đề.** Trước đây mọi hướng phụ (kể cả của đối thủ) chỉ là một
+chuỗi PV đơn (tối đa 8 nửa nước, mỗi nút 1 con): người học đi lệch
+khỏi main là hết biến, đối thủ cũng chỉ có một đường duy nhất.
+
+**Thiết kế mới (`tools/gen-book`).** Trong 16 nửa nước đầu của bài
+(giai đoạn khai cuộc, nơi bài học sống), hướng phụ của ĐỐI THỦ mọc
+thành **sub-spine có nhánh**: gọi đệ quy `children_at` với ngân
+sách 8 nửa nước, mỗi nút trong sub-spine lại giữ 3-4 hướng (hướng
+phụ bên trong sub-spine quay về chuỗi PV) — chỉ một tầng đệ quy để
+khống chế kích thước. Hướng phụ của NGƯỜI HỌC vẫn là chuỗi PV như
+cũ (Hieu chỉ yêu cầu cho đối thủ).
+- Tham số mới: `--side-spine-plies` (mặc định 8), `--branch-plies`
+  (mặc định 16). Báo cáo mỗi bài nay in thêm số sub-spine đối thủ.
+- Kiểm chứng: test mới `opponent_variations_are_deep`
+  (`validate_book.rs`) — trong 16 nửa nước đầu, ít nhất một biến
+  phụ của đối thủ phải có cây con ≥ 20 nút (chuỗi PV tối đa 8 nút,
+  sub-spine ~100 nút). Test xanh trên sách mới.
+- Kết quả sinh lại toàn bộ (2026-11-11, depth 12, 40 nửa nước,
+  MultiPV=4): **25 bài, 49.407 nút, 9.146 lá, 12.810 lần phân tích,
+  1.321,6 s (~22 phút)**; mỗi bài có **10–15 sub-spine đối thủ**.
+  `openings.json` minified 7,2 MB (trước đây 2,6 MB — cây to hơn
+  ~2,7 lần vì biến đối thủ nay có nhánh thật).
+  Lưu ý vận hành: lần chạy đầu (một mạch 25 bài) bị runtime kill
+  (SIGTERM) giữa chừng sau 2 bài — sinh lại thành 3 chunk
+  (8 + 9 + 8 bài, ~7 phút/chunk) rồi gộp bằng script tạm
+  `merge-book-chunks.py` (kiểm tra đúng thứ tự/id theo
+  `lessons-src.json`); script và file chunk đã xóa sau khi gộp.
+  Số nút mỗi bài hơi khác giữa các lần chạy (Pikafish đa luồng
+  không tất định hoàn toàn) — dataset trong file là cố định nên
+  runtime vẫn nhất quán như §6.
+
+**Để người học thật sự gặp các biến đó.** `Tutor` chọn nước đối thủ
+theo weight với seed cố định, nên một lần học chỉ gặp một biến.
+Màn Học chơi nay xoay seed theo lần bắt đầu mới (`LearnState.attempt`,
+`seed = 0x1234_5678 + attempt`; lần đầu giữ nguyên seed cũ): mỗi
+lần vào bài (chọn bài hoặc bấm "Học lại") đối thủ đổi một biến đã
+soạn sẵn. Sách (gợi ý, điểm, chấm) giống hệt mọi lần; chỉ nước đối
+thủ trong số các biến đã soạn là đổi. Nút "Thử lại" trong bài vẫn
+giữ nguyên vị trí nên lần học hiện tại không bị xáo.
+
+### 7.3. Số thứ tự trên mũi tên chồng chéo nhau
+
+Hieu: "các đánh số đang bị chồng chéo nhau, xem xét update lại UI
+để trực quan hơn".
+
+**Nguyên nhân.** Huy hiệu số trước đây đặt ở chân Mã (mũi tên Mã)
+hoặc giữa mũi tên (mũi tên thường) — hai mũi tên chung chân Mã hay
+chung điểm giữa (mũi tên song song/ngược chiều) thì hai số đè lên
+nhau. Đĩa số bán kính 0.22 ô cũng to.
+
+**Sửa (`board_view.rs`, `draw_arrow`).** Huy hiệu nay rải dọc theo
+mũi tên theo hạng — hạng 1 ở 30% chiều dài, hạng 2 ở 45%, hạng 3 ở
+60%, hạng 4 ở 75% — và quạt ngang khỏi đường mũi tên
+`(hạng − 1.5) × 0.28 ô`, hai phía đối xứng. Đĩa nhỏ lại (0.19 ô),
+thêm viền trắng để hai đĩa kề nhau vẫn đọc được. Huy hiệu vẫn nằm
+trên đường mũi tên của nó nên số vẫn gắn với đúng mũi tên đó.
+Chưa kiểm bằng mắt (VM không chạy được app).
+
+### Cổng sau §7
+
+- `cargo fmt` OK, `cargo clippy --workspace --all-targets -D warnings`
+  sạch, `cargo test --workspace` **154 pass / 0 fail / 26 ignored**
+  (tăng 1 test so với 153: `opponent_variations_are_deep` mới;
+  `respects_time` ở `xq-core` có rớt 1 lần khi chạy song song trên
+  VM 1,5 CPU — chạy riêng lại xanh, là chập chờn đã biết từ trước,
+  không liên quan đợt này).
+- Chưa kiểm bằng mắt: VM thiếu `libxkbcommon-x11.so` nên app không chạy
+  được dưới Xvfb — cần Hieu kiểm trên máy thật (đặc biệt huy hiệu số
+  trên mũi tên và biến đối thủ khi học lại).
 
 ## Cổng sau §1–§5
 
