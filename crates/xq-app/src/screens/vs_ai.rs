@@ -503,10 +503,16 @@ impl XiangqiApp {
         }
 
         // 3. Layout: board (+eval bar) left, panel right; panel below when narrow.
+        // NOTE: the board size MUST be computed from the CentralPanel's
+        // available size captured here. Inside `ui.horizontal` egui only
+        // offers the current row height (~one line) as available height,
+        // so reading `ui.available_size()` inside the row shrinks the
+        // board to ~20 px (it was invisible after pressing Start).
+        let avail = ui.available_size();
         let narrow = is_narrow(ctx);
         if narrow {
             ui.vertical(|ui| {
-                self.vs_ai_board(ctx, ui);
+                self.vs_ai_board(ctx, ui, avail);
                 ui.add_space(8.0);
                 self.vs_ai_panel(ctx, ui);
             });
@@ -515,8 +521,11 @@ impl XiangqiApp {
                 let pos = self.vs_ai_display_pos();
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
-                eval_bar_ui(ui, score_red);
-                self.vs_ai_board(ctx, ui);
+                eval_bar_ui(ui, score_red, avail.y);
+                // Board budget: full height, width left after eval bar (16),
+                // gap (12), panel (340) and row spacing.
+                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 340.0 - 24.0, avail.y);
+                self.vs_ai_board(ctx, ui, budget);
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.set_width(340.0);
@@ -546,9 +555,9 @@ impl XiangqiApp {
         self.vs_ai.review = Some(next);
     }
 
-    fn vs_ai_board(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn vs_ai_board(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, avail: egui::Vec2) {
         let now = ctx.input(|i| i.time);
-        let total = ui.available_size();
+        let total = avail;
         let cell = (total.x / 10.0).min(total.y / 11.0);
         let size = egui::Vec2::new(10.0 * cell, 11.0 * cell);
         let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());

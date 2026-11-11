@@ -292,11 +292,11 @@ pub fn move_list_ui(ui: &mut egui::Ui, moves: &[String], review: &mut Option<usi
 
 /// Vertical eval bar (§6.4): red share from below, black from above.
 /// `score_red` is the engine score from Red's perspective.
-pub fn eval_bar_ui(ui: &mut egui::Ui, score_red: i32) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::Vec2::new(16.0, ui.available_height()),
-        egui::Sense::hover(),
-    );
+/// `height` is passed in explicitly: inside `ui.horizontal` egui only
+/// offers the current row height as available height (~one line), so
+/// reading it there shrinks the bar to ~16 px.
+pub fn eval_bar_ui(ui: &mut egui::Ui, score_red: i32, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(16.0, height), egui::Sense::hover());
     let frac = eval_bar_fraction(score_red);
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::BLACK);

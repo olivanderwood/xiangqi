@@ -70,6 +70,20 @@ fn menu_to_vs_ai_plays_cannon_opening() {
 
     assert!(harness.state().vs_ai.started);
     assert!(harness.state().vs_ai.last_board.is_some());
+    // Regression guard: the board used to shrink to ~20 px on a wide
+    // window because it read `ui.available_size()` inside `ui.horizontal`
+    // (row height only). On a 1280x800 window it must fill the board area.
+    let (board_rect, _) = harness.state().vs_ai.last_board.unwrap();
+    assert!(
+        board_rect.width() > 400.0,
+        "board too narrow: width {}",
+        board_rect.width()
+    );
+    assert!(
+        board_rect.height() > 400.0,
+        "board too short: height {}",
+        board_rect.height()
+    );
 
     // h2 = sq 25, e2 = sq 22 (rank index 2 in ICCS).
     click_square(&mut harness, 25);
@@ -126,6 +140,22 @@ fn menu_to_learn_plays_book_move() {
     harness.run_ok();
 
     assert!(harness.state().learn.started);
+    // Same regression guard as the Vs-AI board (see above).
+    let (learn_rect, _) = harness
+        .state()
+        .learn
+        .last_board
+        .expect("learn board was drawn");
+    assert!(
+        learn_rect.width() > 400.0,
+        "learn board too narrow: width {}",
+        learn_rect.width()
+    );
+    assert!(
+        learn_rect.height() > 400.0,
+        "learn board too short: height {}",
+        learn_rect.height()
+    );
     assert!(
         !harness.state().learn.hints.is_empty(),
         "learner's first turn should show book hints"

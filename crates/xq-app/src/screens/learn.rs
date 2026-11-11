@@ -568,10 +568,14 @@ impl XiangqiApp {
             }
             return;
         }
+        // NOTE: capture the CentralPanel's available size before the
+        // horizontal row (see vs_ai.rs: inside `ui.horizontal` egui only
+        // offers the current row height, which shrinks the board to ~20 px).
+        let avail = ui.available_size();
         let narrow = is_narrow(ctx);
         if narrow {
             ui.vertical(|ui| {
-                self.learn_board(ctx, ui);
+                self.learn_board(ctx, ui, avail);
                 ui.add_space(8.0);
                 self.learn_panel(ctx, ui);
             });
@@ -580,8 +584,9 @@ impl XiangqiApp {
                 let pos = self.learn.game.pos.clone();
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
-                eval_bar_ui(ui, score_red);
-                self.learn_board(ctx, ui);
+                eval_bar_ui(ui, score_red, avail.y);
+                let budget = egui::Vec2::new(avail.x - 16.0 - 12.0 - 340.0 - 24.0, avail.y);
+                self.learn_board(ctx, ui, budget);
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.set_width(340.0);
@@ -593,9 +598,9 @@ impl XiangqiApp {
         self.learn_complete_dialog(ctx);
     }
 
-    fn learn_board(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn learn_board(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, avail: egui::Vec2) {
         let now = ctx.input(|i| i.time);
-        let total = ui.available_size();
+        let total = avail;
         let cell = (total.x / 10.0).min(total.y / 11.0);
         let size = egui::Vec2::new(10.0 * cell, 11.0 * cell);
         let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
