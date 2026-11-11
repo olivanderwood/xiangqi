@@ -1,0 +1,14 @@
+[package]
+name = "book-check"
+version = "0.1.0"
+edition = "2021"
+description = "CLI: print the opening-book tree and engine-check every move"
+license = "MIT"
+
+[[bin]]
+name = "book-check"
+path = "src/main.rs"
+
+[dependencies]
+xq-core = { path = "../../crates/xq-core" }
+xq-book = { path = "../../crates/xq-book" }

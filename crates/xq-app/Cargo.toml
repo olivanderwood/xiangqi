@@ -1,0 +1,27 @@
+[package]
+name = "xq-app"
+version = "0.1.0"
+edition = "2021"
+description = "Xiangqi AI game — desktop GUI (eframe/egui)"
+license = "MIT"
+
+[[bin]]
+name = "xiangqi"
+path = "src/main.rs"
+
+[dependencies]
+xq-core = { path = "../xq-core" }
+xq-book = { path = "../xq-book" }
+eframe = { version = "0.31", features = ["persistence"] }
+egui = "0.31"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+egui_kittest = { version = "0.31", features = ["eframe"] }
+ttf-parser = "0.25"
+
+# Windows-only: embed icon + version info into xiangqi.exe (spec 9.2).
+# The build script no-ops on other platforms.
+[build-dependencies]
+winresource = "0.1"

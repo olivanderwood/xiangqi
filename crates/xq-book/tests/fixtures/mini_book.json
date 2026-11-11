@@ -1,0 +1,91 @@
+{
+  "lessons": [
+    {
+      "id": "r-mini",
+      "learner": "red",
+      "level": 1,
+      "max_plies": 6,
+      "name_vi": "Bài mẫu nhỏ (fixture kiểm thử)",
+      "name_zh": "小例子",
+      "sources": [
+        {
+          "title": "Fixture kiểm thử nội bộ (không phải nguồn thật)",
+          "url": "https://example.com/mini-book-fixture"
+        }
+      ],
+      "start_fen": null,
+      "summary_vi": "Bài mẫu nhỏ dùng cho kiểm thử Tutor: hai nhánh, sáu nửa nước.",
+      "tree": [
+        {
+          "mv": "炮二平五",
+          "next": [
+            {
+              "mv": "马8进7",
+              "next": [
+                {
+                  "main": true,
+                  "mv": "马二进三",
+                  "next": [
+                    {
+                      "mv": "马2进3",
+                      "next": [
+                        {
+                          "mv": "车一平二",
+                          "next": [
+                            {
+                              "end": {
+                                "note_vi": "Hai bên triển khai xong, thế cân bằng.",
+                                "verdict": "equal"
+                              },
+                              "mv": "车9平8",
+                              "note_vi": "Đen ra Xe, giữ Pháo biên."
+                            }
+                          ],
+                          "note_vi": "Đỏ ra Xe thẳng, dồn áp lực lên cánh phải của Đen."
+                        }
+                      ],
+                      "note_vi": "Đen lên Mã thứ hai, hoàn thành bố trận."
+                    }
+                  ],
+                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa và mở đường cho Xe."
+                }
+              ],
+              "note_vi": "Đen lên Mã, giữ Tốt giữa.",
+              "weight": 1.0
+            },
+            {
+              "mv": "马2进3",
+              "next": [
+                {
+                  "mv": "马八进七",
+                  "next": [
+                    {
+                      "mv": "车1平2",
+                      "next": [
+                        {
+                          "mv": "马二进三",
+                          "note_vi": "Đỏ lên Mã, giữ Tốt giữa và mở đường cho Xe.",
+                          "next": [],
+                          "end": {
+                            "note_vi": "Hai bên triển khai xong, thế cân bằng.",
+                            "verdict": "equal"
+                          }
+                        }
+                      ],
+                      "note_vi": "Đen bình Xe sang, giữ Mã vừa lên."
+                    }
+                  ],
+                  "note_vi": "Đỏ lên Mã, giữ Tốt giữa bị Pháo Đen nhắm."
+                }
+              ],
+              "note_vi": "Đen lên Mã biên trước, giữ Tốt giữa.",
+              "weight": 3.0
+            }
+          ],
+          "note_vi": "Đỏ vào Pháo đầu, nhắm thẳng Tốt giữa của Đen."
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}

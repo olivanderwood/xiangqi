@@ -1,0 +1,12 @@
+[package]
+name = "xq-core"
+version = "0.1.0"
+edition = "2021"
+description = "Xiangqi rules and AI engine (no UI dependencies)"
+license = "MIT"
+
+[dependencies]
+rand = "0.8"
+
+[dev-dependencies]
+proptest = "1"
