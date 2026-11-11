@@ -314,6 +314,29 @@ impl<'a> Tutor<'a> {
         }
     }
 
+    /// Play the opponent's move the LEARNER chose (§8): `children[idx]`
+    /// at the current node. Same effect as `next_opponent_move`, but the
+    /// choice is the user's, not a weighted pick — the learner studies
+    /// whichever prepared variation they want. Returns `None` when it is
+    /// not the opponent's turn, the lesson is out of book, or `idx` is
+    /// out of range (the screen falls back to the automatic pick then).
+    pub fn play_opponent_move(&mut self, idx: usize) -> Option<TutorEvent> {
+        if self.out_of_book || self.game.result().is_over() {
+            return None;
+        }
+        if self.game.pos.side() == self.lesson.learner.color() {
+            return None;
+        }
+        let children = self.current_children();
+        let node = children.get(idx)?;
+        let mv_str = node.mv.clone();
+        let note_vi = node.note_vi.clone();
+        let mv = self.parse_book_mv(&mv_str)?;
+        self.game.play(mv).expect("nước của AI trong sách hợp lệ");
+        self.node_path.push(idx);
+        Some(TutorEvent::OpponentMoves { mv, note_vi })
+    }
+
     pub fn next_opponent_move(&mut self) -> Option<TutorEvent> {
         if self.out_of_book || self.game.result().is_over() {
             return None;

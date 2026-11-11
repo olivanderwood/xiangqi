@@ -11,8 +11,14 @@
 //! `DIRECTION_EQUAL_CP` of the 3rd, the same rule the Tutor shows) become
 //! the node's children, the best move continues the spine to `--plies`
 //! plies, and every side direction carries its principal variation as a
-//! short chain (`--side-plies` plies). Every leaf gets an `end` verdict
-//! from a final analysis, and every learner-turn node gets a `note_vi`.
+//! short chain (`--side-plies` plies). Every leaf is then extended to
+//! the full lesson depth (`--plies` plies = 20 moves, §8) by following
+//! Pikafish's best line in chunks, so EVERY path the learner can take
+//! — not just the main spine — lasts the whole lesson; the extension is
+//! single-track (full branching to 40 plies is exponential), the choices
+//! live at the branch points, and the extension is the best line to
+//! study. Every leaf gets an `end` verdict from a final analysis, and
+//! every learner-turn node gets a `note_vi`.
 //! Every node — prefix, spine, side chain — carries its Pikafish score
 //! (`BookNode::score_cp`): the dataset IS the book, so the Tutor never
 //! re-scores a move with a live engine and every attempt is identical.
@@ -192,11 +198,16 @@ struct Gen<'a> {
     engine: &'a mut PikafishEngine,
     start_fen: String,
     depth: u8,
+    /// Full lesson depth (plies): the spine AND every leaf extension
+    /// reach this many plies (§8).
+    plies: usize,
     leaf_depth: u8,
     side_plies: usize,
     learner: Color,
     analyses: usize,
     leaf_analyses: usize,
+    /// Nodes added by the leaf extension (§8), for the report.
+    extended_nodes: usize,
     max_gap: i32,
     side_spine_plies: usize,
     branch_plies: usize,
@@ -423,6 +434,132 @@ impl<'a> Gen<'a> {
         Ok(next)
     }
 
+    /// Extend every leaf to the full lesson depth (`self.plies`, 40
+    /// plies = 20 moves, §8) by following Pikafish's best line in chunks.
+    /// A leaf at depth d < 40 gets a single-track extension of (40 - d)
+    /// plies; decisive (|score| > 600) and terminal positions are left
+    /// alone — the line is already decided. The extension is single-track
+    /// (no new branches): full branching to 40 plies is exponential (a
+    /// 3-way tree of depth 40 has ~3^20 leaves), so the choices live at
+    /// the branch points and the extension is the best line to study (the
+    /// learner must recall it — the Tutor grades each move against the
+    /// single book move). Runs before `finish_leaves`, so the new leaves
+    /// get their `end` verdicts there. `seen` holds the path FENs.
+    fn extend_leaves(
+        &mut self,
+        nodes: &mut [BookNode],
+        pos: &Position,
+        moves: &[Move],
+        seen: &mut HashSet<String>,
+    ) -> Result<(), String> {
+        for node in nodes {
+            let mv = parse_cn(pos, &node.mv)
+                .map_err(|e| format!("nước trong cây không parse được {:?}: {e:?}", node.mv))?;
+            let mut next_pos = pos.clone();
+            next_pos.make_move(mv);
+            let mut next_moves = moves.to_vec();
+            next_moves.push(mv);
+            if node.next.is_empty() {
+                // Leaf: extend to the lesson end, unless the line is
+                // already decided (its stored score is the score of the
+                // move that reached this position, from that mover's view;
+                // the position is worth the same magnitude to the side
+                // to move, negated).
+                let decisive = node.score_cp.is_some_and(|s| s.abs() > 600);
+                if next_moves.len() < self.plies && !decisive {
+                    let mut ext_seen = seen.clone();
+                    ext_seen.insert(next_pos.to_fen());
+                    node.next = self.extend_from(&next_pos, &next_moves, &mut ext_seen)?;
+                }
+            } else {
+                seen.insert(next_pos.to_fen());
+                self.extend_leaves(&mut node.next, &next_pos, &next_moves, seen)?;
+                seen.remove(&next_pos.to_fen());
+            }
+        }
+        Ok(())
+    }
+
+    /// Single-track best-line extension from `pos` (at `moves.len()`
+    /// plies) to `self.plies` plies. Each chunk is one MultiPV=1 analysis
+    /// (depth `self.depth`); the PV is appended (up to the remaining
+    /// plies), then re-analysed if still short. Scores propagate with
+    /// alternating sign within each chunk (`+S, -S, +S, ...` from the
+    /// chunk's line score — the same convention as `side_chain`, but the
+    /// alternation restarts at each chunk because the chunk's score is
+    /// from its own side to move). Learner moves get the "Hướng theo
+    /// Pikafish" note; opponent moves get none (same as `side_chain`).
+    fn extend_from(
+        &mut self,
+        pos: &Position,
+        moves: &[Move],
+        seen: &mut HashSet<String>,
+    ) -> Result<Vec<BookNode>, String> {
+        let mut steps: Vec<(Position, Move, i32)> = Vec::new();
+        let mut cur = pos.clone();
+        let mut cur_moves = moves.to_vec();
+        while cur_moves.len() < self.plies {
+            let lines = self.analyze(&cur_moves, 1)?;
+            let Some((_, line_score, pv)) = lines.into_iter().next() else {
+                break; // terminal position (mate/stalemate): nothing to extend.
+            };
+            if line_score.abs() > 600 {
+                break; // decisive: the line is already decided.
+            }
+            if pv.is_empty() {
+                break;
+            }
+            let cap = self.plies - cur_moves.len();
+            let mut added = 0usize;
+            for (k, &mv) in pv.iter().take(cap).enumerate() {
+                if !cur.legal_moves().contains(&mv) {
+                    break;
+                }
+                let mut after = cur.clone();
+                after.make_move(mv);
+                if seen.contains(&after.to_fen()) {
+                    break;
+                }
+                seen.insert(after.to_fen());
+                // k-th move of this chunk: score (-1)^k * line_score.
+                let score = if k.is_multiple_of(2) {
+                    line_score
+                } else {
+                    -line_score
+                };
+                steps.push((cur.clone(), mv, score));
+                cur = after;
+                cur_moves.push(mv);
+                added += 1;
+            }
+            if added == 0 {
+                break;
+            }
+        }
+        self.extended_nodes += steps.len();
+        // Build the chain inside-out: the last node has no children.
+        let mut next: Vec<BookNode> = Vec::new();
+        for (p, mv, score) in steps.into_iter().rev() {
+            let note = if p.side() == self.learner {
+                Some("Hướng theo Pikafish".to_string())
+            } else {
+                None
+            };
+            next = vec![BookNode {
+                mv: render_cn(&p, mv),
+                note_vi: note,
+                next,
+                weight: 1.0,
+                main: true,
+                trap: false,
+                source_ref: None,
+                end: None,
+                score_cp: Some(score),
+            }];
+        }
+        Ok(next)
+    }
+
     /// Every leaf gets an `end` verdict from a final analysis of its
     /// position (mate/stalemate handled without the engine).
     fn finish_leaves(
@@ -614,11 +751,13 @@ fn run() -> Result<(), String> {
             engine: &mut engine,
             start_fen: start_fen.clone(),
             depth: args.depth,
+            plies: args.plies,
             leaf_depth: args.leaf_depth,
             side_plies: args.side_plies,
             learner,
             analyses: 0,
             leaf_analyses: 0,
+            extended_nodes: 0,
             max_gap: args.max_gap,
             side_spine_plies: args.side_spine_plies,
             branch_plies: args.branch_plies,
@@ -682,6 +821,11 @@ fn run() -> Result<(), String> {
                 score_cp: Some(prefix_scores[i]),
             }];
         }
+        // §8: extend every leaf to the full lesson depth (40 plies) so
+        // every path the learner can take lasts 20 moves, then give the
+        // (new) leaves their `end` verdicts.
+        let mut ext_seen: HashSet<String> = positions.iter().map(|p| p.to_fen()).collect();
+        gen.extend_leaves(&mut tree, &Position::startpos(), &[], &mut ext_seen)?;
         gen.finish_leaves(&mut tree, &Position::startpos(), &[])?;
         let mut leaves = 0;
         let nodes = count_nodes(&tree, &mut leaves);
@@ -699,9 +843,10 @@ fn run() -> Result<(), String> {
         };
         self_check(&lesson)?;
         println!(
-            "{}: {} nút, {} lá, {} phân tích (+{} lá), {} sub-spine đối thủ, lệch lớn nhất {} cp ({} hướng bỏ vì lệch >{} cp), {:.1}s",
+            "{}: {} nút ({} nối thêm tới 40 plies), {} lá, {} phân tích (+{} lá), {} sub-spine đối thủ, lệch lớn nhất {} cp ({} hướng bỏ vì lệch >{} cp), {:.1}s",
             lesson.id,
             nodes,
+            gen.extended_nodes,
             leaves,
             gen.analyses,
             gen.leaf_analyses,

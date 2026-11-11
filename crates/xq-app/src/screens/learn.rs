@@ -50,6 +50,9 @@ pub struct LearnState {
     pub hint_hover: Option<usize>,
     pub hide_hints: bool,
     pub hint_ply: Option<usize>,
+    /// The opponent's variations are on screen for the learner to pick
+    /// (§8): set when the opponent's turn comes and it has 2+ children.
+    pub show_opponent_choice: bool,
     pub opponent_ai_req: Option<u64>,
     pub last_grade: Option<(Grade, String, Option<Move>)>,
     /// Position before the graded move (renders its best move correctly).
@@ -70,11 +73,6 @@ pub struct LearnState {
     /// synchronous grading/hint fallbacks and for the `Tutor`.
     pub engine: SharedEngine,
     pub rng_state: u64,
-    /// Fresh starts of a lesson (picker or "Học lại"): each one rotates
-    /// the Tutor's seed, so the opponent faces the learner with a
-    /// different one of its prepared variations (§7). The book itself —
-    /// hints, scores, grading — is identical on every attempt.
-    pub attempt: u64,
 }
 
 impl LearnState {
@@ -94,6 +92,7 @@ impl LearnState {
             hint_hover: None,
             hide_hints: false,
             hint_ply: None,
+            show_opponent_choice: false,
             opponent_ai_req: None,
             last_grade: None,
             grade_pos: None,
@@ -111,7 +110,6 @@ impl LearnState {
             last_board: None,
             engine,
             rng_state: 0x9E3779B97F4A7C15,
-            attempt: 0,
         }
     }
 
@@ -149,6 +147,30 @@ impl LearnState {
         }
     }
 
+    /// The opponent's prepared variations at the current node, best for
+    /// the opponent first (§8): (index into the node's children, the
+    /// parsed move, its stored score from the opponent's view, the CN
+    /// notation, the note). Unparseable children are skipped. The board
+    /// arrows and the choice panel share this order, so the numbers
+    /// on the arrows match the numbers in the panel.
+    fn opponent_choices(&self) -> Vec<(usize, Move, i32, String, String)> {
+        let pos = self.game.pos.clone();
+        let mut out: Vec<(usize, Move, i32, String, String)> = Vec::new();
+        for (i, node) in self.children().iter().enumerate() {
+            if let Ok(mv) = notation::parse_cn(&pos, &node.mv) {
+                out.push((
+                    i,
+                    mv,
+                    node.score_cp.unwrap_or(0),
+                    node.mv.clone(),
+                    node.note_vi.clone().unwrap_or_default(),
+                ));
+            }
+        }
+        out.sort_by_key(|c| std::cmp::Reverse(c.2));
+        out
+    }
+
     fn current_node(&self) -> Option<&BookNode> {
         let lesson = self.lesson.as_ref()?;
         node_at(&lesson.tree, &self.node_path)
@@ -169,20 +191,15 @@ impl LearnState {
     /// SAFETY: a `Box`'s pointee never moves; `tutor` is declared before
     /// `lesson_box` (dropped first) and is always cleared before
     /// `lesson_box` is replaced.
-    fn make_tutor(&self, lesson: &Lesson, seed: u64) -> Tutor<'static> {
+    fn make_tutor(&self, lesson: &Lesson) -> Tutor<'static> {
         let lesson: &'static Lesson = unsafe { &*(lesson as *const Lesson) };
-        Tutor::new(lesson, seed)
+        Tutor::new(lesson, 0x1234_5678)
     }
 
     pub fn start_lesson(&mut self, lesson: Lesson, now: f64) {
         self.tutor = None;
         self.lesson_box = Some(Box::new(lesson.clone()));
-        // First start keeps the old seed (same first experience); each
-        // later start rotates it, so the opponent varies its prepared
-        // reply between attempts (§7).
-        let seed = 0x1234_5678u64.wrapping_add(self.attempt);
-        self.attempt += 1;
-        self.tutor = Some(self.make_tutor(self.lesson_box.as_ref().unwrap(), seed));
+        self.tutor = Some(self.make_tutor(self.lesson_box.as_ref().unwrap()));
         let start = lesson
             .start_fen
             .as_deref()
@@ -200,6 +217,7 @@ impl LearnState {
         self.hint_hover = None;
         self.hide_hints = false;
         self.hint_ply = None;
+        self.show_opponent_choice = false;
         self.opponent_ai_req = None;
         self.last_grade = None;
         self.off_book_pending = false;
@@ -395,6 +413,7 @@ impl LearnState {
         self.last_grade = None;
         self.grade_pos = None;
         self.off_book_pending = false;
+        self.show_opponent_choice = false;
         self.tutor_message = i18n::t(Key::YourTurnLearn).to_string();
         self.hint_ply = None;
     }
@@ -406,8 +425,11 @@ impl LearnState {
         self.opponent_due = Some(now + 0.6);
     }
 
-    /// Play the opponent's book move (weighted random child), or fall back
-    /// to the engine when out of book / no children.
+    /// Play the opponent's book move, or fall back to the engine when
+    /// out of book / no children (§8): when the book node has 2+ children
+    /// the learner picks the variation instead — the choice panel is
+    /// shown and this returns without playing. With exactly 1 child the
+    /// move plays automatically after the delay, as before.
     /// Play the opponent's move. The Tutor picks a weighted book child
     /// and plays it in its own game; the screen mirrors it and syncs.
     /// `None` from the Tutor means out of book (or game over): the engine
@@ -417,6 +439,18 @@ impl LearnState {
         if self.game.result().is_over() {
             self.maybe_complete();
             return;
+        }
+        if !self.out_of_book {
+            let n = if let Some(tutor) = &self.tutor {
+                tutor.current_children().len()
+            } else {
+                self.children().len()
+            };
+            if n >= 2 {
+                self.show_opponent_choice = true;
+                self.tutor_message = i18n::t(Key::OpponentChooseMsg).to_string();
+                return;
+            }
         }
         if let Some(tutor) = &mut self.tutor {
             if let Some(TutorEvent::OpponentMoves { mv, note_vi }) = tutor.next_opponent_move() {
@@ -464,6 +498,47 @@ impl LearnState {
             req: EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits),
             req_id,
         });
+    }
+
+    /// Play the opponent variation the learner picked in the choice
+    /// panel (§8). `idx` is the index into the current node's children
+    /// (kept in tree order, so it matches the Tutor's `node_path`).
+    /// A stale or out-of-range pick falls back to the automatic play.
+    fn play_opponent_choice(
+        &mut self,
+        worker: &mut crate::ai_worker::AiWorker,
+        idx: usize,
+        now: f64,
+        animate: bool,
+    ) {
+        self.show_opponent_choice = false;
+        if self.game.result().is_over() {
+            self.maybe_complete();
+            return;
+        }
+        if let Some(tutor) = &mut self.tutor {
+            if let Some(TutorEvent::OpponentMoves { mv, note_vi }) = tutor.play_opponent_move(idx) {
+                self.tutor_message = note_vi.unwrap_or_default();
+                self.play_move_common(mv, now, animate);
+                self.sync_from_tutor();
+                self.after_opponent_move();
+                return;
+            }
+        }
+        // No Tutor attached: play the chosen book child directly.
+        if self.tutor.is_none() && !self.out_of_book {
+            let children = self.children().to_vec();
+            if let Some(node) = children.get(idx) {
+                if let Ok(mv) = notation::parse_cn(&self.game.pos, &node.mv) {
+                    self.node_path.push(idx);
+                    self.tutor_message = node.note_vi.clone().unwrap_or_default();
+                    self.play_move_common(mv, now, animate);
+                    self.after_opponent_move();
+                    return;
+                }
+            }
+        }
+        self.play_opponent(worker, now, animate);
     }
 
     fn after_opponent_move(&mut self) {
@@ -662,7 +737,18 @@ impl XiangqiApp {
             .map(|sq| (sq, self.learn.board.drag_pos));
         // Hint arrows: up to 4, hovered one brighter (§6.4.2, §7.3).
         let mut arrows: Vec<HintArrow> = Vec::new();
-        if !self.learn.hide_hints && enabled {
+        if self.learn.show_opponent_choice {
+            // Opponent variations (§8): numbered arrows for the choices,
+            // 1 = the opponent's best variation, same order as the panel.
+            for (rank, (_, mv, _, _, _)) in self.learn.opponent_choices().iter().take(4).enumerate()
+            {
+                let horse = pos
+                    .piece_at(mv.from)
+                    .map(|p| p.kind == PieceKind::Horse)
+                    .unwrap_or(false);
+                arrows.push(HintArrow::for_rank(mv.from, mv.to, rank, horse));
+            }
+        } else if !self.learn.hide_hints && enabled {
             for (i, hint) in self.learn.hints.iter().take(4).enumerate() {
                 let horse = pos
                     .piece_at(hint.mv.from)
@@ -735,10 +821,62 @@ impl XiangqiApp {
             }
         }
         ui.separator();
-        // Hints (§6.4.2): the top 3 directions (or 4 when equally good),
-        // numbered 1–4 (1 = best), each with a big advantage chip on the
-        // right — the score number is bold 28 px so it reads at a glance.
-        if self.learn.hide_hints {
+        if self.learn.show_opponent_choice {
+            // Opponent variations (§8): the learner picks which prepared
+            // variation the opponent plays. Rows mirror the hint rows;
+            // the chip shows the advantage from the LEARNER's side, so
+            // the opponent's stored score is negated (a good move for
+            // the opponent reads as bad for the learner).
+            section_title(ui, i18n::t(Key::OpponentChooseTitle));
+            let choices = self.learn.opponent_choices();
+            let mut clicked_choice: Option<usize> = None;
+            for (rank, (idx, _, score, mv_cn, note)) in choices.iter().take(4).enumerate() {
+                let row = egui::Frame::default()
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{}.", rank + 1))
+                                        .strong()
+                                        .size(24.0),
+                                );
+                                ui.label(egui::RichText::new(mv_cn).strong().size(22.0));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        advantage_chip_ui(ui, -score);
+                                    },
+                                );
+                            });
+                            if !note.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(34.0);
+                                    ui.label(
+                                        egui::RichText::new(note)
+                                            .small()
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                });
+                            }
+                        });
+                    });
+                let click = ui.interact(
+                    row.response.rect,
+                    ui.id().with(("opp-choice-row", rank)),
+                    egui::Sense::click(),
+                );
+                if click.clicked() {
+                    clicked_choice = Some(*idx);
+                }
+            }
+            if let Some(idx) = clicked_choice {
+                let now = ui.input(|i| i.time);
+                self.learn
+                    .play_opponent_choice(&mut self.worker, idx, now, self.settings.animate);
+            }
+        } else if self.learn.hide_hints {
             if big_button(ui, i18n::t(Key::ShowHints)).clicked() {
                 self.learn.hide_hints = false;
             }

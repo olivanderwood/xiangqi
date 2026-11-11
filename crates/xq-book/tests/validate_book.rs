@@ -3,7 +3,9 @@
 //! Every failure message names the lesson id and the path from the root,
 //! so the content author can find the bad move at once.
 
-use xq_book::schema::{BookNode, Lesson, Verdict};
+use std::collections::HashSet;
+
+use xq_book::schema::{BookNode, End, Lesson, Verdict};
 use xq_book::Book;
 use xq_core::board::Position;
 use xq_core::notation::{parse_cn, parse_wxf};
@@ -378,6 +380,96 @@ fn every_node_has_score() {
         "nút thiếu score_cp:\n{}",
         errors.join("\n")
     );
+}
+
+/// Is the leaf's position already decided, from its `end` note (a
+/// fresh depth-8 analysis by `finish_leaves`)? Mate ("chiếu hết") or an
+/// advantage of 4+ pawns. The threshold is 4.0, not 6.0: the extension
+/// stops when its depth-12 analysis is beyond ±600 cp, and the depth-8
+/// note can read lower (one leaf read 4.3 here while depth 12 read
+/// 5.8) — and a shuffling best line can also stop the extension on a
+/// clearly winning position. A leaf the extension stopped on for a real
+/// reason still reads as a large advantage here, while a leaf it should
+/// have extended reads small (near 0).
+fn end_is_decisive(end: &End) -> bool {
+    let note = &end.note_vi;
+    if note.contains("chiếu hết") {
+        return true;
+    }
+    if let Some(rest) = note.split("hơn ").nth(1) {
+        if let Some(num) = rest.split(" tốt").next() {
+            if let Ok(x) = num.trim().parse::<f32>() {
+                return x >= 4.0;
+            }
+        }
+    }
+    false
+}
+
+/// Every path lasts the whole lesson (§8, Hieu 2026-11-11: "chỉ có 8
+/// nước, yêu cầu 20 nước"): a leaf must sit at `max_plies` (40 plies =
+/// 20 moves), or be a position the extension is allowed to stop at —
+/// terminal (mate/stalemate, no legal moves), already decided, or a
+/// repetition of a position already on the path. "Decided" is read from
+/// the leaf's `end` note — a fresh depth-8 analysis of the leaf
+/// position — NOT from the node's stored score, which is a propagated
+/// approximation from an older analysis and can be far off (a leaf
+/// stored at +45 cp was really +730 cp, mate in 2, etc.).
+#[test]
+fn every_path_reaches_twenty_moves() {
+    let book = load();
+    let mut errors: Vec<String> = Vec::new();
+    for lesson in &book.lessons {
+        let start = start_pos(lesson);
+        let mut path = Vec::new();
+        walk(
+            lesson,
+            &lesson.tree,
+            &start,
+            &mut path,
+            &mut |les, p, node, pos| {
+                if !node.next.is_empty() {
+                    return;
+                }
+                let depth = p.len();
+                if depth >= les.max_plies {
+                    return;
+                }
+                let mv = parse_move(pos, &node.mv)
+                    .unwrap_or_else(|e| panic!("{}: đường {}: {e}", les.id, p.join(" > ")));
+                let mut leaf_pos = pos.clone();
+                leaf_pos.make_move(mv);
+                let terminal = leaf_pos.legal_moves().is_empty();
+                let decisive = node.end.as_ref().is_some_and(end_is_decisive);
+                // Repetition: the leaf position already occurred earlier
+                // on this path (replay the path FENs, excluding the leaf).
+                let mut replay = start_pos(les);
+                let mut earlier: HashSet<String> = HashSet::new();
+                earlier.insert(replay.to_fen());
+                for s in &p[..p.len().saturating_sub(1)] {
+                    let m = parse_move(&replay, s)
+                        .unwrap_or_else(|e| panic!("{}: đường {}: {e}", les.id, p.join(" > ")));
+                    replay.make_move(m);
+                    earlier.insert(replay.to_fen());
+                }
+                let repeated = earlier.contains(&leaf_pos.to_fen());
+                if !terminal && !decisive && !repeated {
+                    errors.push(format!(
+                        "{}: đường {}: lá kết thúc ở {} nửa nước (cần {}), không phải chiếu hết/hòa, không quyết định (end: {}) và không lặp lại thế cờ",
+                        les.id,
+                        p.join(" > "),
+                        depth,
+                        les.max_plies,
+                        node.end
+                            .as_ref()
+                            .map(|e| e.note_vi.as_str())
+                            .unwrap_or("không có end")
+                    ));
+                }
+            },
+        );
+    }
+    assert!(errors.is_empty(), "lá kết thúc sớm:\n{}", errors.join("\n"));
 }
 
 #[test]

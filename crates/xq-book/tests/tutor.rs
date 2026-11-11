@@ -125,6 +125,42 @@ fn opponent_follows_weights() {
 }
 
 #[test]
+fn learner_chooses_opponent_variation() {
+    // §8: the learner picks the opponent's variation instead of the
+    // weighted pick. After 1. 炮二平五 the opponent has two children
+    // (马8进7 idx 0, 马2进3 idx 1): choosing idx 1 must play 马2进3
+    // (branch B) no matter the seed, and an out-of-range idx is None.
+    let book = load_mini();
+    let lesson = book.by_id("r-mini").unwrap();
+    let mut t = Tutor::new(lesson, 1);
+    let e = play_learner(&mut t, "炮二平五");
+    graded_book(e, "炮二平五");
+    let pos_before = t.game.pos.clone();
+    let chosen = match t.play_opponent_move(1) {
+        Some(TutorEvent::OpponentMoves { mv, .. }) => mv,
+        other => panic!("mong đợi OpponentMoves, gặp {}", event_name(&other)),
+    };
+    assert_eq!(render_cn(&pos_before, chosen), "马2进3");
+    assert_eq!(t.node_path, vec![0, 1]);
+    assert!(
+        t.play_opponent_move(2).is_none(),
+        "idx vượt phạm vi phải None"
+    );
+}
+
+/// The learner's turn: choosing an opponent move is not allowed.
+#[test]
+fn play_opponent_move_rejects_learner_turn() {
+    let book = load_mini();
+    let lesson = book.by_id("r-mini").unwrap();
+    let mut t = Tutor::new(lesson, 1);
+    assert!(
+        t.play_opponent_move(0).is_none(),
+        "đến lượt người học thì không được chọn nước đối thủ"
+    );
+}
+
+#[test]
 fn off_book_retry() {
     let book = load_mini();
     let lesson = book.by_id("r-mini").unwrap();

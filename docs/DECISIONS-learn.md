@@ -374,6 +374,123 @@ Chưa kiểm bằng mắt (VM không chạy được app).
   được dưới Xvfb — cần Hieu kiểm trên máy thật (đặc biệt huy hiệu số
   trên mũi tên và biến đối thủ khi học lại).
 
+## §8. Đối thủ: người học tự chọn biến + bài học đủ 20 nước (Hieu, 2026-11-11)
+
+Hieu: "trong mode học khai cuộc thì đến lượt đối thủ đánh sẽ hiện ra
+các biến đi để người dùng tự chọn. hiện tại các bài khai cuộc chỉ có 8
+nước trong khi tôi yêu cầu lên đến 20 nước, hãy cập nhật thêm".
+
+### 8.1. Vì sao bài học chỉ "có 8 nước" dù main line đã đủ 20
+
+Đo trên sách §7 (`openings.json` 49.407 nút): main line của cả 25 bài
+đều đủ 40 nửa nước (20 nước), nhưng có 9.146 lá với độ sâu trung bình
+chỉ 21,9 nửa nước, nông nhất 10 nửa nước (5 nước). Nguyên nhân: bất
+cứ khi nào người học (hoặc đối thủ) rời main line, nhánh phụ chỉ dài
+tối đa 8 nửa nước (chain) hoặc 8 nửa nước có nhánh (sub-spine) rồi
+hết — bài học kết thúc. Đối thủ lại tự chọn biến theo weight (main
+1.0, phụ 0.2×3 → lệch khỏi main ~37% mỗi lượt), nên thực tế gần như
+mọi bài học đều kết thúc sau ~8 nước. Hai yêu cầu của Hieu thực ra
+là một vấn đề: bài học kết thúc sớm vì nhánh phụ nông.
+
+### 8.2. Đối thủ: người học tự chọn biến
+
+- `Tutor::play_opponent_move(idx)` mới (`xq-book/src/tutor.rs`):
+  đi đúng con `children[idx]` của nút hiện tại, trả về
+  `TutorEvent::OpponentMoves` như `next_opponent_move`; `None` khi
+  không phải lượt đối thủ, ngoài sách, hoặc idx vượt phạm vi.
+  `next_opponent_move` (chọn theo weight) giữ lại cho trường hợp chỉ
+  có 1 con (tự đi sau 600 ms như cũ).
+- Màn Học chơi (`screens/learn.rs`): khi `opponent_due` tới, nếu nút
+  hiện tại có ≥ 2 con thì hiện panel "Đối thủ đi biến nào?" thay cho
+  phần gợi ý — các biến xếp theo điểm (1 = tốt nhất cho đối thủ),
+  mỗi hàng có tên nước + ô điểm lợi thế **theo phía người học** (điểm
+  của đối thủ lấy dấu ngược lại, vì `score_cp` lưu theo góc nhìn bên
+  đi) + ghi chú; bấm một hàng thì đối thủ đi biến đó
+  (`play_opponent_choice`). Các biến cũng hiện thành mũi tên đánh số
+  trên bàn cờ (cùng thứ tự với panel, dùng `HintArrow::for_rank`).
+  Chỉ có 1 con thì tự đi; 0 con thì engine chơi như cũ (§5.3.4).
+  Key i18n mới: `OpponentChooseTitle`, `OpponentChooseMsg`.
+- **Seed xoay theo lần học lại (§7) đã bỏ**: người học tự chọn biến
+  nên không còn cần RNG chọn biến cho đối thủ nữa — `LearnState`
+  bỏ field `attempt`, `make_tutor` quay về seed cố định
+  `0x1234_5678`. API `Tutor::new(lesson, seed)` giữ nguyên (test
+  `opponent_follows_weights` vẫn dùng).
+- Test mới (`xq-book/tests/tutor.rs`): `learner_chooses_opponent_variation`
+  (chọn idx 1 → đúng nước nhánh B bất kể seed; idx vượt phạm vi →
+  `None`) và `play_opponent_move_rejects_learner_turn`.
+
+### 8.3. Kéo dài mọi nhánh phụ tới hết 40 nửa nước
+
+- gen-book: sau khi mọc cây, `extend_leaves` đi khắp cây; mỗi lá ở
+  độ sâu < 40 nửa nước được nối thêm bằng `extend_from` — theo nước
+  tốt nhất của Pikafish (MultiPV=1, depth 12) từng đoạn, mỗi đoạn tối
+  đa 12 nửa nước (dài PV), phân tích lại khi hết đoạn, tới khi đủ 40
+  nửa nước. Điểm lan truyền đổi dấu luân phiên trong mỗi đoạn (cùng
+  quy ước `side_chain`, nhưng đổi dấu tính lại từ đầu mỗi đoạn vì
+  điểm của đoạn mới tính từ bên đi tại đó); nước của người học ghi
+  chú "Hướng theo Pikafish", nước đối thủ không ghi chú.
+- Phần nối thêm là **đơn tuyến** (không rẽ nhánh mới): rẽ nhánh đầy
+  đủ tới 40 nửa nước là hàm mũ (cây 3 hướng sâu 40 có ~3^20 lá) nên
+  không thể; các lựa chọn vẫn nằm ở điểm rẽ nhánh, phần nối thêm là
+  nước tốt nhất để học thuộc (Tutor chấm từng nước theo đúng nước
+  sách duy nhất đó). Dừng sớm khi: thế cờ đã quyết định (điểm phân
+  tích tiếp theo |cp| > 600), hết nước đi, hoặc nước tốt nhất lặp lại
+  thế cờ đã có trên đường đi.
+- Vì sao không nối tất cả lá lên 40 một cách "rẻ": đo trước khi làm —
+  nối toàn bộ lá lên 40 tốn +165.126 nút (tổng 214.533, file ~31 MB),
+  trong đó 9.146 lá. Đây là cái giá của "mọi đường đi đều 20 nước"
+  và Hieu đã yêu cầu rõ, nên làm trọn (không cắt ở 14/16 nước).
+- **Đẩy lên repo được không?** File 30,3 MB làm helper push cũ (mỗi
+  lần upload lại TOÀN BỘ file, timeout 300 s/request) không đẩy nổi
+  (7,2 MB đã mất ~200 s). Đã sửa 2 chỗ trong helper push:
+  `github_push_xiangqi.py`: timeout `api()` 300 → 1800 s; và
+  `github_push_xiangqi_update.py`: lấy cây remote (`?recursive=1`),
+  tính `git hash-object` cho file local, file nào trùng SHA với cây
+  remote thì tái dùng blob cũ (không upload lại) — SHA của blob chỉ
+  phụ thuộc nội dung nên tái dùng là an toàn; kiểm tra cây
+  (tree == local tree) vẫn bắt lỗi nếu có sai sót. Nhờ đó các lần
+  push sau (chỉ đổi code) không phải upload lại file sách 30 MB.
+- Sinh lại toàn bộ sách (3 chunk như §7; chunk 3 bị runtime restart
+  kill lúc đang làm bài 6/8 — gen-book chỉ ghi file cuối cùng nên 5
+  bài đã xong bị mất, phải chạy lại cả chunk từ đầu):
+  chunk 1: 8 bài, 70.094 nút, 9.789 phân tích, 821,8 s;
+  chunk 2: 9 bài, 79.188 nút, 11.084 phân tích, 1.011,1 s;
+  chunk 3: 8 bài, 69.828 nút, 10.040 phân tích, 802,8 s.
+  **Tổng: 25 bài, 219.110 nút, 9.328 lá, 30.913 lần phân tích,
+  ~2.635,7 s (~44 phút); `openings.json` minified 30.253.769 byte
+  (~30,3 MB, trước 7,2 MB).** Mỗi bài 12–15 sub-spine đối thủ.
+- Test mới `every_path_reaches_twenty_moves`
+  (`validate_book.rs`): mọi lá phải ở `max_plies` (40), hoặc là thế
+  cờ được phép dừng sớm — hết nước đi, đã quyết định, hoặc lặp lại
+  thế cờ trên đường đi. **"Đã quyết định" đọc từ ghi chú `end`** (phân
+  tích mới depth 8 của `finish_leaves`), KHÔNG đọc từ `score_cp` của
+  nút: điểm lưu trong nút là xấp xỉ lan truyền từ phân tích cũ, có
+  thể lệch rất xa giá trị thật (một lá lưu +45 cp nhưng thực tế +730
+  cp, chiếu hết trong 2 nước). Ngưỡng 4,0 tốt trên ghi chú `end`
+  (phân tích depth 12 của extension dừng ở >6,0 tốt; ghi chú depth 8
+  đọc thấp hơn một chút, và nước tốt nhất dạng xáo quân cũng dừng
+  extension trên thế cờ thắng rõ — đã kiểm bằng tay một lá ở
+  r-paodau-phituong-maquy, 35 nửa nước: depth 12 cho −583 cp phía
+  Đen, PV xáo quân lặp lại thế cờ). Probe tạm đã xóa sau khi dùng.
+- Font subset chạy lại: sách chỉ dùng 25 chữ Hán phân biệt (tên quân
+  + số + hướng đi, tập cha `cjk_chars.txt` có 70 chữ) nên không thêm
+  chữ mới; `fonts_cover_book` xanh.
+
+### Cổng sau §8
+
+- `cargo fmt` OK, `cargo clippy --workspace --all-targets -D warnings`
+  sạch, `cargo test --workspace` **157 pass / 0 fail / 26 ignored**
+  (tăng 3 test so với 154: 2 test `play_opponent_move` +
+  `every_path_reaches_twenty_moves`; test này từng FAIL trên sách cũ
+  — đúng thiết kế, vì nó bắt được lá kết thúc sớm).
+- Chưa kiểm bằng mắt: VM thiếu `libxkbcommon-x11.so` nên app không
+  chạy được dưới Xvfb — cần Hieu kiểm trên máy thật (panel chọn biến
+  đối thủ + mũi tên đánh số của biến đối thủ + bài học dài 20 nước
+  khi đi lệch main line).
+- Chưa push: chờ lệnh Hieu. Lưu ý lần push này sẽ upload file sách
+  30,3 MB (lần đầu sau khi sửa helper, timeout 1800 s) nên sẽ mất
+  ~10–15 phút chạy nền.
+
 ## Cổng sau §1–§5
 
 - `cargo fmt` OK, `cargo clippy --workspace --all-targets -D warnings`
