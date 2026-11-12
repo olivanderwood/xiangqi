@@ -296,7 +296,14 @@ impl XiangqiApp {
     /// and a position change costs one HTTP call (cached per FEN in
     /// the worker). Stale responses (overtaken by the next move) are
     /// dropped by `req_id`.
+    ///
+    /// DIAG (crash 0xc0000409 vẫn còn sau khi bỏ ureq, 2026-11-12):
+    /// ChessDB đang tắt hẳn để khoanh vùng — hàm này không làm gì.
+    /// Bỏ `#[allow]` + `return` để bật lại.
+    #[allow(unreachable_code)]
     pub fn poll_chessdb(&mut self, fen: &str, ctx: &egui::Context) {
+        let _ = (fen, ctx);
+        return;
         while let Ok(resp) = self.chessdb.rx.try_recv() {
             let ChessDbResponse::Evaluated { req_id, result } = resp;
             if !crate::chessdb_worker::response_is_current(req_id, self.chessdb_req_id) {
@@ -331,7 +338,14 @@ impl XiangqiApp {
     /// chip, not a replacement for it. Shown in both the Play-vs-AI
     /// and Learn panels. `pos` is the position the section is about
     /// (used to render the best move in the user's notation).
+    ///
+    /// DIAG (crash 0xc0000409 vẫn còn sau khi bỏ ureq, 2026-11-12):
+    /// section đang tắt hẳn để khoanh vùng. Bỏ `#[allow]` + `return`
+    /// để bật lại.
+    #[allow(unreachable_code)]
     pub fn chessdb_section_ui(&self, ui: &mut egui::Ui, pos: &Position) {
+        let _ = (ui, pos);
+        return;
         section_title(ui, i18n::t(Key::ChessDbTitle));
         match &self.chessdb_view {
             ChessDbView::Idle | ChessDbView::Loading => {
