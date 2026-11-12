@@ -4,6 +4,9 @@
 //! Buttons (all 20 px bold labels, 10 px corner radius, consistent
 //! hover/pressed feedback):
 //! - [`hero_button`] — the menu's big call-to-action (340 x 64, filled).
+//! - [`hero_half_button`] — half a hero button (164 x 56, filled):
+//!   two of them side by side span exactly one hero button, so the
+//!   Settings + About row lines up evenly with the mode buttons.
 //! - [`primary_button`] — the main action in a dialog/panel (160 x 52, filled).
 //! - [`secondary_button`] — a normal action (120 x 46, outlined).
 //! - [`big_button`] — the standard action button (120 x 46), upgraded
@@ -22,6 +25,7 @@
 //! - [`side_panel`] — a fixed-width, vertically scrolling side panel,
 //!   so long content scrolls instead of flexing the board/panel.
 
+use crate::theme;
 use egui::{Color32, CornerRadius, RichText, Stroke, Vec2};
 
 /// Minimum size of a standard action button (§7.5).
@@ -30,6 +34,10 @@ pub const BTN_MIN: Vec2 = Vec2::new(120.0, 46.0);
 pub const BTN_PRIMARY_MIN: Vec2 = Vec2::new(160.0, 52.0);
 /// Minimum size of a menu hero button.
 pub const BTN_HERO_MIN: Vec2 = Vec2::new(340.0, 64.0);
+/// Minimum size of a half-hero button: two of them side by side,
+/// with a 12 px gap, span exactly one hero button (340 px), so a row
+/// of two lines up evenly with the mode buttons above it.
+pub const BTN_HERO_HALF_MIN: Vec2 = Vec2::new(164.0, 56.0);
 /// Size of a square icon button.
 pub const BTN_ICON: Vec2 = Vec2::new(46.0, 46.0);
 /// Corner radius of every button.
@@ -39,10 +47,12 @@ pub const BTN_RADIUS: u8 = 10;
 /// disagree and flex the layout.
 pub const SIDE_PANEL_WIDTH: f32 = 380.0;
 
-/// Accent fill of primary/hero buttons (dark blue).
-const ACCENT: Color32 = Color32::from_rgb(0x1E, 0x5A, 0xC8);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(0x2B, 0x6E, 0xE0);
-const ACCENT_ACTIVE: Color32 = Color32::from_rgb(0x14, 0x46, 0x9E);
+/// Accent fill of primary/hero buttons (Chinese red, `theme::RED`).
+const ACCENT: Color32 = theme::RED;
+const ACCENT_HOVER: Color32 = theme::RED_HOVER;
+const ACCENT_ACTIVE: Color32 = theme::RED_ACTIVE;
+/// Gold outline of a filled button (the colour of a seal).
+const ACCENT_STROKE: Color32 = theme::GOLD;
 /// Colours of a button in its three states (inactive / hovered /
 /// pressed). `text: None` keeps the theme's default text colour.
 struct BtnPalette {
@@ -53,28 +63,29 @@ struct BtnPalette {
     text: Option<Color32>,
 }
 
-/// Outline of a secondary button.
-const OUTLINE: Color32 = Color32::from_rgb(0x8A, 0x8A, 0x8A);
+/// Outline of a secondary button (dark wood brown).
+const OUTLINE: Color32 = theme::WOOD_DARK;
 
-/// The filled accent palette (primary / hero buttons).
+/// The filled accent palette (primary / hero buttons): Chinese red
+/// fill, gold outline, white label.
 fn accent_palette() -> BtnPalette {
     BtnPalette {
         fill: ACCENT,
         hover: ACCENT_HOVER,
         active: ACCENT_ACTIVE,
-        stroke: ACCENT_ACTIVE,
+        stroke: ACCENT_STROKE,
         text: Some(Color32::WHITE),
     }
 }
 
 /// The outlined palette (secondary / icon buttons). The hover/active
-/// tints use `from_rgba_unmultiplied`, which is not `const`, so this
-/// is a function, not a constant.
+/// tints are pale gold, so an outlined button warms up on hover
+/// instead of turning grey.
 fn outline_palette() -> BtnPalette {
     BtnPalette {
         fill: Color32::TRANSPARENT,
-        hover: Color32::from_rgba_unmultiplied(128, 128, 128, 24),
-        active: Color32::from_rgba_unmultiplied(128, 128, 128, 48),
+        hover: theme::gold_tint(),
+        active: theme::gold_tint_active(),
         stroke: OUTLINE,
         text: None,
     }
@@ -121,6 +132,15 @@ fn as_str(text: impl Into<egui::WidgetText>) -> String {
 pub fn hero_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
     let text = as_str(text);
     styled_button(ui, &text, BTN_HERO_MIN, 24.0, accent_palette())
+}
+
+/// Half a hero button: filled accent, white 20 px label. Two of them
+/// side by side (with a 12 px gap) span exactly one hero button, so
+/// the Settings + About row lines up evenly with the mode buttons.
+#[must_use]
+pub fn hero_half_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text = as_str(text);
+    styled_button(ui, &text, BTN_HERO_HALF_MIN, 20.0, accent_palette())
 }
 
 /// The main action in a dialog/panel: filled accent, white 20 px label.

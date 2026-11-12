@@ -27,6 +27,10 @@ sysinfo = "0.33"
 # Sound effects (Hieu, 2026-11-12): tones are synthesized in code
 # (`sound.rs`), no audio files. Linux needs ALSA dev (present on VM).
 rodio = "0.21"
+# Native file dialog for the practice screen's board-photo upload
+# (Hieu, 2026-11-12): pick the photo from the device instead of
+# typing a path.
+rfd = "0.15"
 
 [dev-dependencies]
 egui_kittest = { version = "0.31", features = ["eframe"] }

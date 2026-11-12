@@ -149,6 +149,20 @@ pub enum PracticeSource {
     Image,
 }
 
+/// Try to read a Xiangqi position from a board photo (`bytes` are the
+/// image file contents). Returns the position on success, or an error
+/// when the photo cannot be recognised.
+///
+/// There is NO vision model in the app yet, so this always fails for
+/// now and the caller reports "image could not be recognised" and
+/// falls back to the manual board editor. When a recognition model is
+/// added (a CV model or an on-device ML model), implement it here:
+/// decode the image, find the board grid, classify the piece on each
+/// square, and build the `Position` from the resulting board.
+fn recognize_board_image(_bytes: &[u8]) -> Result<Position, &'static str> {
+    Err("no board-recognition model available")
+}
+
 /// Where the current suggestions came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SuggestSource {
@@ -530,29 +544,59 @@ impl PracticeScreen {
         }
     }
 
-    /// Setup (image source): load a photo path, show it as a reference,
-    /// and set the position up by hand in the board editor.
+    /// Fill the manual board editor from a recognised position (used
+    /// when `recognize_board_image` succeeds, so the user can check
+    /// and fix the pieces before playing).
+    fn editor_from_position(&mut self, pos: &Position) {
+        for sq in 0..90u8 {
+            self.editor_board[sq as usize] = pos.piece_at(sq);
+        }
+        self.editor_side = pos.side();
+        self.editor_error = None;
+    }
+
+    /// Setup (image source): pick a photo from the device, show it as
+    /// a reference, and set the position up by hand in the board
+    /// editor. The app tries to recognise the board from the photo;
+    /// when it cannot (there is no vision model yet — see the limits
+    /// note at the top of this file) it says so plainly instead of
+    /// guessing a wrong position.
     fn setup_image(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.label(i18n::t(Key::PracticeImagePath));
-        ui.add(egui::TextEdit::singleline(&mut self.image_path).desired_width(f32::INFINITY));
-        ui.add_space(8.0);
-        if big_button(ui, i18n::t(Key::PracticeLoadImage)).clicked() {
-            let path = self.image_path.trim().to_string();
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    // Register the bytes so `egui::Image::from_bytes`
-                    // can show them once an image decoder is installed
-                    // (see the limits note at the top of this file).
-                    self.image_version += 1;
-                    let uri = format!("bytes://practice-image-{}", self.image_version);
-                    let shared: Arc<[u8]> = Arc::from(bytes);
-                    ctx.include_bytes(uri, Arc::clone(&shared));
-                    self.image_bytes = Some(shared);
-                    self.image_error = None;
-                }
-                Err(_) => {
-                    self.image_bytes = None;
-                    self.image_error = Some(i18n::t(Key::PracticeImageNotFound).to_string());
+        if big_button(ui, i18n::t(Key::PracticePickImage)).clicked() {
+            // Native file dialog (rfd): pick an image from the device.
+            // `pick_file` is synchronous on desktop; it returns None
+            // when the user cancels.
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Image", &["png", "jpg", "jpeg", "bmp", "webp"])
+                .pick_file()
+            {
+                self.image_path = path.display().to_string();
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        self.image_version += 1;
+                        let uri = format!("bytes://practice-image-{}", self.image_version);
+                        let shared: Arc<[u8]> = Arc::from(bytes);
+                        ctx.include_bytes(uri, Arc::clone(&shared));
+                        self.image_bytes = Some(Arc::clone(&shared));
+                        // Try to read a position from the photo. There
+                        // is no vision model yet, so this reports that
+                        // the photo could not be recognised; the user
+                        // sets the position up by hand below.
+                        match recognize_board_image(&shared) {
+                            Ok(pos) => {
+                                self.image_error = None;
+                                self.editor_from_position(&pos);
+                            }
+                            Err(_) => {
+                                self.image_error =
+                                    Some(i18n::t(Key::PracticeImageNotRecognized).to_string());
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        self.image_bytes = None;
+                        self.image_error = Some(i18n::t(Key::PracticeImageNotFound).to_string());
+                    }
                 }
             }
         }

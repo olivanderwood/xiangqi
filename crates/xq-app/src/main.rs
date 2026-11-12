@@ -10,6 +10,7 @@ mod i18n;
 mod screens;
 mod settings;
 mod sound;
+mod theme;
 
 #[cfg(test)]
 mod smoke_tests;

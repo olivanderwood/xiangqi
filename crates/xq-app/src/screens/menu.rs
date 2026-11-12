@@ -1,6 +1,6 @@
 //! Menu screen (§6.1): two big buttons + Settings + About.
 
-use crate::app::widgets::{hero_button, secondary_button};
+use crate::app::widgets::{hero_button, hero_half_button};
 use crate::app::{Screen, XiangqiApp};
 use crate::i18n::{self, Key};
 
@@ -26,15 +26,19 @@ impl XiangqiApp {
                 self.goto(Screen::Practice);
             }
             ui.add_space(24.0);
-            // Settings + About, truly centred (Hieu, 2026-11-12): a
-            // plain `ui.horizontal` inside `vertical_centered` lays
-            // its buttons out from the row's left edge, so the row
-            // sat off-centre; `horizontal_centered` centres the pair.
+            // Settings + About, centred and lined up evenly with the
+            // mode buttons (Hieu, 2026-11-12): two half-hero buttons
+            // side by side span exactly one hero button (340 px), so
+            // the row has the same width and centre as the modes
+            // above it. A plain `ui.horizontal` inside
+            // `vertical_centered` lays its buttons out from the row's
+            // left edge, so `horizontal_centered` centres the pair.
             ui.horizontal_centered(|ui| {
-                if secondary_button(ui, i18n::t(Key::Settings)).clicked() {
+                if hero_half_button(ui, i18n::t(Key::Settings)).clicked() {
                     self.show_settings = true;
                 }
-                if secondary_button(ui, i18n::t(Key::About)).clicked() {
+                ui.add_space(12.0);
+                if hero_half_button(ui, i18n::t(Key::About)).clicked() {
                     self.show_about = true;
                 }
             });

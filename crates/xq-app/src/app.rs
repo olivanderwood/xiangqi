@@ -234,6 +234,9 @@ impl XiangqiApp {
     #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
+        // Xiangqi theme (Hieu, 2026-11-12): Chinese red / gold /
+        // rice paper instead of the default blue/grey egui theme.
+        crate::theme::apply_theme(&cc.egui_ctx);
         // Image loaders for the practice screen's board-photo upload
         // (Hieu, 2026-11-12): without this, `egui::Image::from_bytes`
         // shows only a placeholder.

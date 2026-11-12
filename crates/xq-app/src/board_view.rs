@@ -16,8 +16,8 @@ pub const LINE_COLOR: Color32 = Color32::from_rgb(0x5A, 0x3A, 0x1A);
 pub const PIECE_BG: Color32 = Color32::from_rgb(0xF3, 0xE2, 0xB8);
 pub const RED_PIECE: Color32 = Color32::from_rgb(0xB2, 0x22, 0x22);
 pub const BLACK_PIECE: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-pub const SELECT_COLOR: Color32 = Color32::from_rgb(0x2E, 0x7D, 0x32);
-pub const LAST_MOVE_COLOR: Color32 = Color32::from_rgb(0x1B, 0x7A, 0x3D);
+pub const SELECT_COLOR: Color32 = Color32::from_rgb(0xC9, 0xA2, 0x27);
+pub const LAST_MOVE_COLOR: Color32 = Color32::from_rgb(0xC9, 0xA2, 0x27);
 
 fn cjk_bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("cjk-bold".into()))
@@ -219,9 +219,10 @@ impl HintArrow {
 
     /// Hint arrow for a ranked hint: one shared colour for every rank;
     /// the rank is carried in `rank` and drawn as a number badge.
+    /// Gold (the theme accent), so hints read as part of the board.
     #[must_use]
     pub fn for_rank(from: u8, to: u8, rank: usize, horse: bool) -> Self {
-        let color = Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xC8, 170);
+        let color = Color32::from_rgba_unmultiplied(0xC9, 0xA2, 0x27, 200);
         Self::new(from, to, color, horse, rank)
     }
 }

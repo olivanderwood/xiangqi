@@ -1099,8 +1099,9 @@ impl XiangqiApp {
             for (i, hint) in self.learn.hints.iter().take(4).enumerate() {
                 // Row highlight from the previous frame's hover state;
                 // the frame paints the fill before the row content.
+                // Pale gold (the theme accent), not blue.
                 let fill = if self.learn.hint_hover == Some(i) {
-                    egui::Color32::from_rgba_unmultiplied(0x1E, 0x5A, 0xC8, 28)
+                    egui::Color32::from_rgba_unmultiplied(0xC9, 0xA2, 0x27, 28)
                 } else {
                     egui::Color32::TRANSPARENT
                 };
