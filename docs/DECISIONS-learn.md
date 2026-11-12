@@ -577,6 +577,22 @@ là một vấn đề: bài học kết thúc sớm vì nhánh phụ nông.
 - **Theme cờ tướng** (`theme.rs` mới): bỏ hoàn toàn màu xanh dương/xám mặc định của egui. Nền giấy gạo (`PAPER` #F5EFE0), chữ mực nâu đậm (`INK`), nút chính đỏ Trung Quốc (`RED` #A61E1E, hover #C02727, active #8B1A1A) với viền vàng (`GOLD` #C9A227), nút phụ viền nâu gỗ, hover vàng nhạt. `apply_theme` cài visuals lúc khởi động (`XiangqiApp::new`); `widgets.rs` dùng chung hằng số theme nên nút và panel không lệch nhau. Trên bàn cờ: màu chọn/nước vừa đi và mũi tên gợi ý đổi từ xanh lá/xanh dương sang vàng (cùng họ với viền vàng); halo chiếu/chiếu hết vẫn đỏ.
 - **Cổng**: fmt OK, clippy sạch, `cargo test --workspace` 178 pass / 0 fail. Chưa kiểm bằng mắt trên máy thật — cần Hieu thử: bấm "Tải ảnh từ thiết bị" chọn một ảnh bàn cờ (phải hiện ảnh + báo không nhận diện được + soạn thế cờ tay), xem menu (Cài đặt/Giới thiệu căn đều với các mode), và đánh giá màu đỏ/vàng/giấy gạo mới.
 
+## §17. Sửa sách khai cuộc: bỏ 2 bài 0 ván, thêm C64, sửa 4 bài — sách còn 37 bài (Hieu, 2026-11-12)
+
+- **Thay đổi `lessons-src.json` (đối chiếu báo cáo scan 92.931 ván thật)**:
+  - **Xóa 2 bài 0 ván**: `r-paodau-pingfeng-pao8tien` (C91) và `r-xianren-binh3`.
+  - **Thêm bài Đỏ `r-paodau-pingfeng-c64`** (level 3): Ngũ thất Pháo đối Bình phong mã tiến tốt 7 (C64), 335 ván thật (58 selected-games + 277 tournaments), rẽ ở nước 7 so với c92; prefix 12 nước `炮二平五 马8进7 马二进三 车9平8 车一平二 马2进3 马八进九 卒7进1 炮八平七 车1平2 车九平八 炮8进4`.
+  - **Sửa `r-qima`** theo A45 (hệ hay gặp nhất 1.875 ván; đường hay nhất 52 ván): giữ 6 nước đầu, đổi phần sau thành `炮二平一 马8进7 车一平二 车9平8 车二进六 炮8平9`.
+  - **Sửa `r-paodau-fangong`** sang nhánh 兵三进一 (1.132 ván, thay 炮八平六 811 ván): prefix mới đúng bằng bài Đen `b-fangong-wuqi-b55`, hai bài cho cùng FEN cuối.
+  - **Sửa `r-paodau-pingfeng-c90`**: nước 9 马八进七 (666 ván) → 车二进六 (3.684 ván), cắt còn 9 nước, dẫn về họ quá hà Xe.
+  - **Sửa `r-xianren-feixiang-d41`**: nước 10 马2进4 (95 ván) → 车9进1 (586 ván), cắt còn 10 nước.
+  - **Sửa `r-paodau-pao-c71`**: nước 10 卒3进1 → 马2进3 (400 ván; phần cuối cũ chỉ 12 ván đi đúng trọn prefix), cắt còn 10 nước.
+  - Mọi prefix mới/sửa đã replay qua xq-core (`parse_cn` + `legal_moves`) và hợp lệ 7/7 trước khi gen-book; không đụng 12 bài Đen, không làm hệ mới hoàn toàn (A45/A61/E46/E47 để sau).
+- **Chữ số trong `name_zh` của C64**: bản gốc dùng ７ toàn giác (U+FF17); test `fonts_cover_book` tính U+FF00–U+FFEF là CJK nên đòi glyph ７ trong font subset, nhưng `subset-font.sh` chỉ thu CJK ideograph (U+4E00–U+9FFF…) nên ７ không bao giờ vào font. Đã đổi thành 七 (chữ Hán số 7, đã có trong font, cùng nghĩa).
+- **gen-book `--branch-plies 28`** (12 prefix + 16, như sách Đỏ gốc — mặc định 16 làm sách nhỏ đi ~45%): chạy 82 phút, 56.430 lần phân tích. Sách mới **37 bài (25 Đỏ + 12 Đen), 331.814 nút, 19.906 lá**, mọi nút có `score_cp`, mọi bài max 40 nửa nước. 4 bài Đen mới (b-fangong-wuqi-b55, b-qima-a45, b-feixiang-a28, b-xianren-feixiang-xe9-e25) to hơn trước vì trước đây sinh với branch-plies 16, nay sinh với 28 — cây phong phú hơn, không phải lỗi.
+- **2 lá kết thúc sớm do Pikafish đa luồng không hoàn toàn xác định** (`every_path_reaches_twenty_moves` fail): `r-paodau-pingfeng-tot7-c45` dừng ở 35 nửa nước (lá "Đỏ hơn 1.1 tốt", score_cp 45), `b-pingfeng-c92` dừng ở 37 nửa nước (lá "Đen hơn 2.1 tốt", score_cp −41) — cả hai lá đều không quyết định (≤600 cp), không lặp thế cờ, không chiếu hết. Chẩn đoán bằng test tạm (đã xóa): phân tích lại từ 2 lá bằng MultiPV=1 (đúng như `extend_from` dùng) cho nước tốt nhất không lặp, không vượt 600 cp — tức `extend_from` dừng vì lần phân tích trong đợt chạy đó (không phải lần chẩn đoán) trả về nước quyết định/lặp; đây là tính không xác định của search đa luồng, không phải lỗi logic. **Cách sửa**: sinh lại riêng 2 bài này bằng gen-book (`--src` tạm chỉ 2 bài, `--branch-plies 28`, 287 s) rồi gộp cây mới thay đúng 2 bài trong openings-red/black.json — cây mới mọi lá đều đủ 40 nửa nước. Sách cuối: **37 bài, 331.991 nút, 19.890 lá** (c45 7.830 nút/489 lá; c92 8.827 nút/527 lá).
+- **Test**: `validate_book.rs` cập nhật theo 37 bài (`EXPECTED_IDS`, test `thirty_seven_lessons`, reds 26→25, blacks giữ 12). **Cổng**: fmt OK, clippy sạch, `cargo test --workspace --release` **178 pass / 0 fail / 27 ignored**.
+
 ## §13. 12 bài khai cuộc cho bên hậu thủ (Đen) — Hieu chốt làm cả 12 bài (2026-11-12)
 
 - **12 bài, learner black hết** (sách nay 38 bài: 26 Đỏ + 12 Đen, 310.822 nút, 18.537 lá, mọi nút có score_cp, mọi bài max 40 nửa nước; openings.json 40,8 MB):
