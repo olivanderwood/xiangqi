@@ -73,12 +73,14 @@ pub struct VsAiState {
     pub from_learn: bool,
     pub last_grade: Option<(Grade, String)>,
     /// A move grade waiting to be sent to the worker (Hieu, 2026-11-12):
-    /// (the engine request for the position before the human's move,
-    /// the move). Recorded in `play()` — the piece is placed first —
-    /// and sent in `maybe_send_grade` after the AI's own request, so
-    /// the grade never delays the AI's reply. The grade arrives later
-    /// as a `Graded` response.
-    pub pending_grade: Option<(EngineRequest, Move)>,
+    /// (the start FEN, the moves before the human's move, the move).
+    /// Recorded in `play()` — the piece is placed first — and sent in
+    /// `maybe_send_grade` after the AI's own request, so the grade never
+    /// delays the AI's reply. The grade arrives later as a `Graded`
+    /// response. The worker builds the `EngineRequest` itself, so
+    /// `play()` never locks the engine (a lock there froze the board
+    /// while a hint analysis was running).
+    pub pending_grade: Option<(String, Vec<Move>, Move)>,
     /// Request id of a grade sent to the worker; a `Graded` response
     /// with another id is stale and dropped.
     pub grade_req_id: Option<u64>,
@@ -179,13 +181,11 @@ impl VsAiState {
         // grade is recorded as pending and sent to the worker after the
         // AI's own request, so it arrives later and never delays the
         // AI's reply. See `maybe_send_grade` + `AiResponse::Graded`.
+        // No engine lock here either: locking the engine to build the
+        // request froze the board while a hint analysis was running —
+        // the worker builds the request itself.
         if self.from_learn && Some(mover) == self.human_color() {
-            let req = EngineRequest::new(
-                self.game.start.to_fen(),
-                moves_before,
-                self.engine.lock().expect("engine lock").grade_limits(),
-            );
-            self.pending_grade = Some((req, mv));
+            self.pending_grade = Some((self.game.start.to_fen(), moves_before, mv));
         }
         self.last_move = Some(mv);
         self.anim = if animate {
@@ -196,6 +196,9 @@ impl VsAiState {
         self.hint_arrows.clear();
         self.hint_lines.clear();
         self.hint_for_ply = None;
+        // A hint in flight is for the old position: drop its id so the
+        // stale Analysis response is ignored when it arrives.
+        self.hint_req_id = None;
         self.board.clear();
         self.review = None;
         self.check_since = if self.game.pos.in_check(self.game.pos.side()) {
@@ -354,16 +357,25 @@ impl VsAiState {
         };
     }
 
-    fn request_hint(&mut self, worker: &mut crate::ai_worker::AiWorker, top_n: usize) {
+    fn request_hint(&mut self, worker: &mut crate::ai_worker::AiWorker, top_n: usize) -> bool {
+        // Never block the UI on the engine (Hieu, 2026-11-12): if a
+        // search is running on the worker thread, skip this hint
+        // request and report `false` so the caller retries next frame
+        // (instead of marking the ply as hinted and never sending it).
+        let Some(engine) = self.engine.try_lock() else {
+            return false;
+        };
+        let limits = engine.hint_limits();
+        drop(engine);
         let req_id = worker.alloc_req_id();
         self.hint_req_id = Some(req_id);
         self.hint_count += 1;
-        let limits = self.engine.lock().expect("engine lock").hint_limits();
         let _ = worker.tx.send(AiRequest::Analyze {
             req: EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits),
             top_n,
             req_id,
         });
+        true
     }
 
     /// Take this screen's responses out of the shared buffer; responses
@@ -452,10 +464,12 @@ impl VsAiState {
 
     /// (margin_cp, temperature) when this AI move should be picked from
     /// an analysis instead of playing the best move: the §5 diversity
-    /// pick at Master, or the level weakening at Easy/Medium.
-    fn pick_config(&self) -> Option<(i32, f64)> {
+    /// pick at Master, or the level weakening at Easy/Medium. Takes the
+    /// engine as a parameter so the caller locks once (see
+    /// `maybe_trigger_ai` — a second lock would deadlock, and the UI
+    /// thread must never block on the engine).
+    fn pick_config(&self, engine: &dyn xq_engine::Engine) -> Option<(i32, f64)> {
         let level = self.level();
-        let engine = self.engine.lock().expect("engine lock");
         if level == Level::Master {
             if !self.diversity
                 || self.tournament
@@ -478,7 +492,11 @@ impl VsAiState {
     /// The RNG is re-derived from (game seed, ply), so a replay with
     /// the same seed reproduces the same picks.
     fn pick_from_lines(&self, lines: &[AnalysisLine]) -> Option<Move> {
-        let (margin, temp) = self.pick_config()?;
+        // The worker just finished this analysis, so the engine should
+        // be free; if another search started meanwhile, fall back to
+        // the best line (the caller does that) instead of blocking.
+        let engine = self.engine.try_lock()?;
+        let (margin, temp) = self.pick_config(&**engine)?;
         let engine_lines: Vec<xq_engine::Line> = lines
             .iter()
             .map(|l| xq_engine::Line {
@@ -504,17 +522,23 @@ impl VsAiState {
         {
             return;
         }
+        // Never block the UI on the engine (Hieu, 2026-11-12): if a
+        // search is still running on the worker thread (e.g. a hint
+        // analysis from before the user's move), defer the AI trigger
+        // to the next frame instead of freezing the board. Only set
+        // `ai_thinking` once the request is actually being sent.
+        let Some(engine) = self.engine.try_lock() else {
+            return;
+        };
+        let limits = engine.limits_for(self.level());
+        let config = self.pick_config(&**engine);
+        drop(engine);
         let req_id = worker.alloc_req_id();
         self.ai_req_id = Some(req_id);
         self.ai_thinking = true;
         self.ai_depth = 0;
-        let limits = self
-            .engine
-            .lock()
-            .expect("engine lock")
-            .limits_for(self.level());
         let req = EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits);
-        if self.pick_config().is_some() {
+        if config.is_some() {
             self.diverse_req_id = Some(req_id);
             let _ = worker.tx.send(AiRequest::Analyze {
                 req,
@@ -533,12 +557,17 @@ impl VsAiState {
     /// replaces it (an older `Graded` response, if it still arrives, is
     /// dropped by `req_id` in `poll`).
     fn maybe_send_grade(&mut self, worker: &mut crate::ai_worker::AiWorker) {
-        let Some((req, mv)) = self.pending_grade.take() else {
+        let Some((start_fen, moves, mv)) = self.pending_grade.take() else {
             return;
         };
         let req_id = worker.alloc_req_id();
         self.grade_req_id = Some(req_id);
-        let _ = worker.tx.send(AiRequest::GradeMove { req, mv, req_id });
+        let _ = worker.tx.send(AiRequest::GradeMove {
+            start_fen,
+            moves,
+            mv,
+            req_id,
+        });
     }
 
     fn maybe_auto_hint(&mut self, worker: &mut crate::ai_worker::AiWorker) {
@@ -554,8 +583,12 @@ impl VsAiState {
         if self.hint_for_ply == Some(self.game.moves.len()) {
             return;
         }
-        self.hint_for_ply = Some(self.game.moves.len());
-        self.request_hint(worker, 3);
+        // Mark the ply as hinted only once the request is actually
+        // sent; if the engine is busy `request_hint` returns `false`
+        // and the next frame retries.
+        if self.request_hint(worker, 3) {
+            self.hint_for_ply = Some(self.game.moves.len());
+        }
     }
 
     fn offer_draw(&mut self) {
@@ -619,15 +652,24 @@ impl XiangqiApp {
         self.vs_ai.custom_elo = self.settings.custom_elo;
         // 1. Poll the worker (non-blocking) and trigger the AI if needed.
         self.vs_ai.poll(&mut self.pending_ai, ctx, now, animate);
-        self.vs_ai.maybe_trigger_ai(&mut self.worker);
-        // Grade AFTER the AI's request, so the grade never delays the
-        // AI's reply (Hieu, 2026-11-12).
-        self.vs_ai.maybe_send_grade(&mut self.worker);
-        self.vs_ai.maybe_auto_hint(&mut self.worker);
-        // ChessDB: a separate live score for the position on display.
-        // One request per position change; the section shows it.
-        let fen = self.vs_ai_display_pos().to_fen();
-        self.poll_chessdb(&fen, ctx);
+        // Animation first, calculations after (Hieu, 2026-11-12): while
+        // a just-played piece is still sliding, start NOTHING — no AI
+        // move, no grade, no hint, no ChessDB. The 150 ms slide must
+        // finish before any calculation runs, or the board freezes
+        // until the opponent moves. Draining responses above stays
+        // ungated: it only reads results that are already computed.
+        let animating = self.vs_ai.anim.is_some_and(|a| a.progress(now).is_some());
+        if !animating {
+            self.vs_ai.maybe_trigger_ai(&mut self.worker);
+            // Grade AFTER the AI's request, so the grade never delays the
+            // AI's reply (Hieu, 2026-11-12).
+            self.vs_ai.maybe_send_grade(&mut self.worker);
+            self.vs_ai.maybe_auto_hint(&mut self.worker);
+            // ChessDB: a separate live score for the position on display.
+            // One request per position change; the section shows it.
+            let fen = self.vs_ai_display_pos().to_fen();
+            self.poll_chessdb(&fen, ctx);
+        }
         // Keep repainting while a move slides or the check flash is fresh.
         if self.vs_ai.anim.is_some_and(|a| a.progress(now).is_some())
             || self.vs_ai.check_since.is_some_and(|s| now - s < 1.0)

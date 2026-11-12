@@ -730,9 +730,19 @@ impl XiangqiApp {
         let animate = self.settings.animate;
         // Poll engine answers (hints / out-of-book opponent moves).
         self.learn.poll(&mut self.pending_ai, ctx, now, animate);
-        // ChessDB: a separate live score for the current position.
-        let fen = self.learn.game.pos.to_fen();
-        self.poll_chessdb(&fen, ctx);
+        // Animation first, calculations after (Hieu, 2026-11-12): while
+        // a just-played piece is still sliding, start NOTHING — no
+        // ChessDB request. The 150 ms slide must finish before any
+        // calculation runs, or the board freezes. The opponent's book
+        // move is already delayed 600 ms (past the slide), and draining
+        // responses above stays ungated: it only reads results that are
+        // already computed.
+        let animating = self.learn.anim.is_some_and(|a| a.progress(now).is_some());
+        if !animating {
+            // ChessDB: a separate live score for the current position.
+            let fen = self.learn.game.pos.to_fen();
+            self.poll_chessdb(&fen, ctx);
+        }
         // First frame after starting (or after the opponent's AI move):
         // (re)build hints for the learner's turn.
         if self.learn.started

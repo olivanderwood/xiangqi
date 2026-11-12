@@ -40,9 +40,15 @@ pub enum AiRequest {
     /// the engine's best move + the played move's score at the position
     /// before it, turned into a grade. Runs on the worker thread so the
     /// UI never blocks on it (Hieu, 2026-11-12) — the piece is placed
-    /// first and the grade arrives later.
+    /// first and the grade arrives later. The request carries the start
+    /// FEN + the moves before the played move (not a ready
+    /// `EngineRequest`), so the UI never locks the engine to build it:
+    /// the worker builds the request with `grade_limits()` once it
+    /// holds the engine (Hieu, 2026-11-12 — a lock in `play()` froze
+    /// the board while a hint analysis was running).
     GradeMove {
-        req: EngineRequest,
+        start_fen: String,
+        moves: Vec<xq_core::types::Move>,
         mv: xq_core::types::Move,
         req_id: u64,
     },
@@ -234,18 +240,22 @@ fn run_analyze(
 /// move + the played move's score at the position before it, turned
 /// into a grade (same rule as the old synchronous grading in
 /// `VsAiState::play`, now on the worker thread). Sends the `Graded`
-/// response. Returns the engine error, if any.
+/// response. Returns the engine error, if any. The `EngineRequest` is
+/// built here (with this engine's `grade_limits()`), so the UI thread
+/// never locks the engine to grade a move.
 fn run_grade_on(
     engine: &mut dyn Engine,
-    req: &EngineRequest,
+    start_fen: &str,
+    moves: &[xq_core::types::Move],
     mv: xq_core::types::Move,
     req_id: u64,
     res_tx: &Sender<AiResponse>,
 ) -> Result<(), EngineError> {
-    let best = engine.best_move(req, &mut |_| {})?;
+    let req = EngineRequest::new(start_fen.to_string(), moves.to_vec(), engine.grade_limits());
+    let best = engine.best_move(&req, &mut |_| {})?;
     let best_cp = best.score.to_cp_clamped();
     let mv_cp = engine
-        .score_move(req, mv)
+        .score_move(&req, mv)
         .map(|s| s.to_cp_clamped())
         .unwrap_or(best_cp);
     let grade = grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
@@ -265,13 +275,14 @@ fn run_grade_on(
 /// Run one grade request against the shared engine.
 fn run_grade(
     engine: &SharedEngine,
-    req: &EngineRequest,
+    start_fen: &str,
+    moves: &[xq_core::types::Move],
     mv: xq_core::types::Move,
     req_id: u64,
     res_tx: &Sender<AiResponse>,
 ) -> Result<(), EngineError> {
     let mut guard = engine.lock().expect("engine lock");
-    run_grade_on(&mut **guard, req, mv, req_id, res_tx)
+    run_grade_on(&mut **guard, start_fen, moves, mv, req_id, res_tx)
 }
 
 /// What to do after an engine error (§7.3).
@@ -399,8 +410,13 @@ impl AiWorker {
                             }
                         }
                     }
-                    AiRequest::GradeMove { req, mv, req_id } => {
-                        let result = run_grade(&engine, &req, mv, req_id, &res_tx);
+                    AiRequest::GradeMove {
+                        start_fen,
+                        moves,
+                        mv,
+                        req_id,
+                    } => {
+                        let result = run_grade(&engine, &start_fen, &moves, mv, req_id, &res_tx);
                         if let Err(e) = result {
                             let action = fallback_action(
                                 &e,
@@ -411,11 +427,14 @@ impl AiWorker {
                             match action {
                                 Fallback::None => {}
                                 Fallback::RetryShared => {
-                                    let _ = run_grade(&engine, &req, mv, req_id, &res_tx);
+                                    let _ =
+                                        run_grade(&engine, &start_fen, &moves, mv, req_id, &res_tx);
                                 }
                                 Fallback::RetryOneOff => {
                                     retry_one_off(&engine, &mut one_off, |fb| {
-                                        let _ = run_grade_on(fb, &req, mv, req_id, &res_tx);
+                                        let _ = run_grade_on(
+                                            fb, &start_fen, &moves, mv, req_id, &res_tx,
+                                        );
                                     });
                                 }
                             }
@@ -586,7 +605,8 @@ mod tests {
         let mv = parse_cn(&pos, "炮二平五").expect("parse opening move");
         let req_id = w.alloc_req_id();
         w.tx.send(AiRequest::GradeMove {
-            req: startpos_req(SearchLimits::depth(3)),
+            start_fen: Position::startpos().to_fen(),
+            moves: Vec::new(),
             mv,
             req_id,
         })

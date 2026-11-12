@@ -350,6 +350,14 @@ impl SharedEngine {
         self.inner.lock()
     }
 
+    /// Try to lock the engine without blocking. The UI thread uses this
+    /// when triggering a calculation (AI move, hint): if a search is
+    /// already running on the worker thread, the trigger defers to the
+    /// next frame instead of freezing the board (Hieu, 2026-11-12).
+    pub fn try_lock(&self) -> Option<std::sync::MutexGuard<'_, Box<dyn Engine>>> {
+        self.inner.try_lock().ok()
+    }
+
     /// Handle to the shared stop flag.
     #[must_use]
     pub fn stop_handle(&self) -> StopHandle {
