@@ -555,6 +555,16 @@ là một vấn đề: bài học kết thúc sớm vì nhánh phụ nông.
 - **Sửa**: hạ cờ trước, chấm sau. `play()` chỉ áp nước lên bàn (đặt `last_move`/`anim` như cũ) và ghi lại `pending_grade` (engine request cho thế cờ trước nước + nước vừa đi). Khung hình tiếp theo, `show_vs_ai` gửi grade **sau** khi `maybe_trigger_ai` đã gửi nước của AI — nên AI được xếp hàng trước, chấm không bao giờ làm chậm nước trả của AI. Worker mới có request `GradeMove` + response `Graded`: chạy `best_move` + `score_move` trên luồng worker (cùng luật chấm cũ: `grade_from_delta_with`, `explain_tags`), trả grade về thì panel mới hiện điểm chấm. Grade cũ bị hủy khi Undo / đi nước mới (xóa `pending_grade`/`grade_req_id`, response cũ loại bằng `req_id`); Learn `poll` bỏ qua `Graded` (không dùng).
 - **Cổng**: fmt OK, clippy sạch, `cargo test --workspace` 175 pass / 0 fail (thêm test worker `grade_move_returns_a_grade`: nước 炮二平五 chấm Best/Book). Chưa kiểm bằng mắt trên máy thật — cần Hieu thử: học xong 1 bài → "Đánh tiếp với AI" → đi nước tự do, quân phải hiện ngay, điểm chấm hiện sau vài giây, AI trả nước không chậm hơn trước.
 
+## §13. 12 bài khai cuộc cho bên hậu thủ (Đen) — Hieu chốt làm cả 12 bài (2026-11-12)
+
+- **12 bài, learner black hết** (sách nay 38 bài: 26 Đỏ + 12 Đen, 310.822 nút, 18.537 lá, mọi nút có score_cp, mọi bài max 40 nửa nước; openings.json 40,8 MB):
+  - **8 bài đối xứng** (cùng prefix 12 nước và cùng cây sách với bài Đỏ, chỉ đổi learner sang black): b-pingfeng-d42, b-pingfeng-c04, b-pingfeng-tot7-c45, b-pingfeng-tot7-c23 (Đen chỉ thắng 14,1% — bài nhấn phòng thủ), b-pingfeng-c92, b-fangong, b-xianren-feixiang-d29, b-paodau-pao-c14.
+  - **4 bài mới** sinh bằng gen-book từ prefix riêng: b-fangong-wuqi-b55 (3.958 nút/199 lá), b-xianren-feixiang-xe9-e25 (4.177/203), b-feixiang-a28 (3.967/199), b-qima-a45 (3.475/180). Tổng 4 bài: 15.577 nút, 781 lá, 2.384 lần phân tích, 178,5 s.
+- **Cách sinh**: 4 bài mới chạy gen-book riêng từ file src tạm (`data/lessons-src-black-new.json`, không trong repo) ra `data/openings-black-new.json`. 8 bài đối xứng KHÔNG chạy lại gen-book (prefix giống hệt bài Đỏ nên cây Pikafish giống hệt): copy cây từ bài Đỏ trong openings.json rồi sửa note theo lượt người học mới — duyệt cây theo depth (gốc depth 0; Đỏ đi khi depth chẵn, Đen khi depth lẻ): nút tới lượt Đen đặt note "Nước mở đầu của hệ khai cuộc." nếu depth < 12 (prefix), còn không thì "Hướng theo Pikafish"; nút tới lượt Đỏ đặt note None. Giữ nguyên score_cp, weight, main, trap, end (end verdict tính theo góc Đỏ nên không đổi theo learner). Script `data/merge_black.py` làm việc gộp + kiểm (38 bài, 26 cây Đỏ giống hệt trước/sau).
+- **Font**: tên bài Đen dùng 2 chữ Hán mới — 出 (bài E25: 飞相对仙人指路出车) và 跪 (bài A45: 跪马对中炮). `tools/cjk_chars.txt` nay 57 chữ (was 55); chạy lại `tools/subset-font.sh`, kiểm bằng fontTools đủ 57 glyph ở cả 2 font CJK subset.
+- **Test**: `EXPECTED_IDS` 26→38, `book_parses` 26→38, `twenty_six_lessons` → `thirty_eight_lessons` (26 đỏ + 12 đen). `cargo test --workspace` 175 pass / 0 fail; book-check pass; fmt OK, clippy sạch.
+- Chưa kiểm bằng mắt: cần Hieu mở màn Học xem 12 bài Đen có hiện đủ không, vào 1 bài Đen thử đi nước đầu (đối thủ Đỏ đi trước, người học cầm Đen đi sau) và kiểm nước gợi ý + chấm điểm.
+
 ## Cổng sau §1–§5
 
 - `cargo fmt` OK, `cargo clippy --workspace --all-targets -D warnings`

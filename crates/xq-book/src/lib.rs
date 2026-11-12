@@ -37,9 +37,18 @@ pub struct Book {
 }
 
 impl Book {
+    /// Load the embedded book: the Red lessons (`openings-red.json`)
+    /// plus the Black lessons (`openings-black.json`), merged in that
+    /// order. The book is split in two because a single 41 MB
+    /// `openings.json` exceeds what the GitHub API accepts for a push
+    /// (2026-11-12, 12 Black lessons); each half is under the limit.
+    /// `gen-book` writes both files from `lessons-src.json`.
     pub fn load_embedded() -> Result<Book, BookError> {
-        let text = include_str!("../data/openings.json");
-        Self::load_str(text)
+        let red = include_str!("../data/openings-red.json");
+        let black = include_str!("../data/openings-black.json");
+        let mut lessons = Self::load_str(red)?.lessons;
+        lessons.extend(Self::load_str(black)?.lessons);
+        Ok(Book { lessons })
     }
 
     pub fn load_str(text: &str) -> Result<Book, BookError> {

@@ -1,9 +1,15 @@
-//! `gen-book`: regenerate `openings.json` from Pikafish (MultiPV=4).
+//! `gen-book`: regenerate the opening book from Pikafish (MultiPV=4).
 //!
 //! Usage:
-//!   gen-book [--src <lessons-src.json>] [--out <openings.json>]
+//!   gen-book [--src <lessons-src.json>] [--out <openings-red.json>]
 //!            [--depth N] [--plies N] [--side-plies N] [--leaf-depth N]
 //!            [--max-gap N]
+//!
+//! Writes TWO files: `--out` is the Red lessons
+//! (`openings-red.json`); the Black lessons go to the same path with
+//! `-red` replaced by `-black` (`openings-black.json`). The book is
+//! split because a single 41 MB file exceeds what the GitHub API
+//! accepts for a push (2026-11-12); the loader embeds both files.
 //!
 //! For each lesson in the source file, the defining prefix (the opening
 //! system's signature moves) is played, then Pikafish grows the spine:
@@ -77,7 +83,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         src: PathBuf::from("crates/xq-book/data/lessons-src.json"),
-        out: PathBuf::from("crates/xq-book/data/openings.json"),
+        out: PathBuf::from("crates/xq-book/data/openings-red.json"),
         depth: 12,
         plies: 40,
         side_plies: 8,
@@ -861,22 +867,64 @@ fn run() -> Result<(), String> {
         total_analyses += gen.analyses + gen.leaf_analyses;
         lessons.push(lesson);
     }
-    let file = BookFile {
-        schema_version: 1,
-        lessons,
+    let red: Vec<Lesson> = lessons
+        .iter()
+        .filter(|l| matches!(l.learner, Learner::Red))
+        .cloned()
+        .collect();
+    let black: Vec<Lesson> = lessons
+        .iter()
+        .filter(|l| matches!(l.learner, Learner::Black))
+        .cloned()
+        .collect();
+    // The book is split in two files by learner: a single 41 MB
+    // `openings.json` exceeds what the GitHub API accepts for a push
+    // (2026-11-12, 12 Black lessons). `--out` names the Red file
+    // (`.../openings-red.json`, the default); the Black file is the
+    // same path with `-red` replaced by `-black`. Both files are always
+    // written (one may be empty), because the loader embeds both.
+    let write = |lessons: Vec<Lesson>, path: &PathBuf| -> Result<(), String> {
+        let file = BookFile {
+            schema_version: 1,
+            lessons,
+        };
+        // Minified: pretty-printing would be ~10x bigger; the
+        // human-readable source is lessons-src.json.
+        let out = serde_json::to_string(&file).map_err(|e| format!("không ghi được JSON: {e}"))?;
+        fs::write(path, out).map_err(|e| format!("không ghi {}: {e}", path.display()))?;
+        Ok(())
     };
-    // Minified: the file has ~17k nodes and pretty-printing would be
-    // ~10x bigger (23 MB); the human-readable source is lessons-src.json.
-    let out = serde_json::to_string(&file).map_err(|e| format!("không ghi được JSON: {e}"))?;
-    fs::write(&args.out, out).map_err(|e| format!("không ghi {}: {e}", args.out.display()))?;
+    let black_path = {
+        let stem = args
+            .out
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let black_stem = stem
+            .strip_suffix("-red")
+            .map(|s| format!("{s}-black"))
+            .unwrap_or_else(|| format!("{stem}-black"));
+        args.out.with_file_name(format!("{black_stem}.json"))
+    };
+    write(red, &args.out)?;
+    write(black, &black_path)?;
     println!(
-        "xong: {} bài, {} nút, {} lá, {} lần phân tích, tổng {:.1}s -> {}",
+        "xong: {} bài ({} đỏ, {} đen), {} nút, {} lá, {} lần phân tích, tổng {:.1}s -> {} + {}",
         defs.len(),
+        lessons
+            .iter()
+            .filter(|l| matches!(l.learner, Learner::Red))
+            .count(),
+        lessons
+            .iter()
+            .filter(|l| matches!(l.learner, Learner::Black))
+            .count(),
         total_nodes,
         total_leaves,
         total_analyses,
         t0.elapsed().as_secs_f32(),
-        args.out.display()
+        args.out.display(),
+        black_path.display()
     );
     Ok(())
 }

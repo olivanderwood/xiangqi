@@ -237,7 +237,11 @@ fn menu_to_learn_select_shows_lessons_for_each_side() {
 /// Font subset covers every CJK char in the book (§7.5, test 8.7.9).
 #[test]
 fn fonts_cover_book() {
-    let book_text = include_str!("../../xq-book/data/openings.json");
+    // The book is split in two files (Red + Black); check both.
+    let book_text = concat!(
+        include_str!("../../xq-book/data/openings-red.json"),
+        include_str!("../../xq-book/data/openings-black.json"),
+    );
     let chars: std::collections::BTreeSet<char> = book_text
         .chars()
         .filter(|c| {

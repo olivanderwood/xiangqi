@@ -11,8 +11,9 @@
 # The system .ttc files hold 5 faces (JP, KR, SC, TC, HK); the SC face is
 # index 2. `pyftsubset` cannot read .ttc directly, so the SC face is first
 # extracted to a temporary .ttf with fontTools, then subset.
-# Re-run after editing crates/xq-book/data/openings.json: the char list is
-# rebuilt from the book file, so new CJK chars are picked up automatically.
+# Re-run after editing crates/xq-book/data/openings-red.json or
+# openings-black.json: the char list is rebuilt from the book files,
+# so new CJK chars are picked up automatically.
 #
 # Requires: python3 + fontTools (pyftsubset) and the Noto fonts installed
 # on the system (Debian: fonts-noto-cjk, fonts-noto-core).
@@ -42,8 +43,11 @@ fixed = (
     # simplified variants (notation parser/render accepts both)
     "帅将仕相马车炮兵卒进"
 )
-book = root / "crates/xq-book/data/openings.json"
-text = book.read_text(encoding="utf-8") if book.exists() else ""
+text = ""
+for name in ("openings-red.json", "openings-black.json"):
+    book = root / "crates/xq-book/data" / name
+    if book.exists():
+        text += book.read_text(encoding="utf-8")
 extra = {c for c in text if "\u4e00" <= c <= "\u9fff" or "\u3400" <= c <= "\u4dbf" or "\uf900" <= c <= "\ufaff"}
 chars = sorted(set(fixed) | extra)
 out = root / "tools/cjk_chars.txt"

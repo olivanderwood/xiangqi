@@ -1,907 +1,1339 @@
 [
-  {
-    "id": "r-paodau-pingfeng-c04",
-    "name_vi": "Pháo đầu đối Bình phong mã (C04)",
-    "name_zh": "中炮对屏风马",
-    "learner": "red",
-    "level": 1,
-    "summary_vi": "Đường chính hay gặp nhất trong 19897 ván (mã ECCO c04+c02+c68+c50+c16+c99+c18+b23+b24+b22). Central cannon + 7th-file horse vs screen horses — red central pawn vs black twin river cannons",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c04+c02+c68+c50+c16+c99+c18+b23+b24+b22)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "马2进3",
-      "兵三进一",
-      "卒3进1",
-      "马八进九",
-      "卒1进1",
-      "炮八平七",
-      "马3进2"
-    ]
-  },
-  {
-    "id": "r-paodau-pao-c14",
-    "name_vi": "Pháo đầu đối Pháo (C14)",
-    "name_zh": "中炮对炮",
-    "learner": "red",
-    "level": 1,
-    "summary_vi": "Đường chính hay gặp nhất trong 8730 ván (mã ECCO c14+c11+b21+c06+c13). Central cannon + right lateral chariot vs screen horses — red central pawn",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + right lateral chariot vs screen horses — red central  (ECCO c14+c11+b21+c06+c13)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "炮8平5",
-      "马二进三",
-      "马8进7",
-      "车一平二",
-      "车9进1",
-      "马八进七",
-      "车9平4",
-      "兵三进一",
-      "马2进3",
-      "兵七进一",
-      "车1进1"
-    ]
-  },
-  {
-    "id": "r-xianren-feixiang-d29",
-    "name_vi": "Tiên nhân chỉ lộ đối Phi tượng (D29)",
-    "name_zh": "仙人指路对飞相",
-    "learner": "red",
-    "level": 1,
-    "summary_vi": "Đường chính hay gặp nhất trong 3296 ván (mã ECCO d29+c51+c15+c01). Same-direction direct chariot vs lateral chariot — red two-headed snake vs black twin lateral chariots",
-    "sources": [
-      {
-        "title": "VietCoTuong: Same-direction direct chariot vs lateral chariot — red two-headed snak (ECCO d29+c51+c15+c01)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "炮2平3",
-      "炮二平五",
-      "象3进5",
-      "马二进三",
-      "卒3进1",
-      "车一平二",
-      "卒3进1",
-      "马八进九",
-      "车9进1",
-      "车九平八",
-      "车9平4"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-d42",
-    "name_vi": "Pháo đầu đối Bình phong mã (D42)",
-    "name_zh": "中炮对屏风马",
-    "learner": "red",
-    "level": 1,
-    "summary_vi": "Đường chính hay gặp nhất trong 3217 ván (mã ECCO d42+c19). Central cannon vs left three-step tiger to opposite cannons — red left direct chariot",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon vs left three-step tiger to opposite cannons — red left (ECCO d42+c19)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "马2进3",
-      "兵七进一",
-      "卒7进1",
-      "车二进六",
-      "炮8平9",
-      "车二平三",
-      "炮9退1"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-c92",
-    "name_vi": "Pháo đầu đối Bình phong mã (C92)",
-    "name_zh": "中炮对屏风马",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 605 ván (mã ECCO c92). 5-8 cannon mutual 3rd pawns vs screen horses — red left upright horse",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red left upright horse (ECCO c92)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "马2进3",
-      "马八进九",
-      "卒7进1",
-      "炮八平七",
-      "车1平2",
-      "车九平八",
-      "炮2进4"
-    ]
-  },
-  {
-    "id": "r-xianren-feixiang-guogong-d52",
-    "name_vi": "Tiên nhân chỉ lộ, Pháo quá cung (D52)",
-    "name_zh": "仙人指路过宫炮",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 585 ván (mã ECCO d52). Central cannon + right direct chariot (other) vs deferred opposite cannons",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + right direct chariot (other) vs deferred opposite can (ECCO d52)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "炮2平3",
-      "炮二平五",
-      "象3进5",
-      "炮五进四",
-      "士4进5",
-      "相七进五",
-      "马2进4",
-      "炮五退一",
-      "车1平2",
-      "马八进六",
-      "车9进1"
-    ]
-  },
-  {
-    "id": "r-paodau-fangong",
-    "name_vi": "Pháo đầu đối Phản cung mã",
-    "name_zh": "中炮对反宫马",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 398 ván (mã ECCO c54). 5-6 cannon + river chariot vs screen horses (other)",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-6 cannon + river chariot vs screen horses (other) (ECCO c54)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马2进3",
-      "马二进三",
-      "炮8平6",
-      "车一平二",
-      "马8进7",
-      "炮八平六",
-      "车1平2",
-      "马八进七",
-      "炮2平1",
-      "兵七进一",
-      "卒7进1"
-    ]
-  },
-  {
-    "id": "r-paodau-pao-c71",
-    "name_vi": "Pháo đầu đối Pháo (C71)",
-    "name_zh": "中炮对炮",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 391 ván (mã ECCO c71). 5-7 cannon vs screen horses + 3rd pawn + right horse outer river-link",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-7 cannon vs screen horses + 3rd pawn + right horse outer river-link (ECCO c71)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "炮8平5",
-      "马二进三",
-      "马8进7",
-      "车一平二",
-      "车9进1",
-      "马八进七",
-      "车9平4",
-      "兵三进一",
-      "卒3进1",
-      "车二进五",
-      "象3进1"
-    ]
-  },
-  {
-    "id": "r-paodau-pao-tot7",
-    "name_vi": "Pháo đầu đối Pháo, Đen tiến tốt 7",
-    "name_zh": "中炮对炮进7卒",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 254 ván (mã ECCO c05). Central cannon + left edge horse (other) vs screen horses",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + left edge horse (other) vs screen horses (ECCO c05)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "炮8平5",
-      "马二进三",
-      "马8进7",
-      "车一平二",
-      "卒7进1",
-      "马八进七",
-      "马2进3",
-      "兵七进一",
-      "炮2进4",
-      "马七进六",
-      "炮2平7"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-pao8",
-    "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến Pháo (C93)",
-    "name_zh": "中炮对屏风马进炮",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 204 ván (mã ECCO c93). 5-8 cannon mutual 3rd pawns vs screen horses — red left edge horse (vs black other)",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red left edge horse (vs (ECCO c93)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "炮8进4",
-      "兵三进一",
-      "炮2平5",
-      "马八进七",
-      "马2进3",
-      "车九平八",
-      "卒3进1"
-    ]
-  },
-  {
-    "id": "r-xianren-feixiang-d41",
-    "name_vi": "Tiên nhân chỉ lộ đối Phi tượng (D41)",
-    "name_zh": "仙人指路对飞相",
-    "learner": "red",
-    "level": 2,
-    "summary_vi": "Đường chính hay gặp nhất trong 179 ván (mã ECCO d41). Central cannon + central pawn vs left three-step tiger river chariot to opposite cannons",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + central pawn vs left three-step tiger river chariot t (ECCO d41)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "炮2平3",
-      "炮二平五",
-      "象3进5",
-      "马二进三",
-      "卒3进1",
-      "车一平二",
-      "卒3进1",
-      "马八进九",
-      "马2进4",
-      "车九平八",
-      "士4进5"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-ngan",
-    "name_vi": "Pháo đầu đối Bình phong mã",
-    "name_zh": "中炮对屏风马",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 31 ván (mã ECCO b00). Central cannon vs other",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon vs other (ECCO b00)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7"
-    ]
-  },
-  {
-    "id": "r-xianren-tot7",
-    "name_vi": "Tiên nhân chỉ lộ đối Tốt 7",
-    "name_zh": "仙人指路对卒7",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 21 ván (mã ECCO d53). Central cannon + river chariot vs deferred opposite cannons",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + river chariot vs deferred opposite cannons (ECCO d53)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "卒7进1",
-      "炮二平三",
-      "炮2平5",
-      "兵三进一",
-      "马2进3",
-      "兵三进一",
-      "马8进9",
-      "相七进五",
-      "车1平2",
-      "马二进一",
-      "炮5进4"
-    ]
-  },
-  {
-    "id": "r-xianren-feixiang-guogong-c17",
-    "name_vi": "Tiên nhân chỉ lộ, Pháo quá cung (C17)",
-    "name_zh": "仙人指路过宫炮",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 11 ván (mã ECCO c17). Central cannon + river chariot (other) vs screen horses",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + river chariot (other) vs screen horses (ECCO c17)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "炮2平3",
-      "炮二平五",
-      "象3进5",
-      "炮五进四",
-      "士4进5",
-      "相七进五",
-      "马2进4",
-      "炮五退一",
-      "车1平2",
-      "马八进六",
-      "卒7进1"
-    ]
-  },
-  {
-    "id": "r-paodau-fangong-xe",
-    "name_vi": "Pháo đầu đối Phản cung mã, Xe đối Xe",
-    "name_zh": "中炮对反宫马对车",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 10 ván (mã ECCO d55). Central cannon + twin direct chariots vs deferred opposite cannons",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + twin direct chariots vs deferred opposite cannons (ECCO d55)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马2进3",
-      "马二进三",
-      "炮2平1",
-      "车一平二",
-      "车1平2",
-      "马八进七",
-      "炮8平6",
-      "仕四进五",
-      "车2进6",
-      "车九进二",
-      "炮6进2"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-tot7",
-    "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến tốt 7",
-    "name_zh": "中炮对屏风马进7卒",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 9 ván (mã ECCO c82). Central cannon + riverrank cannon vs screen horses — black left elephant + right lateral chariot",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + riverrank cannon vs screen horses — black left elepha (ECCO c82)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "卒7进1",
-      "兵七进一",
-      "马2进3",
-      "马八进七",
-      "车9平8",
-      "炮八进二",
-      "象7进5"
-    ]
-  },
-  {
-    "id": "r-xianren-feixiang-xe9",
-    "name_vi": "Tiên nhân chỉ lộ đối Phi tượng, Đen lên Xe",
-    "name_zh": "仙人指路对飞相进车",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 7 ván (mã ECCO c98). 5-8 cannon mutual 3rd pawns vs screen horses — red cannon press horse",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red cannon press horse (ECCO c98)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "炮2平3",
-      "炮二平五",
-      "象3进5",
-      "马二进三",
-      "车9进1",
-      "炮五进四",
-      "士4进5",
-      "相七进五",
-      "马2进4",
-      "炮五退一",
-      "车1平2"
-    ]
-  },
-  {
-    "id": "r-feixiang",
-    "name_vi": "Phi tượng cục",
-    "name_zh": "飞相局",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 4 ván (mã ECCO a10). Flying elephant vs other",
-    "sources": [
-      {
-        "title": "VietCoTuong: Flying elephant vs other (ECCO a10)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "相三进五",
-      "炮2平4"
-    ]
-  },
-  {
-    "id": "r-xianren-tot3",
-    "name_vi": "Tiên nhân chỉ lộ đối Tốt 3",
-    "name_zh": "仙人指路对卒3",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 3 ván (mã ECCO d36). Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — red two-headed snake",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — (ECCO d36)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵七进一",
-      "卒3进1",
-      "兵七进一",
-      "象3进5",
-      "兵七进一",
-      "马2进4",
-      "兵七平六",
-      "车1平3",
-      "相七进五",
-      "车3进8",
-      "仕六进五",
-      "车3平2"
-    ]
-  },
-  {
-    "id": "r-paodau-pao-cung",
-    "name_vi": "Pháo đầu đối Pháo, Pháo qua cung",
-    "name_zh": "中炮对炮过宫",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 2 ván (mã ECCO d25). Same-direction direct chariot vs lateral chariot — red palace cannon",
-    "sources": [
-      {
-        "title": "VietCoTuong: Same-direction direct chariot vs lateral chariot — red palace cannon (ECCO d25)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮八平六",
-      "炮8平5"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-c90",
-    "name_vi": "Pháo đầu đối Bình phong mã (C90)",
-    "name_zh": "中炮对屏风马",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO c90). 5-8 cannon vs screen horses (other)",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-8 cannon vs screen horses (other) (ECCO c90)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "马2进3",
-      "兵七进一",
-      "卒7进1",
-      "马八进七",
-      "炮2进4"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-pao8tien",
-    "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến Pháo (C91)",
-    "name_zh": "中炮对屏风马进炮",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO c91). 5-8 cannon mutual 3rd pawns (other) vs screen horses",
-    "sources": [
-      {
-        "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns (other) vs screen horses (ECCO c91)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "炮二平五",
-      "炮8进1",
-      "炮八进四",
-      "卒3进1",
-      "兵三进一",
-      "炮2平7",
-      "马二进三"
-    ]
-  },
-  {
-    "id": "r-qima",
-    "name_vi": "Khởi mã cục",
-    "name_zh": "起马局",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO d33). Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — red 7th horse",
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — (ECCO d33)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "马八进七",
-      "卒3进1",
-      "兵三进一",
-      "马2进3",
-      "马二进三",
-      "车1进1",
-      "车九进一",
-      "车1平7",
-      "马三进二",
-      "卒7进1",
-      "兵三进一",
-      "车7进3"
-    ]
-  },
-  {
-    "id": "r-xianren-binh3",
-    "name_vi": "Tiên nhân chỉ lộ, Đỏ tiến tốt 3",
-    "name_zh": "仙人指路进3兵",
-    "learner": "red",
-    "level": 3,
-    "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO e00). Immortal guiding the way vs other",
-    "sources": [
-      {
-        "title": "VietCoTuong: Immortal guiding the way vs other (ECCO e00)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "prefix": [
-      "兵三进一",
-      "卒7进1",
-      "兵三进一",
-      "象7进5",
-      "兵三进一",
-      "马8进6",
-      "兵三平四",
-      "车9平7",
-      "相三进五",
-      "车7进8",
-      "仕四进五",
-      "车7平8"
-    ]
-  },
-  {
-    "id": "r-paodau-pingfeng-tot7-c45",
-    "learner": "red",
-    "level": 2,
-    "name_vi": "Pháo đầu quá hà Xe đối Bình phong mã 卒7进1 (C45)",
-    "name_zh": "中炮过河车互进七兵对屏风马平炮兑车",
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "卒7进1",
-      "车二进六",
-      "马2进3",
-      "兵七进一",
-      "炮8平9",
-      "车二平三",
-      "炮9退1"
-    ],
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c45+c49)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "chasoft/community-xiangqi-games-database: selected-games + tournaments (92.931 ván thật 1956–2019)",
-        "url": "https://github.com/chasoft/community-xiangqi-games-database"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "summary_vi": "Đường chính hay gặp trong 1.098 ván thật (giải đấu + ván danh thủ 1956–2019, mã ECCO C45/C49). Bình phong mã 卒7进1 chiếm 27% sau thế Bình phong mã chuẩn 5 nước — hệ còn thiếu lớn nhất của bộ sách; Đỏ quá hà Xe rồi tiến tốt 7."
-  },
-  {
-    "id": "r-paodau-pingfeng-tot7-c23",
-    "learner": "red",
-    "level": 2,
-    "name_vi": "Pháo đầu quá hà Xe đối Bình phong mã Lưỡng đầu xà (C23)",
-    "name_zh": "中炮过河车七路马对屏风马两头蛇",
-    "prefix": [
-      "炮二平五",
-      "马8进7",
-      "马二进三",
-      "车9平8",
-      "车一平二",
-      "卒7进1",
-      "车二进六",
-      "马2进3",
-      "马八进七",
-      "卒3进1",
-      "车九进一",
-      "炮2进1"
-    ],
-    "sources": [
-      {
-        "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c23+c24)",
-        "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
-      },
-      {
-        "title": "chasoft/community-xiangqi-games-database: selected-games + tournaments (92.931 ván thật 1956–2019)",
-        "url": "https://github.com/chasoft/community-xiangqi-games-database"
-      },
-      {
-        "title": "ChessDB cloud database (đánh giá khai cuộc)",
-        "url": "https://www.chessdb.cn/cloudbook_api_en.html"
-      },
-      {
-        "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
-        "url": "https://github.com/official-pikafish/Pikafish"
-      }
-    ],
-    "summary_vi": "Đường chính hay gặp trong 886 ván thật (giải đấu + ván danh thủ 1956–2019, mã ECCO C23/C24). Bình phong mã 卒7进1, Đỏ lên Mã 7 (Lưỡng đầu xà) thay vì tiến tốt 7."
-  }
+ {
+  "id": "r-paodau-pingfeng-c04",
+  "name_vi": "Pháo đầu đối Bình phong mã (C04)",
+  "name_zh": "中炮对屏风马",
+  "learner": "red",
+  "level": 1,
+  "summary_vi": "Đường chính hay gặp nhất trong 19897 ván (mã ECCO c04+c02+c68+c50+c16+c99+c18+b23+b24+b22). Central cannon + 7th-file horse vs screen horses — red central pawn vs black twin river cannons",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c04+c02+c68+c50+c16+c99+c18+b23+b24+b22)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "兵三进一",
+   "卒3进1",
+   "马八进九",
+   "卒1进1",
+   "炮八平七",
+   "马3进2"
+  ]
+ },
+ {
+  "id": "r-paodau-pao-c14",
+  "name_vi": "Pháo đầu đối Pháo (C14)",
+  "name_zh": "中炮对炮",
+  "learner": "red",
+  "level": 1,
+  "summary_vi": "Đường chính hay gặp nhất trong 8730 ván (mã ECCO c14+c11+b21+c06+c13). Central cannon + right lateral chariot vs screen horses — red central pawn",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + right lateral chariot vs screen horses — red central  (ECCO c14+c11+b21+c06+c13)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "炮8平5",
+   "马二进三",
+   "马8进7",
+   "车一平二",
+   "车9进1",
+   "马八进七",
+   "车9平4",
+   "兵三进一",
+   "马2进3",
+   "兵七进一",
+   "车1进1"
+  ]
+ },
+ {
+  "id": "r-xianren-feixiang-d29",
+  "name_vi": "Tiên nhân chỉ lộ đối Phi tượng (D29)",
+  "name_zh": "仙人指路对飞相",
+  "learner": "red",
+  "level": 1,
+  "summary_vi": "Đường chính hay gặp nhất trong 3296 ván (mã ECCO d29+c51+c15+c01). Same-direction direct chariot vs lateral chariot — red two-headed snake vs black twin lateral chariots",
+  "sources": [
+   {
+    "title": "VietCoTuong: Same-direction direct chariot vs lateral chariot — red two-headed snak (ECCO d29+c51+c15+c01)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "马二进三",
+   "卒3进1",
+   "车一平二",
+   "卒3进1",
+   "马八进九",
+   "车9进1",
+   "车九平八",
+   "车9平4"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-d42",
+  "name_vi": "Pháo đầu đối Bình phong mã (D42)",
+  "name_zh": "中炮对屏风马",
+  "learner": "red",
+  "level": 1,
+  "summary_vi": "Đường chính hay gặp nhất trong 3217 ván (mã ECCO d42+c19). Central cannon vs left three-step tiger to opposite cannons — red left direct chariot",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon vs left three-step tiger to opposite cannons — red left (ECCO d42+c19)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "兵七进一",
+   "卒7进1",
+   "车二进六",
+   "炮8平9",
+   "车二平三",
+   "炮9退1"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-c92",
+  "name_vi": "Pháo đầu đối Bình phong mã (C92)",
+  "name_zh": "中炮对屏风马",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 605 ván (mã ECCO c92). 5-8 cannon mutual 3rd pawns vs screen horses — red left upright horse",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red left upright horse (ECCO c92)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "马八进九",
+   "卒7进1",
+   "炮八平七",
+   "车1平2",
+   "车九平八",
+   "炮2进4"
+  ]
+ },
+ {
+  "id": "r-xianren-feixiang-guogong-d52",
+  "name_vi": "Tiên nhân chỉ lộ, Pháo quá cung (D52)",
+  "name_zh": "仙人指路过宫炮",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 585 ván (mã ECCO d52). Central cannon + right direct chariot (other) vs deferred opposite cannons",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + right direct chariot (other) vs deferred opposite can (ECCO d52)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "炮五进四",
+   "士4进5",
+   "相七进五",
+   "马2进4",
+   "炮五退一",
+   "车1平2",
+   "马八进六",
+   "车9进1"
+  ]
+ },
+ {
+  "id": "r-paodau-fangong",
+  "name_vi": "Pháo đầu đối Phản cung mã",
+  "name_zh": "中炮对反宫马",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 398 ván (mã ECCO c54). 5-6 cannon + river chariot vs screen horses (other)",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-6 cannon + river chariot vs screen horses (other) (ECCO c54)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马2进3",
+   "马二进三",
+   "炮8平6",
+   "车一平二",
+   "马8进7",
+   "炮八平六",
+   "车1平2",
+   "马八进七",
+   "炮2平1",
+   "兵七进一",
+   "卒7进1"
+  ]
+ },
+ {
+  "id": "r-paodau-pao-c71",
+  "name_vi": "Pháo đầu đối Pháo (C71)",
+  "name_zh": "中炮对炮",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 391 ván (mã ECCO c71). 5-7 cannon vs screen horses + 3rd pawn + right horse outer river-link",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-7 cannon vs screen horses + 3rd pawn + right horse outer river-link (ECCO c71)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "炮8平5",
+   "马二进三",
+   "马8进7",
+   "车一平二",
+   "车9进1",
+   "马八进七",
+   "车9平4",
+   "兵三进一",
+   "卒3进1",
+   "车二进五",
+   "象3进1"
+  ]
+ },
+ {
+  "id": "r-paodau-pao-tot7",
+  "name_vi": "Pháo đầu đối Pháo, Đen tiến tốt 7",
+  "name_zh": "中炮对炮进7卒",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 254 ván (mã ECCO c05). Central cannon + left edge horse (other) vs screen horses",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + left edge horse (other) vs screen horses (ECCO c05)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "炮8平5",
+   "马二进三",
+   "马8进7",
+   "车一平二",
+   "卒7进1",
+   "马八进七",
+   "马2进3",
+   "兵七进一",
+   "炮2进4",
+   "马七进六",
+   "炮2平7"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-pao8",
+  "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến Pháo (C93)",
+  "name_zh": "中炮对屏风马进炮",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 204 ván (mã ECCO c93). 5-8 cannon mutual 3rd pawns vs screen horses — red left edge horse (vs black other)",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red left edge horse (vs (ECCO c93)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "炮8进4",
+   "兵三进一",
+   "炮2平5",
+   "马八进七",
+   "马2进3",
+   "车九平八",
+   "卒3进1"
+  ]
+ },
+ {
+  "id": "r-xianren-feixiang-d41",
+  "name_vi": "Tiên nhân chỉ lộ đối Phi tượng (D41)",
+  "name_zh": "仙人指路对飞相",
+  "learner": "red",
+  "level": 2,
+  "summary_vi": "Đường chính hay gặp nhất trong 179 ván (mã ECCO d41). Central cannon + central pawn vs left three-step tiger river chariot to opposite cannons",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + central pawn vs left three-step tiger river chariot t (ECCO d41)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "马二进三",
+   "卒3进1",
+   "车一平二",
+   "卒3进1",
+   "马八进九",
+   "马2进4",
+   "车九平八",
+   "士4进5"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-ngan",
+  "name_vi": "Pháo đầu đối Bình phong mã",
+  "name_zh": "中炮对屏风马",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 31 ván (mã ECCO b00). Central cannon vs other",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon vs other (ECCO b00)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7"
+  ]
+ },
+ {
+  "id": "r-xianren-tot7",
+  "name_vi": "Tiên nhân chỉ lộ đối Tốt 7",
+  "name_zh": "仙人指路对卒7",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 21 ván (mã ECCO d53). Central cannon + river chariot vs deferred opposite cannons",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + river chariot vs deferred opposite cannons (ECCO d53)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "卒7进1",
+   "炮二平三",
+   "炮2平5",
+   "兵三进一",
+   "马2进3",
+   "兵三进一",
+   "马8进9",
+   "相七进五",
+   "车1平2",
+   "马二进一",
+   "炮5进4"
+  ]
+ },
+ {
+  "id": "r-xianren-feixiang-guogong-c17",
+  "name_vi": "Tiên nhân chỉ lộ, Pháo quá cung (C17)",
+  "name_zh": "仙人指路过宫炮",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 11 ván (mã ECCO c17). Central cannon + river chariot (other) vs screen horses",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + river chariot (other) vs screen horses (ECCO c17)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "炮五进四",
+   "士4进5",
+   "相七进五",
+   "马2进4",
+   "炮五退一",
+   "车1平2",
+   "马八进六",
+   "卒7进1"
+  ]
+ },
+ {
+  "id": "r-paodau-fangong-xe",
+  "name_vi": "Pháo đầu đối Phản cung mã, Xe đối Xe",
+  "name_zh": "中炮对反宫马对车",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 10 ván (mã ECCO d55). Central cannon + twin direct chariots vs deferred opposite cannons",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + twin direct chariots vs deferred opposite cannons (ECCO d55)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马2进3",
+   "马二进三",
+   "炮2平1",
+   "车一平二",
+   "车1平2",
+   "马八进七",
+   "炮8平6",
+   "仕四进五",
+   "车2进6",
+   "车九进二",
+   "炮6进2"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-tot7",
+  "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến tốt 7",
+  "name_zh": "中炮对屏风马进7卒",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 9 ván (mã ECCO c82). Central cannon + riverrank cannon vs screen horses — black left elephant + right lateral chariot",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + riverrank cannon vs screen horses — black left elepha (ECCO c82)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "卒7进1",
+   "兵七进一",
+   "马2进3",
+   "马八进七",
+   "车9平8",
+   "炮八进二",
+   "象7进5"
+  ]
+ },
+ {
+  "id": "r-xianren-feixiang-xe9",
+  "name_vi": "Tiên nhân chỉ lộ đối Phi tượng, Đen lên Xe",
+  "name_zh": "仙人指路对飞相进车",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 7 ván (mã ECCO c98). 5-8 cannon mutual 3rd pawns vs screen horses — red cannon press horse",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns vs screen horses — red cannon press horse (ECCO c98)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "马二进三",
+   "车9进1",
+   "炮五进四",
+   "士4进5",
+   "相七进五",
+   "马2进4",
+   "炮五退一",
+   "车1平2"
+  ]
+ },
+ {
+  "id": "r-feixiang",
+  "name_vi": "Phi tượng cục",
+  "name_zh": "飞相局",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 4 ván (mã ECCO a10). Flying elephant vs other",
+  "sources": [
+   {
+    "title": "VietCoTuong: Flying elephant vs other (ECCO a10)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "相三进五",
+   "炮2平4"
+  ]
+ },
+ {
+  "id": "r-xianren-tot3",
+  "name_vi": "Tiên nhân chỉ lộ đối Tốt 3",
+  "name_zh": "仙人指路对卒3",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 3 ván (mã ECCO d36). Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — red two-headed snake",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — (ECCO d36)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "卒3进1",
+   "兵七进一",
+   "象3进5",
+   "兵七进一",
+   "马2进4",
+   "兵七平六",
+   "车1平3",
+   "相七进五",
+   "车3进8",
+   "仕六进五",
+   "车3平2"
+  ]
+ },
+ {
+  "id": "r-paodau-pao-cung",
+  "name_vi": "Pháo đầu đối Pháo, Pháo qua cung",
+  "name_zh": "中炮对炮过宫",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 2 ván (mã ECCO d25). Same-direction direct chariot vs lateral chariot — red palace cannon",
+  "sources": [
+   {
+    "title": "VietCoTuong: Same-direction direct chariot vs lateral chariot — red palace cannon (ECCO d25)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮八平六",
+   "炮8平5"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-c90",
+  "name_vi": "Pháo đầu đối Bình phong mã (C90)",
+  "name_zh": "中炮对屏风马",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO c90). 5-8 cannon vs screen horses (other)",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-8 cannon vs screen horses (other) (ECCO c90)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "兵七进一",
+   "卒7进1",
+   "马八进七",
+   "炮2进4"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-pao8tien",
+  "name_vi": "Pháo đầu đối Bình phong mã, Đen tiến Pháo (C91)",
+  "name_zh": "中炮对屏风马进炮",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO c91). 5-8 cannon mutual 3rd pawns (other) vs screen horses",
+  "sources": [
+   {
+    "title": "VietCoTuong: 5-8 cannon mutual 3rd pawns (other) vs screen horses (ECCO c91)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "炮8进1",
+   "炮八进四",
+   "卒3进1",
+   "兵三进一",
+   "炮2平7",
+   "马二进三"
+  ]
+ },
+ {
+  "id": "r-qima",
+  "name_vi": "Khởi mã cục",
+  "name_zh": "起马局",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO d33). Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — red 7th horse",
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + 3rd pawn vs left sealing cannon to opposite cannons — (ECCO d33)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "马八进七",
+   "卒3进1",
+   "兵三进一",
+   "马2进3",
+   "马二进三",
+   "车1进1",
+   "车九进一",
+   "车1平7",
+   "马三进二",
+   "卒7进1",
+   "兵三进一",
+   "车7进3"
+  ]
+ },
+ {
+  "id": "r-xianren-binh3",
+  "name_vi": "Tiên nhân chỉ lộ, Đỏ tiến tốt 3",
+  "name_zh": "仙人指路进3兵",
+  "learner": "red",
+  "level": 3,
+  "summary_vi": "Đường chính hay gặp nhất trong 1 ván (mã ECCO e00). Immortal guiding the way vs other",
+  "sources": [
+   {
+    "title": "VietCoTuong: Immortal guiding the way vs other (ECCO e00)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵三进一",
+   "卒7进1",
+   "兵三进一",
+   "象7进5",
+   "兵三进一",
+   "马8进6",
+   "兵三平四",
+   "车9平7",
+   "相三进五",
+   "车7进8",
+   "仕四进五",
+   "车7平8"
+  ]
+ },
+ {
+  "id": "r-paodau-pingfeng-tot7-c45",
+  "learner": "red",
+  "level": 2,
+  "name_vi": "Pháo đầu quá hà Xe đối Bình phong mã 卒7进1 (C45)",
+  "name_zh": "中炮过河车互进七兵对屏风马平炮兑车",
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "卒7进1",
+   "车二进六",
+   "马2进3",
+   "兵七进一",
+   "炮8平9",
+   "车二平三",
+   "炮9退1"
+  ],
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c45+c49)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "chasoft/community-xiangqi-games-database: selected-games + tournaments (92.931 ván thật 1956–2019)",
+    "url": "https://github.com/chasoft/community-xiangqi-games-database"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "summary_vi": "Đường chính hay gặp trong 1.098 ván thật (giải đấu + ván danh thủ 1956–2019, mã ECCO C45/C49). Bình phong mã 卒7进1 chiếm 27% sau thế Bình phong mã chuẩn 5 nước — hệ còn thiếu lớn nhất của bộ sách; Đỏ quá hà Xe rồi tiến tốt 7."
+ },
+ {
+  "id": "r-paodau-pingfeng-tot7-c23",
+  "learner": "red",
+  "level": 2,
+  "name_vi": "Pháo đầu quá hà Xe đối Bình phong mã Lưỡng đầu xà (C23)",
+  "name_zh": "中炮过河车七路马对屏风马两头蛇",
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "卒7进1",
+   "车二进六",
+   "马2进3",
+   "马八进七",
+   "卒3进1",
+   "车九进一",
+   "炮2进1"
+  ],
+  "sources": [
+   {
+    "title": "VietCoTuong: Central cannon + 7th-file horse vs screen horses — red central pawn vs (ECCO c23+c24)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "chasoft/community-xiangqi-games-database: selected-games + tournaments (92.931 ván thật 1956–2019)",
+    "url": "https://github.com/chasoft/community-xiangqi-games-database"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "summary_vi": "Đường chính hay gặp trong 886 ván thật (giải đấu + ván danh thủ 1956–2019, mã ECCO C23/C24). Bình phong mã 卒7进1, Đỏ lên Mã 7 (Lưỡng đầu xà) thay vì tiến tốt 7."
+ },
+ {
+  "id": "b-pingfeng-d42",
+  "name_vi": "Bình phong mã đối Pháo đầu (D42)",
+  "name_zh": "屏风马对中炮",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Đường chính của Bình phong mã đối Pháo đầu, hay gặp trong 2.264 ván thật (hệ 10.979 ván). Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pingfeng-d42.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Bình phong mã đối Pháo đầu (D42) (ECCO D42)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "兵七进一",
+   "卒7进1",
+   "车二进六",
+   "炮8平9",
+   "车二平三",
+   "炮9退1"
+  ]
+ },
+ {
+  "id": "b-pingfeng-c04",
+  "name_vi": "Bình phong mã đối Pháo đầu (C04)",
+  "name_zh": "屏风马对中炮",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Đường chính của Bình phong mã đối Pháo đầu, hay gặp trong 1.669 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pingfeng-c04.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Bình phong mã đối Pháo đầu (C04) (ECCO C04)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "兵三进一",
+   "卒3进1",
+   "马八进九",
+   "卒1进1",
+   "炮八平七",
+   "马3进2"
+  ]
+ },
+ {
+  "id": "b-pingfeng-tot7-c45",
+  "name_vi": "Bình phong mã 卒7进1 đối Pháo đầu quá hà Xe (C45)",
+  "name_zh": "屏风马卒7进1对中炮过河车",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Bình phong mã 卒7进1 đối Pháo đầu quá hà Xe, hay gặp trong 1.098 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pingfeng-tot7-c45.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Bình phong mã 卒7进1 đối Pháo đầu quá hà Xe (C45) (ECCO C45)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "卒7进1",
+   "车二进六",
+   "马2进3",
+   "兵七进一",
+   "炮8平9",
+   "车二平三",
+   "炮9退1"
+  ]
+ },
+ {
+  "id": "b-pingfeng-tot7-c23",
+  "name_vi": "Bình phong mã 卒7进1 đối Pháo đầu Lưỡng đầu xà (C23)",
+  "name_zh": "屏风马卒7进1对中炮两头蛇",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Bình phong mã 卒7进1 đối Pháo đầu Lưỡng đầu xà, hay gặp trong 886 ván thật. Đen chỉ thắng 14,1% ở đường này — bài nhấn mạnh phòng thủ. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pingfeng-tot7-c23.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Bình phong mã 卒7进1 đối Pháo đầu Lưỡng đầu xà (C23) (ECCO C23)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "卒7进1",
+   "车二进六",
+   "马2进3",
+   "马八进七",
+   "卒3进1",
+   "车九进一",
+   "炮2进1"
+  ]
+ },
+ {
+  "id": "b-pingfeng-c92",
+  "name_vi": "Bình phong mã đối Pháo đầu (C92)",
+  "name_zh": "屏风马对中炮",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Đường chính của Bình phong mã đối Pháo đầu, hay gặp trong 470 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pingfeng-c92.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Bình phong mã đối Pháo đầu (C92) (ECCO C92)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马8进7",
+   "马二进三",
+   "车9平8",
+   "车一平二",
+   "马2进3",
+   "马八进九",
+   "卒7进1",
+   "炮八平七",
+   "车1平2",
+   "车九平八",
+   "炮2进4"
+  ]
+ },
+ {
+  "id": "b-fangong",
+  "name_vi": "Phản cung mã đối Pháo đầu",
+  "name_zh": "反宫马对中炮",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Đường chính của Phản cung mã đối Pháo đầu, hay gặp trong 352 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-fangong.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Phản cung mã đối Pháo đầu (ECCO FANGONG)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马2进3",
+   "马二进三",
+   "炮8平6",
+   "车一平二",
+   "马8进7",
+   "炮八平六",
+   "车1平2",
+   "马八进七",
+   "炮2平1",
+   "兵七进一",
+   "卒7进1"
+  ]
+ },
+ {
+  "id": "b-xianren-feixiang-d29",
+  "name_vi": "Phi tượng đối Tiên nhân chỉ lộ (D29)",
+  "name_zh": "飞相对仙人指路",
+  "learner": "black",
+  "level": 2,
+  "summary_vi": "Đường chính của Phi tượng đối Tiên nhân chỉ lộ, hay gặp trong 359 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-xianren-feixiang-d29.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Phi tượng đối Tiên nhân chỉ lộ (D29) (ECCO D29)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "马二进三",
+   "卒3进1",
+   "车一平二",
+   "卒3进1",
+   "马八进九",
+   "车9进1",
+   "车九平八",
+   "车9平4"
+  ]
+ },
+ {
+  "id": "b-paodau-pao-c14",
+  "name_vi": "Pháo đối Pháo đầu (C14)",
+  "name_zh": "炮对中炮",
+  "learner": "black",
+  "level": 2,
+  "summary_vi": "Đường chính của Pháo đối Pháo đầu, hay gặp trong 295 ván thật. Người học cầm Đen (hậu thủ), cùng cây sách với bài Đỏ r-paodau-pao-c14.",
+  "sources": [
+   {
+    "title": "VietCoTuong: Pháo đối Pháo đầu (C14) (ECCO C14)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "炮8平5",
+   "马二进三",
+   "马8进7",
+   "车一平二",
+   "车9进1",
+   "马八进七",
+   "车9平4",
+   "兵三进一",
+   "马2进3",
+   "兵七进一",
+   "车1进1"
+  ]
+ },
+ {
+  "id": "b-fangong-wuqi-b55",
+  "name_vi": "Phản cung mã đối Pháo đầu, nhánh 兵三进一 (B55)",
+  "name_zh": "反宫马对中炮进三兵",
+  "learner": "black",
+  "level": 1,
+  "summary_vi": "Nhánh 兵三进一 hay gặp nhất của Phản cung mã, hay gặp trong 320 ván thật. Người học cầm Đen (hậu thủ).",
+  "sources": [
+   {
+    "title": "VietCoTuong: Phản cung mã đối Pháo đầu, nhánh 兵三进一 (B55) (ECCO B55)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "炮二平五",
+   "马2进3",
+   "马二进三",
+   "炮8平6",
+   "车一平二",
+   "马8进7",
+   "兵三进一",
+   "卒3进1",
+   "马八进九",
+   "象7进5",
+   "炮八平七",
+   "车1平2"
+  ]
+ },
+ {
+  "id": "b-xianren-feixiang-xe9-e25",
+  "name_vi": "Phi tượng đối Tiên nhân chỉ lộ, nhánh Xe 9 (E25)",
+  "name_zh": "飞相对仙人指路出车",
+  "learner": "black",
+  "level": 2,
+  "summary_vi": "Nhánh Xe 9 của Phi tượng đối Tiên nhân chỉ lộ (rẽ nước 6 của Đen so với bài D29), hay gặp trong 331 ván thật. Người học cầm Đen (hậu thủ).",
+  "sources": [
+   {
+    "title": "VietCoTuong: Phi tượng đối Tiên nhân chỉ lộ, nhánh Xe 9 (E25) (ECCO E25)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "兵七进一",
+   "炮2平3",
+   "炮二平五",
+   "象3进5",
+   "马二进三",
+   "车9进1",
+   "车一平二",
+   "车9平2",
+   "马八进七",
+   "马2进4",
+   "炮八平九",
+   "马8进9"
+  ]
+ },
+ {
+  "id": "b-feixiang-a28",
+  "name_vi": "Phi tượng đối Pháo đầu (A28)",
+  "name_zh": "飞相对中炮",
+  "learner": "black",
+  "level": 2,
+  "summary_vi": "Hệ Phi tượng đối Pháo đầu, hay gặp trong 114 ván thật. Người học cầm Đen (hậu thủ).",
+  "sources": [
+   {
+    "title": "VietCoTuong: Phi tượng đối Pháo đầu (A28) (ECCO A28)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "相三进五",
+   "炮8平5",
+   "马二进三",
+   "马8进7",
+   "车一平二",
+   "车9平8",
+   "马八进七",
+   "马2进1",
+   "兵三进一",
+   "炮2平4",
+   "车九平八",
+   "车1平2"
+  ]
+ },
+ {
+  "id": "b-qima-a45",
+  "name_vi": "Quỳ mã đối Pháo đầu (A45)",
+  "name_zh": "跪马对中炮",
+  "learner": "black",
+  "level": 2,
+  "summary_vi": "Hệ Quỳ mã đối Pháo đầu, hay gặp trong 52 ván thật. Cũng là đường sửa bài Đỏ r-qima đang sai phần sau. Người học cầm Đen (hậu thủ).",
+  "sources": [
+   {
+    "title": "VietCoTuong: Quỳ mã đối Pháo đầu (A45) (ECCO A45)",
+    "url": "https://explore.vietcotuong.com/badge/openings?lang=en"
+   },
+   {
+    "title": "ChessDB cloud database (đánh giá khai cuộc)",
+    "url": "https://www.chessdb.cn/cloudbook_api_en.html"
+   },
+   {
+    "title": "Pikafish 2026-09-06 (MultiPV=4, depth 12)",
+    "url": "https://github.com/official-pikafish/Pikafish"
+   }
+  ],
+  "prefix": [
+   "马八进七",
+   "卒3进1",
+   "兵三进一",
+   "马2进3",
+   "马二进三",
+   "车1进1",
+   "炮二平一",
+   "马8进7",
+   "车一平二",
+   "车9平8",
+   "车二进六",
+   "炮8平9"
+  ]
+ }
 ]
