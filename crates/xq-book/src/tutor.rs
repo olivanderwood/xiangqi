@@ -376,6 +376,43 @@ impl<'a> Tutor<'a> {
         })
     }
 
+    /// Undo the last move played through the Tutor (learner or
+    /// opponent), restoring the tree position, grades and off-book
+    /// state. Returns the undone move, or `None` when there is nothing
+    /// to undo. Used by the Learn screen's Undo button (Hieu,
+    /// 2026-11-12).
+    ///
+    /// In-book moves are a prefix of the move list (once off-book,
+    /// `node_path` stops growing), so the undone move was in-book
+    /// exactly when every move so far was in-book. Undoing past the
+    /// exit point puts the lesson back in the book and drops the
+    /// off-book snapshot, so a later off-book move takes a fresh one.
+    pub fn undo_ply(&mut self) -> Option<Move> {
+        let moves_before = self.game.moves.len();
+        let in_book = moves_before == self.node_path.len();
+        let mv = self.game.undo()?;
+        if in_book {
+            self.node_path.pop();
+        }
+        if self.game.pos.side() == self.lesson.learner.color() {
+            self.grades.pop();
+            if in_book {
+                self.book_moves = self.book_moves.saturating_sub(1);
+            }
+        }
+        if self.out_of_book {
+            if self.game.moves.len() <= self.exit_ply {
+                self.out_of_book = false;
+                self.plies_after_book = 0;
+                self.exit_ply = usize::MAX;
+                self.snapshot = None;
+            } else {
+                self.plies_after_book = self.game.moves.len().saturating_sub(self.exit_ply);
+            }
+        }
+        Some(mv)
+    }
+
     pub fn retry(&mut self) {
         let Some(snap) = self.snapshot.take() else {
             return;
@@ -453,6 +490,78 @@ impl<'a> Tutor<'a> {
         TutorEvent::YourTurn { book_moves }
     }
 
+    /// Peek at the book's next moves after the opponent's main reply,
+    /// WITHOUT playing anything (read-only). Returns the opponent's
+    /// main reply and the learner's book moves after it.
+    ///
+    /// Used to show the next moves immediately after the learner moves
+    /// (Hieu, 2026-11-12): the book knows the reply and the follow-ups
+    /// already, so the UI can show them at once instead of waiting for
+    /// the opponent's board move (600 ms) or for a live score. Returns
+    /// `None` when out of book, when the game is over, when it is the
+    /// learner's turn (use `suggestions()` then), or when there is no
+    /// book reply. The reply's score is negated to the learner's view
+    /// (stored from the opponent's view); the follow-ups' scores are
+    /// already from the learner's view (their parent is the reply node,
+    /// where the learner is to move).
+    #[must_use]
+    pub fn peek_next(&self) -> Option<(BookHint, Vec<BookHint>)> {
+        if self.out_of_book || self.game.result().is_over() {
+            return None;
+        }
+        if self.game.pos.side() == self.lesson.learner.color() {
+            return None;
+        }
+        let children = self.current_children();
+        let (reply_idx, reply_node) =
+            children
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.main)
+                .or_else(|| {
+                    children
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, n)| n.score_cp.unwrap_or(i32::MIN))
+                })?;
+        let reply_mv = self.parse_book_mv(&reply_node.mv)?;
+        let reply = BookHint {
+            mv: reply_mv,
+            mv_cn: reply_node.mv.clone(),
+            score: -reply_node.score_cp.unwrap_or(0),
+            explanation_vi: reply_node.note_vi.clone().unwrap_or_default(),
+        };
+        // The position the learner will face after that reply.
+        let mut scratch = Game::new(self.game.pos.clone());
+        scratch.play(reply_mv).ok()?;
+        let reply_pos = scratch.pos.clone();
+        // Learner's book moves after the reply: children of the reply
+        // node (path = current path + reply index).
+        let mut path = self.node_path.clone();
+        path.push(reply_idx);
+        let reply_children = crate::tree::node_at(&self.lesson.tree, &path)
+            .map(|n| n.next.as_slice())
+            .unwrap_or(&[]);
+        let mut follow: Vec<BookHint> = reply_children
+            .iter()
+            .filter_map(|n| {
+                let mv = parse_cn(&reply_pos, &n.mv)
+                    .or_else(|_| parse_wxf(&reply_pos, &n.mv))
+                    .ok()?;
+                Some(BookHint {
+                    mv,
+                    mv_cn: render_cn(&reply_pos, mv),
+                    score: n.score_cp.unwrap_or(0),
+                    explanation_vi: n.note_vi.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
+        follow.sort_by_key(|a| std::cmp::Reverse(a.score));
+        let scores: Vec<i32> = follow.iter().map(|h| h.score).collect();
+        follow.truncate(direction_count(&scores));
+        Some((reply, follow))
+    }
+
     #[must_use]
     pub fn progress_text(&self) -> String {
         format!(
@@ -466,6 +575,129 @@ impl<'a> Tutor<'a> {
 #[cfg(test)]
 mod tests {
     use super::direction_count;
+    use super::Tutor;
+    use super::TutorEvent;
+    use crate::schema::{BookNode, Learner, Lesson};
+    use xq_core::board::Position;
+    use xq_core::notation::parse_cn;
+
+    fn node(mv: &str, main: bool, score_cp: i32, next: Vec<BookNode>) -> BookNode {
+        BookNode {
+            mv: mv.to_string(),
+            note_vi: None,
+            next,
+            weight: 1.0,
+            main,
+            trap: false,
+            source_ref: None,
+            end: None,
+            score_cp: Some(score_cp),
+        }
+    }
+
+    /// 3-ply lesson: Red 炮二平五 -> Black 马8进7 (main) -> Red
+    /// 马二进三 / 兵七进一.
+    fn test_lesson() -> Lesson {
+        Lesson {
+            id: "test".to_string(),
+            name_vi: "Test".to_string(),
+            name_zh: "Test".to_string(),
+            learner: Learner::Red,
+            level: 1,
+            summary_vi: String::new(),
+            start_fen: None,
+            max_plies: 40,
+            sources: Vec::new(),
+            tree: vec![node(
+                "炮二平五",
+                true,
+                30,
+                vec![node(
+                    "马8进7",
+                    true,
+                    -10,
+                    vec![
+                        node("马二进三", true, 25, vec![]),
+                        node("兵七进一", false, 15, vec![]),
+                    ],
+                )],
+            )],
+        }
+    }
+
+    #[test]
+    fn peek_next_returns_reply_and_followups() {
+        let lesson = test_lesson();
+        let mut tutor = Tutor::new(&lesson, 0x1234_5678);
+        // Learner's turn at the start: no peek (use `suggestions()`).
+        assert!(tutor.peek_next().is_none());
+        // Learner plays the book move.
+        let mv = parse_cn(&Position::startpos(), "炮二平五").expect("parse first move");
+        tutor.on_user_move(mv);
+        // Now it is Black's turn: peek the reply + Red's follow-ups.
+        let (reply, follow) = tutor.peek_next().expect("peek after learner move");
+        assert_eq!(reply.mv_cn, "马8进7");
+        // Stored -10 from Black's view -> +10 from the learner's view.
+        assert_eq!(reply.score, 10);
+        assert_eq!(follow.len(), 2);
+        assert_eq!(follow[0].mv_cn, "马二进三");
+        assert_eq!(follow[0].score, 25);
+        assert_eq!(follow[1].mv_cn, "兵七进一");
+        assert_eq!(follow[1].score, 15);
+        // Peek is read-only: same result twice, position unchanged.
+        let (reply2, follow2) = tutor.peek_next().expect("peek again");
+        assert_eq!(reply2.mv_cn, reply.mv_cn);
+        assert_eq!(follow2.len(), follow.len());
+        assert_eq!(tutor.game.moves.len(), 1);
+    }
+
+    #[test]
+    fn undo_ply_restores_learner_turn() {
+        let lesson = test_lesson();
+        let mut tutor = Tutor::new(&lesson, 0x1234_5678);
+        let mv = parse_cn(&Position::startpos(), "炮二平五").expect("parse first move");
+        tutor.on_user_move(mv);
+        assert_eq!(tutor.game.moves.len(), 1);
+        assert_eq!(tutor.node_path.len(), 1);
+        assert_eq!(tutor.grades.len(), 1);
+        assert_eq!(tutor.book_moves, 1);
+        // Opponent replies (the only child: 马8进7).
+        let ev = tutor.next_opponent_move().expect("opponent reply");
+        assert!(matches!(ev, TutorEvent::OpponentMoves { .. }));
+        assert_eq!(tutor.game.moves.len(), 2);
+        assert_eq!(tutor.node_path.len(), 2);
+        assert_eq!(tutor.grades.len(), 1);
+        // Undo the opponent's reply: back to the learner's turn.
+        tutor.undo_ply().expect("undo opponent");
+        assert_eq!(tutor.game.moves.len(), 1);
+        assert_eq!(tutor.node_path.len(), 1);
+        assert_eq!(tutor.grades.len(), 1);
+        assert_eq!(tutor.book_moves, 1);
+        // Undo the learner's move: back to the start.
+        tutor.undo_ply().expect("undo learner");
+        assert_eq!(tutor.game.moves.len(), 0);
+        assert_eq!(tutor.node_path.len(), 0);
+        assert_eq!(tutor.grades.len(), 0);
+        assert_eq!(tutor.book_moves, 0);
+        assert!(tutor.undo_ply().is_none());
+    }
+
+    #[test]
+    fn undo_ply_restores_in_book_after_off_book() {
+        let lesson = test_lesson();
+        let mut tutor = Tutor::new(&lesson, 0x1234_5678);
+        // Legal off-book first move (the book teaches 炮二平五).
+        let mv = parse_cn(&Position::startpos(), "兵三进一").expect("parse off-book move");
+        tutor.on_user_move(mv);
+        assert!(tutor.out_of_book);
+        assert_eq!(tutor.node_path.len(), 0);
+        assert_eq!(tutor.grades.len(), 1);
+        tutor.undo_ply().expect("undo off-book");
+        assert!(!tutor.out_of_book);
+        assert_eq!(tutor.game.moves.len(), 0);
+        assert_eq!(tutor.grades.len(), 0);
+        assert_eq!(tutor.node_path.len(), 0);
+    }
 
     #[test]
     fn direction_count_keeps_three() {

@@ -76,6 +76,19 @@ impl ChessDbWorker {
             let client = ChessDbClient::new();
             let mut cache: HashMap<String, ChessDbEval> = HashMap::new();
             while let Ok(req) = req_rx.recv() {
+                // Cancel queued work (Hieu, 2026-11-12): when the user
+                // moves again while a request is in flight, newer
+                // requests queue up behind it. Only the latest position
+                // matters, so drop every older queued request without
+                // evaluating it — otherwise the worker falls behind and
+                // the section keeps showing stale "loading" for positions
+                // the user has already left. (The request already in
+                // flight still finishes; its response is then ignored
+                // by `req_id` on the UI side.)
+                let mut req = req;
+                while let Ok(newer) = req_rx.try_recv() {
+                    req = newer;
+                }
                 let ChessDbRequest::Evaluate { fen, req_id } = req;
                 let result = match cache.get(&fen) {
                     Some(hit) => Ok(hit.clone()),

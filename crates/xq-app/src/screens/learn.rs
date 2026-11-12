@@ -50,6 +50,13 @@ pub struct LearnState {
     pub hint_hover: Option<usize>,
     pub hide_hints: bool,
     pub hint_ply: Option<usize>,
+    /// Next moves preview (Hieu, 2026-11-12): the opponent's main
+    /// reply + the learner's book moves after it, shown immediately
+    /// after the learner moves — before the opponent's board move and
+    /// before any live score. Set in `play_user_move` (in-book) from
+    /// `Tutor::peek_next`; cleared when the opponent moves, when the
+    /// learner moves again, or on retry / new lesson.
+    pub next_preview: Option<(BookHint, Vec<BookHint>)>,
     /// The opponent's variations are on screen for the learner to pick
     /// (§8): set when the opponent's turn comes and it has 2+ children.
     pub show_opponent_choice: bool,
@@ -92,6 +99,7 @@ impl LearnState {
             hint_hover: None,
             hide_hints: false,
             hint_ply: None,
+            next_preview: None,
             show_opponent_choice: false,
             opponent_ai_req: None,
             last_grade: None,
@@ -217,6 +225,7 @@ impl LearnState {
         self.hint_hover = None;
         self.hide_hints = false;
         self.hint_ply = None;
+        self.next_preview = None;
         self.show_opponent_choice = false;
         self.opponent_ai_req = None;
         self.last_grade = None;
@@ -352,8 +361,14 @@ impl LearnState {
                 self.tutor_message = explanation_vi;
                 if in_book {
                     self.opponent_due = Some(now + 0.6);
+                    // Show the next book moves at once (Hieu, 2026-11-12):
+                    // the opponent's main reply + the learner's moves
+                    // after it, from the book — before the opponent's
+                    // board move and before any live score arrives.
+                    self.next_preview = self.tutor.as_ref().and_then(|t| t.peek_next());
                 } else {
                     self.off_book_pending = true;
+                    self.next_preview = None;
                 }
                 self.maybe_complete();
             }
@@ -391,6 +406,10 @@ impl LearnState {
                 self.grade_pos = Some(pos_before.clone());
                 self.graded_best.push(best.map(|b| (b, pos_before.clone())));
                 self.tutor_message = expl;
+                // No Tutor attached: no peek (the tree position is not
+                // tracked here), so no preview; hints refresh after the
+                // opponent moves as before.
+                self.next_preview = None;
                 if in_book {
                     self.opponent_due = Some(now + 0.6);
                 } else {
@@ -401,7 +420,73 @@ impl LearnState {
         }
     }
 
-    fn retry(&mut self) {
+    /// Cancel a pending out-of-book opponent AI calculation (Hieu,
+    /// 2026-11-12): the learner moved on (retry / undo), so the
+    /// engine's answer for the old position is useless. Stops the
+    /// engine and clears the request id; a stale response that still
+    /// arrives is dropped by `req_id` in `poll`.
+    fn cancel_opponent_ai(&mut self, worker: &crate::ai_worker::AiWorker) {
+        if self.opponent_ai_req.is_some() {
+            worker.request_stop();
+            self.opponent_ai_req = None;
+        }
+    }
+
+    /// Undo (Hieu, 2026-11-12): go back to before the learner's last
+    /// move so they can try a different one. Cancels a pending
+    /// opponent move / AI calculation first. Undoes the opponent's
+    /// reply too when it has already been played. Returns `false`
+    /// when there is nothing to undo.
+    ///
+    /// The Tutor is undone in step, but only for moves it actually
+    /// played: out-of-book AI opponent moves live only in the
+    /// screen's game, so the Tutor is undone only when its last move
+    /// is the move just undone here.
+    pub fn undo(&mut self, worker: &crate::ai_worker::AiWorker) -> bool {
+        self.cancel_opponent_ai(worker);
+        self.opponent_due = None;
+        self.show_opponent_choice = false;
+        self.off_book_pending = false;
+        self.next_preview = None;
+        self.complete = None;
+        self.show_complete_dialog = false;
+        let Some(learner) = self.learner_color() else {
+            return false;
+        };
+        if self.game.moves.is_empty() {
+            return false;
+        }
+        let mut undone_any = false;
+        while let Some(mv) = self.game.undo() {
+            if let Some(tutor) = &mut self.tutor {
+                if tutor.game.moves.last() == Some(&mv) {
+                    tutor.undo_ply();
+                }
+            }
+            undone_any = true;
+            // The side to move now made the undone move: stop once a
+            // learner move has been undone.
+            if self.game.pos.side() == learner {
+                break;
+            }
+        }
+        if !undone_any {
+            return false;
+        }
+        self.sync_from_tutor();
+        self.graded_best.truncate(self.grades.len());
+        self.last_move = self.game.moves.last().copied();
+        self.anim = None;
+        self.last_grade = None;
+        self.grade_pos = None;
+        self.hint_ply = None;
+        self.tutor_message = i18n::t(Key::YourTurnLearn).to_string();
+        self.board.clear();
+        true
+    }
+
+    fn retry(&mut self, worker: &crate::ai_worker::AiWorker) {
+        self.cancel_opponent_ai(worker);
         if let Some(tutor) = &mut self.tutor {
             tutor.retry();
         }
@@ -412,6 +497,7 @@ impl LearnState {
         self.anim = None;
         self.last_grade = None;
         self.grade_pos = None;
+        self.next_preview = None;
         self.off_book_pending = false;
         self.show_opponent_choice = false;
         self.tutor_message = i18n::t(Key::YourTurnLearn).to_string();
@@ -542,6 +628,9 @@ impl LearnState {
     }
 
     fn after_opponent_move(&mut self) {
+        // The preview is consumed: the opponent has moved, the learner's
+        // turn is back and `refresh_hints` below shows the real hints.
+        self.next_preview = None;
         if self.out_of_book {
             self.plies_after_book += 1;
         }
@@ -792,11 +881,27 @@ impl XiangqiApp {
         ui.label(lesson.name_zh.clone());
         let remaining = self.learn.main_branch_remaining();
         let total_est = self.learn.game.moves.len() + remaining;
-        ui.label(
-            i18n::t(Key::ProgressMoves)
-                .replace("{n}", &self.learn.game.moves.len().to_string())
-                .replace("{m}", &total_est.to_string()),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                i18n::t(Key::ProgressMoves)
+                    .replace("{n}", &self.learn.game.moves.len().to_string())
+                    .replace("{m}", &total_est.to_string()),
+            );
+            // Undo (Hieu, 2026-11-12): back to before the learner's
+            // last move, so they can try a different one. Disabled
+            // when there is nothing to undo.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_undo = self.learn.started
+                    && self.learn.complete.is_none()
+                    && !self.learn.game.moves.is_empty();
+                if ui
+                    .add_enabled(can_undo, egui::Button::new(i18n::t(Key::Undo)))
+                    .clicked()
+                {
+                    self.learn.undo(&self.worker);
+                }
+            });
+        });
         ui.separator();
         section_title(ui, i18n::t(Key::TutorTitle));
         ui.label(self.learn.tutor_message.clone());
@@ -821,6 +926,52 @@ impl XiangqiApp {
                     i18n::t(Key::BookMoveShouldBe)
                         .replace("{name}", &self.render_move(pos_before, *best)),
                 );
+            }
+        }
+        // Next moves from the book, shown at once after the learner's
+        // move (Hieu, 2026-11-12) — before the opponent's board move
+        // and before any live score. The opponent's main reply, then
+        // the learner's book moves after it. Display-only: it is the
+        // opponent's turn, so these cannot be played yet.
+        if let Some((reply, follow)) = &self.learn.next_preview {
+            ui.separator();
+            section_title(ui, i18n::t(Key::NextMovesTitle));
+            ui.horizontal(|ui| {
+                ui.label(
+                    i18n::t(Key::NextMovesOpponent)
+                        .replace("{name}", &self.render_move(&self.learn.game.pos, reply.mv)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    advantage_chip_ui(ui, reply.score);
+                });
+            });
+            if !follow.is_empty() {
+                ui.label(i18n::t(Key::NextMovesFollow));
+                // Position after the opponent's reply, to render the
+                // follow-up moves in the user's notation.
+                let mut after = self.learn.game.pos.clone();
+                {
+                    let mut scratch = Game::new(after.clone());
+                    let _ = scratch.play(reply.mv);
+                    after = scratch.pos.clone();
+                }
+                for (i, hint) in follow.iter().take(4).enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{}.", i + 1))
+                                .strong()
+                                .size(24.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(self.render_move(&after, hint.mv))
+                                .strong()
+                                .size(22.0),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            advantage_chip_ui(ui, hint.score);
+                        });
+                    });
+                }
             }
         }
         // ChessDB: a separate live score for the current position.
@@ -1002,7 +1153,7 @@ impl XiangqiApp {
                 });
             });
         if retry {
-            self.learn.retry();
+            self.learn.retry(&self.worker);
         } else if cont {
             let now = ctx.input(|i| i.time);
             self.learn.continue_off_book(now);
