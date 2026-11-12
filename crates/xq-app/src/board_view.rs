@@ -633,13 +633,27 @@ pub fn draw_board(
 
     // Pieces.
     let radius = 0.44 * cell;
+    // During a slide animation the moving piece is drawn once, at its
+    // interpolated position below — not at its destination square. The
+    // old code skipped `anim_from`, but `pos` is the position AFTER the
+    // move, so the from-square is already empty and the skip was a
+    // no-op: the piece showed at the destination (from `pos`) AND as
+    // the sliding piece (at the old square when progress = 0), i.e. a
+    // duplicated piece at the old square (Hieu, 2026-11-12, after
+    // continuing from a lesson). Skip the destination only while the
+    // animation is still running; once it finishes (`progress` is
+    // `None`) the piece is drawn at its destination normally.
     let anim_from = draw.anim.map(|a| a.mv.from);
+    let anim_to = draw
+        .anim
+        .filter(|a| a.progress(draw.now).is_some())
+        .map(|a| a.mv.to);
     let drag_sq = draw.drag.map(|(sq, _)| sq);
     for sq in 0..90u8 {
         let Some(piece) = pos.piece_at(sq) else {
             continue;
         };
-        if Some(sq) == anim_from || Some(sq) == drag_sq {
+        if Some(sq) == anim_from || Some(sq) == anim_to || Some(sq) == drag_sq {
             continue; // drawn at its animated / dragged position below
         }
         let scale = if draw.selected == Some(sq) { 1.08 } else { 1.0 };
