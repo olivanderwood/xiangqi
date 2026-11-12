@@ -580,6 +580,10 @@ impl XiangqiApp {
         self.vs_ai.poll(&mut self.pending_ai, ctx, now, animate);
         self.vs_ai.maybe_trigger_ai(&mut self.worker);
         self.vs_ai.maybe_auto_hint(&mut self.worker);
+        // ChessDB: a separate live score for the position on display.
+        // One request per position change; the section shows it.
+        let fen = self.vs_ai_display_pos().to_fen();
+        self.poll_chessdb(&fen, ctx);
         // Keep repainting while a move slides or the check flash is fresh.
         if self.vs_ai.anim.is_some_and(|a| a.progress(now).is_some())
             || self.vs_ai.check_since.is_some_and(|s| now - s < 1.0)
@@ -777,6 +781,8 @@ impl XiangqiApp {
         if let Some(msg) = &self.vs_ai.draw_message {
             ui.label(msg.clone());
         }
+        // ChessDB: a separate live score for the position on display.
+        self.chessdb_section_ui(ui, &pos);
         ui.separator();
         // Game info.
         let (side_txt, diff_txt) = match self.vs_ai.opponent {

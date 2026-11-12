@@ -1,0 +1,11 @@
+[package]
+name = "xq-chessdb"
+version = "0.1.0"
+edition = "2021"
+description = "ChessDB cloud database client — a separate live scoring system for the Xiangqi app"
+license = "MIT"
+
+[dependencies]
+# Blocking HTTP client (the app calls ChessDB from a worker thread).
+# No TLS: ChessDB is plain HTTP, and the crate never touches HTTPS.
+ureq = { version = "2", default-features = false }

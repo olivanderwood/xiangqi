@@ -110,6 +110,11 @@ pub enum Key {
     AboutNnue,
     OpenEngineFolder,
     OpenEngineLog,
+    ChessDbTitle,
+    ChessDbLoading,
+    ChessDbNoData,
+    ChessDbWinRate,
+    ChessDbBestMove,
 }
 
 #[must_use]
@@ -220,6 +225,11 @@ pub fn t(key: Key) -> &'static str {
         Key::AboutNnue => "Mạng nơ-ron pikafish.nnue chỉ dùng phi thương mại (xem NNUE-License).",
         Key::OpenEngineFolder => "Mở thư mục engine",
         Key::OpenEngineLog => "Mở engine.log",
+        Key::ChessDbTitle => "Điểm ChessDB",
+        Key::ChessDbLoading => "Đang lấy điểm ChessDB…",
+        Key::ChessDbNoData => "ChessDB chưa có dữ liệu cho thế cờ này",
+        Key::ChessDbWinRate => "Đỏ thắng {n}% • Hòa {m}% • Thua {k}%",
+        Key::ChessDbBestMove => "Nước tốt nhất: {name}",
     }
 }
 

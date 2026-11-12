@@ -134,7 +134,9 @@ fn menu_to_learn_plays_book_move() {
     harness.run_ok();
     harness.get_by_label("Đi tiên (cầm Đỏ)").click();
     harness.run_ok();
-    harness.get_by_label_contains("Pháo đầu Xe qua hà").click();
+    harness
+        .get_by_label_contains("Pháo đầu đối Bình phong mã (C04)")
+        .click();
     harness.run_ok();
     harness.get_by_label("Bắt đầu").click();
     harness.run_ok();
@@ -211,7 +213,7 @@ fn menu_to_learn_select_shows_lessons_for_each_side() {
     if red_count > 0 {
         assert!(
             harness
-                .query_by_label_contains("Pháo đầu Xe qua hà đối Bình phong mã")
+                .query_by_label_contains("Pháo đầu đối Bình phong mã (C04)")
                 .is_some(),
             "red lesson list should show the sample lesson"
         );
@@ -220,16 +222,15 @@ fn menu_to_learn_select_shows_lessons_for_each_side() {
     harness.run_ok();
     let black_count = harness.state().book.by_learner(xq_core::Color::Black).len();
     if black_count == 0 {
-        // The book currently ships only the 1 sample lesson (M4 not done);
-        // the screen must say so instead of showing an empty list.
+        // §9: the data-driven book has only Red-learner lessons, so
+        // the Black side has no lessons; the screen must say so
+        // instead of showing an empty list.
         assert!(
             harness
                 .query_by_label_contains("Chưa có bài học cho bên này.")
                 .is_some(),
             "empty side should show the empty-state text"
         );
-    } else {
-        assert_eq!(black_count, 12, "full book has 12 black lessons (§5.1)");
     }
 }
 

@@ -6,6 +6,7 @@
 
 use crate::ai_worker::{AiResponse, AiWorker};
 use crate::board_view::eval_bar_fraction;
+use crate::chessdb_worker::{ChessDbResponse, ChessDbView, ChessDbWorker};
 use crate::engine_log::EngineLog;
 use crate::engine_manager::{open_folder, spawn_install, EngineEvent};
 use crate::i18n::{self, Key};
@@ -47,6 +48,16 @@ pub struct XiangqiApp {
     /// Buffered centrally so switching screens mid-search cannot lose a
     /// response another screen is still waiting for.
     pub pending_ai: Vec<AiResponse>,
+    /// ChessDB worker (a separate live scoring system, §ChessDB): one
+    /// request per position change, answered on its own thread.
+    pub chessdb: ChessDbWorker,
+    /// What the ChessDB section shows for the current position.
+    pub chessdb_view: ChessDbView,
+    /// `req_id` of the ChessDB evaluation the UI is waiting for.
+    pub chessdb_req_id: Option<u64>,
+    /// FEN of the last position a ChessDB evaluation was requested for
+    /// (avoids re-asking for the same position every frame).
+    pub chessdb_last_fen: Option<String>,
     pub vs_ai: VsAiState,
     pub learn_select: LearnSelectState,
     pub learn: LearnState,
@@ -252,6 +263,10 @@ impl XiangqiApp {
             book,
             worker: AiWorker::new(engine.clone()),
             pending_ai: Vec::new(),
+            chessdb: ChessDbWorker::new(),
+            chessdb_view: ChessDbView::Idle,
+            chessdb_req_id: None,
+            chessdb_last_fen: None,
             vs_ai: VsAiState::new(engine.clone()),
             learn_select: LearnSelectState::new(),
             learn: LearnState::new(engine.clone()),
@@ -271,6 +286,86 @@ impl XiangqiApp {
         match self.settings.notation {
             NotationChoice::Chinese => notation::render_cn(pos, mv),
             NotationChoice::Vietnamese => notation::render_vn(pos, mv),
+        }
+    }
+
+    /// Drain ChessDB responses and (re)request when the position
+    /// changed. Called once per frame by the active screen with its
+    /// current FEN. A request goes out only when the FEN differs from
+    /// the last one asked about, so a frame costs one string compare
+    /// and a position change costs one HTTP call (cached per FEN in
+    /// the worker). Stale responses (overtaken by the next move) are
+    /// dropped by `req_id`.
+    pub fn poll_chessdb(&mut self, fen: &str, ctx: &egui::Context) {
+        while let Ok(resp) = self.chessdb.rx.try_recv() {
+            let ChessDbResponse::Evaluated { req_id, result } = resp;
+            if !crate::chessdb_worker::response_is_current(req_id, self.chessdb_req_id) {
+                continue;
+            }
+            self.chessdb_req_id = None;
+            self.chessdb_view = match result {
+                Ok(eval) => {
+                    if eval.top.is_empty() {
+                        ChessDbView::Unavailable(i18n::t(Key::ChessDbNoData).to_string())
+                    } else {
+                        ChessDbView::Ready(eval)
+                    }
+                }
+                Err(err) => ChessDbView::Unavailable(err.to_string()),
+            };
+            ctx.request_repaint();
+        }
+        if self.chessdb_last_fen.as_deref() != Some(fen) {
+            self.chessdb_last_fen = Some(fen.to_string());
+            let req_id = self.chessdb.request(fen.to_string());
+            self.chessdb_req_id = Some(req_id);
+            self.chessdb_view = ChessDbView::Loading;
+        }
+    }
+
+    /// The ChessDB section (a separate live scoring system): the
+    /// position score, Red's win/draw/loss, and the best move, for the
+    /// current position. The score and the rates are from Red's
+    /// perspective (ChessDB's own convention), matching the eval bar;
+    /// the section is a second opinion next to the app's own advantage
+    /// chip, not a replacement for it. Shown in both the Play-vs-AI
+    /// and Learn panels. `pos` is the position the section is about
+    /// (used to render the best move in the user's notation).
+    pub fn chessdb_section_ui(&self, ui: &mut egui::Ui, pos: &Position) {
+        section_title(ui, i18n::t(Key::ChessDbTitle));
+        match &self.chessdb_view {
+            ChessDbView::Idle | ChessDbView::Loading => {
+                ui.label(i18n::t(Key::ChessDbLoading));
+            }
+            ChessDbView::Ready(eval) => {
+                if let Some(score) = eval.score {
+                    ui.horizontal(|ui| {
+                        advantage_chip_ui(ui, score);
+                        if let Some(best) = eval.top.first() {
+                            ui.label(
+                                i18n::t(Key::ChessDbWinRate)
+                                    .replace("{n}", &format!("{:.0}", best.winrate))
+                                    .replace("{m}", &format!("{:.0}", best.drawrate))
+                                    .replace("{k}", &format!("{:.0}", best.lossrate)),
+                            );
+                        }
+                    });
+                }
+                if let Some(best) = eval.top.first() {
+                    // The best move in the user's notation; fall back
+                    // to the raw ICCS when it does not parse (it always
+                    // should — the FEN and the move come from ChessDB
+                    // for this same position).
+                    let name = notation::parse_iccs(&best.mv)
+                        .ok()
+                        .map(|mv| self.render_move(pos, mv))
+                        .unwrap_or_else(|| best.mv.clone());
+                    ui.label(i18n::t(Key::ChessDbBestMove).replace("{name}", &name));
+                }
+            }
+            ChessDbView::Unavailable(msg) => {
+                ui.label(msg);
+            }
         }
     }
 

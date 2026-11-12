@@ -437,6 +437,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,6 +558,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "build-lessons"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "xq-core",
 ]
 
 [[package]]
@@ -2776,7 +2791,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
 dependencies = [
- "base64",
+ "base64 0.21.7",
  "bitflags 2.13.2",
  "serde",
  "serde_derive",
@@ -3452,6 +3467,18 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "once_cell",
+ "url",
+]
 
 [[package]]
 name = "url"
@@ -4269,6 +4296,7 @@ dependencies = [
  "ttf-parser",
  "winresource",
  "xq-book",
+ "xq-chessdb",
  "xq-core",
  "xq-engine",
  "xq-pikafish",
@@ -4283,6 +4311,13 @@ dependencies = [
  "serde_json",
  "ttf-parser",
  "xq-core",
+]
+
+[[package]]
+name = "xq-chessdb"
+version = "0.1.0"
+dependencies = [
+ "ureq",
 ]
 
 [[package]]

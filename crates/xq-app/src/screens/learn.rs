@@ -637,6 +637,9 @@ impl XiangqiApp {
         let animate = self.settings.animate;
         // Poll engine answers (hints / out-of-book opponent moves).
         self.learn.poll(&mut self.pending_ai, ctx, now, animate);
+        // ChessDB: a separate live score for the current position.
+        let fen = self.learn.game.pos.to_fen();
+        self.poll_chessdb(&fen, ctx);
         // First frame after starting (or after the opponent's AI move):
         // (re)build hints for the learner's turn.
         if self.learn.started
@@ -820,6 +823,9 @@ impl XiangqiApp {
                 );
             }
         }
+        // ChessDB: a separate live score for the current position.
+        let pos = self.learn.game.pos.clone();
+        self.chessdb_section_ui(ui, &pos);
         ui.separator();
         if self.learn.show_opponent_choice {
             // Opponent variations (§8): the learner picks which prepared

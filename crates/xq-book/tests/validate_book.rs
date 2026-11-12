@@ -11,32 +11,41 @@ use xq_core::board::Position;
 use xq_core::notation::{parse_cn, parse_wxf};
 use xq_core::types::Move;
 
-const EXPECTED_IDS: [&str; 25] = [
-    "r-zhongpao-pingfeng",
-    "r-shunpao-hengche",
-    "r-vs-yuanyang",
+/// §9 (VietCoTuong + chasoft real games): the 26 data-driven lessons.
+/// All are Red-learner (every main line starts with a Red move); the ids
+/// come from `data/lessons-src-new.json` (system + primary ECCO code).
+/// `r-gongpao` was dropped (Hieu, 2026-11-12): its 2-game main line
+/// is a 9-ply forced mate, not a real opening. `r-paodau-pingfeng-tot7-c45`
+/// and `r-paodau-pingfeng-tot7-c23` were added (Hieu, 2026-11-12) from
+/// the 92,931 real games in chasoft selected-games + tournaments:
+/// Bình phong mã 卒7进1, the biggest gap in the 24-lesson book.
+const EXPECTED_IDS: [&str; 26] = [
+    "r-paodau-pingfeng-c04",
+    "r-paodau-pao-c14",
+    "r-xianren-feixiang-d29",
+    "r-paodau-pingfeng-d42",
+    "r-paodau-pingfeng-c92",
+    "r-xianren-feixiang-guogong-d52",
+    "r-paodau-fangong",
+    "r-paodau-pao-c71",
+    "r-paodau-pao-tot7",
+    "r-paodau-pingfeng-pao8",
+    "r-xianren-feixiang-d41",
+    "r-paodau-pingfeng-ngan",
+    "r-xianren-tot7",
+    "r-xianren-feixiang-guogong-c17",
+    "r-paodau-fangong-xe",
+    "r-paodau-pingfeng-tot7",
+    "r-xianren-feixiang-xe9",
     "r-feixiang",
-    "r-xianren",
-    "r-guogong",
-    "r-shunpao",
-    "r-liepao",
+    "r-xianren-tot3",
+    "r-paodau-pao-cung",
+    "r-paodau-pingfeng-c90",
+    "r-paodau-pingfeng-pao8tien",
     "r-qima",
-    "r-xunhepao",
-    "r-shijiaopao",
-    "r-jingoupao",
-    "r-paodau-phituong-maquy",
-    "b-pingfeng",
-    "b-yuanyang",
-    "b-chuangong",
-    "b-fangong",
-    "b-shunpao",
-    "b-zudipao",
-    "b-dantima",
-    "b-vs-feixiang",
-    "b-vs-guogong",
-    "b-vs-qima",
-    "b-vs-xunhepao",
-    "b-vs-liepao",
+    "r-xianren-binh3",
+    "r-paodau-pingfeng-tot7-c45",
+    "r-paodau-pingfeng-tot7-c23",
 ];
 
 fn load() -> Book {
@@ -92,7 +101,7 @@ fn is_cjk(c: char) -> bool {
 #[test]
 fn book_parses() {
     let book = load();
-    assert_eq!(book.lessons.len(), 25, "phải có 25 bài học");
+    assert_eq!(book.lessons.len(), 26, "phải có 26 bài học");
 }
 
 #[test]
@@ -298,12 +307,14 @@ fn sources_present() {
 }
 
 #[test]
-fn twenty_five_lessons() {
+fn twenty_six_lessons() {
     let book = load();
     let reds = book.by_learner(xq_core::Color::Red).len();
     let blacks = book.by_learner(xq_core::Color::Black).len();
-    assert_eq!(reds, 13, "phải có đúng 13 bài red, gặp {reds}");
-    assert_eq!(blacks, 12, "phải có đúng 12 bài black, gặp {blacks}");
+    // §9: every data-driven main line starts with a Red move, so all
+    // 26 lessons are Red-learner (no Black-learner lessons in this set).
+    assert_eq!(reds, 26, "phải có đúng 26 bài red, gặp {reds}");
+    assert_eq!(blacks, 0, "phải có đúng 0 bài black, gặp {blacks}");
     for id in EXPECTED_IDS {
         assert!(book.by_id(id).is_some(), "thiếu bài {id}");
     }
