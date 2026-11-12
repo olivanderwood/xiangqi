@@ -14,7 +14,7 @@ use crate::board_view::{
 };
 use crate::i18n::{self, Key};
 use std::time::{SystemTime, UNIX_EPOCH};
-use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
+use xq_core::analysis::Grade;
 use xq_core::board::Position;
 use xq_core::eval;
 use xq_core::game::{Game, GameResult};
@@ -72,6 +72,16 @@ pub struct VsAiState {
     pub auto_hint: bool,
     pub from_learn: bool,
     pub last_grade: Option<(Grade, String)>,
+    /// A move grade waiting to be sent to the worker (Hieu, 2026-11-12):
+    /// (the engine request for the position before the human's move,
+    /// the move). Recorded in `play()` — the piece is placed first —
+    /// and sent in `maybe_send_grade` after the AI's own request, so
+    /// the grade never delays the AI's reply. The grade arrives later
+    /// as a `Graded` response.
+    pub pending_grade: Option<(EngineRequest, Move)>,
+    /// Request id of a grade sent to the worker; a `Graded` response
+    /// with another id is stale and dropped.
+    pub grade_req_id: Option<u64>,
     pub last_board: Option<(egui::Rect, BoardGeometry)>,
     /// Seed for this game's diverse/weaken picks (§5: same seed +
     /// same position → same pick, so a replay reproduces the game).
@@ -121,6 +131,8 @@ impl VsAiState {
             auto_hint: false,
             from_learn: false,
             last_grade: None,
+            pending_grade: None,
+            grade_req_id: None,
             last_board: None,
             game_seed: new_seed(),
             custom_elo: 1900,
@@ -160,26 +172,20 @@ impl VsAiState {
         if self.game.play(mv).is_err() {
             return;
         }
-        // Grade the move in continue-from-learn mode (§6.5).
+        // Grade the move in continue-from-learn mode (§6.5) — but NOT
+        // here, not synchronously (Hieu, 2026-11-12): `best_move` +
+        // `score_move` on the UI thread froze the board for seconds at
+        // the move placement. The piece is placed first (below); the
+        // grade is recorded as pending and sent to the worker after the
+        // AI's own request, so it arrives later and never delays the
+        // AI's reply. See `maybe_send_grade` + `AiResponse::Graded`.
         if self.from_learn && Some(mover) == self.human_color() {
             let req = EngineRequest::new(
                 self.game.start.to_fen(),
                 moves_before,
                 self.engine.lock().expect("engine lock").grade_limits(),
             );
-            let handle = self.engine.clone();
-            let mut engine = handle.lock().expect("engine lock");
-            if let Ok(best) = engine.best_move(&req, &mut |_| {}) {
-                let best_cp = best.score.to_cp_clamped();
-                let mv_cp = engine
-                    .score_move(&req, mv)
-                    .map(|s| s.to_cp_clamped())
-                    .unwrap_or(best_cp);
-                let grade =
-                    grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
-                let expl = explain_tags(&tags_for(&pos_before, mv));
-                self.last_grade = Some((grade, expl));
-            }
+            self.pending_grade = Some((req, mv));
         }
         self.last_move = Some(mv);
         self.anim = if animate {
@@ -256,6 +262,8 @@ impl VsAiState {
         self.result_ack = true;
         self.draw_message = None;
         self.last_grade = None;
+        self.pending_grade = None;
+        self.grade_req_id = None;
         self.auto_hint = false;
         self.from_learn = false;
         self.started = true;
@@ -295,6 +303,8 @@ impl VsAiState {
         self.result_ack = !self.game.result().is_over();
         self.draw_message = None;
         self.last_grade = None;
+        self.pending_grade = None;
+        self.grade_req_id = None;
         self.auto_hint = true;
         self.from_learn = true;
         self.started = true;
@@ -310,6 +320,10 @@ impl VsAiState {
             self.ai_req_id = None;
             self.diverse_req_id = None;
         }
+        // A grade for the undone move is useless now; drop it (a stale
+        // `Graded` response is ignored by `req_id` in `poll`).
+        self.pending_grade = None;
+        self.grade_req_id = None;
         let steps = match self.opponent {
             VsOpponent::Ai { .. } => 2,
             VsOpponent::TwoPlayer => 1,
@@ -371,6 +385,9 @@ impl VsAiState {
                     response_is_current(*req_id, self.diverse_req_id)
                         || response_is_current(*req_id, self.hint_req_id)
                 }
+                AiResponse::Graded { req_id, .. } => {
+                    response_is_current(*req_id, self.grade_req_id)
+                }
             };
             if !mine {
                 i += 1;
@@ -418,6 +435,15 @@ impl VsAiState {
                             HintArrow::for_rank(l.mv.from, l.mv.to, j, horse)
                         })
                         .collect();
+                    ctx.request_repaint();
+                }
+                AiResponse::Graded {
+                    grade, explanation, ..
+                } => {
+                    // The grade for the human's move, computed on the
+                    // worker after the piece was placed (Hieu, 2026-11-12).
+                    self.grade_req_id = None;
+                    self.last_grade = Some((grade, explanation));
                     ctx.request_repaint();
                 }
             }
@@ -500,6 +526,21 @@ impl VsAiState {
         }
     }
 
+    /// Send a pending move grade to the worker (Hieu, 2026-11-12).
+    /// Called in `show_vs_ai` AFTER `maybe_trigger_ai`, so the AI's own
+    /// request is queued first and the grade never delays the AI's
+    /// reply. Only one grade is ever pending; a newer human move
+    /// replaces it (an older `Graded` response, if it still arrives, is
+    /// dropped by `req_id` in `poll`).
+    fn maybe_send_grade(&mut self, worker: &mut crate::ai_worker::AiWorker) {
+        let Some((req, mv)) = self.pending_grade.take() else {
+            return;
+        };
+        let req_id = worker.alloc_req_id();
+        self.grade_req_id = Some(req_id);
+        let _ = worker.tx.send(AiRequest::GradeMove { req, mv, req_id });
+    }
+
     fn maybe_auto_hint(&mut self, worker: &mut crate::ai_worker::AiWorker) {
         if !self.auto_hint || !self.started || self.game.result().is_over() {
             return;
@@ -579,6 +620,9 @@ impl XiangqiApp {
         // 1. Poll the worker (non-blocking) and trigger the AI if needed.
         self.vs_ai.poll(&mut self.pending_ai, ctx, now, animate);
         self.vs_ai.maybe_trigger_ai(&mut self.worker);
+        // Grade AFTER the AI's request, so the grade never delays the
+        // AI's reply (Hieu, 2026-11-12).
+        self.vs_ai.maybe_send_grade(&mut self.worker);
         self.vs_ai.maybe_auto_hint(&mut self.worker);
         // ChessDB: a separate live score for the position on display.
         // One request per position change; the section shows it.

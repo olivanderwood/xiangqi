@@ -690,7 +690,9 @@ impl LearnState {
                 AiResponse::BestMove { req_id, .. } => {
                     response_is_current(*req_id, self.opponent_ai_req)
                 }
-                AiResponse::Analysis { .. } | AiResponse::Info { .. } => false,
+                AiResponse::Analysis { .. }
+                | AiResponse::Info { .. }
+                | AiResponse::Graded { .. } => false,
             };
             if !mine {
                 i += 1;
@@ -715,6 +717,8 @@ impl LearnState {
                 // Analysis responses belong to the Vs-AI screen; the
                 // `mine` filter above never lets one reach this match.
                 AiResponse::Analysis { .. } => {}
+                // Graded responses belong to the Vs-AI screen too.
+                AiResponse::Graded { .. } => {}
             }
         }
     }

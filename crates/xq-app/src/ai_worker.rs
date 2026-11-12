@@ -19,6 +19,7 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use xq_core::analysis::tags_with_mate;
+use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
 use xq_core::search::AnalysisLine;
 use xq_engine::{
     BuiltinEngine, Engine, EngineError, EngineRequest, Line, SharedEngine, StopHandle,
@@ -33,6 +34,16 @@ pub enum AiRequest {
     Analyze {
         req: EngineRequest,
         top_n: usize,
+        req_id: u64,
+    },
+    /// Grade one move the human just played (continue-from-learn mode):
+    /// the engine's best move + the played move's score at the position
+    /// before it, turned into a grade. Runs on the worker thread so the
+    /// UI never blocks on it (Hieu, 2026-11-12) — the piece is placed
+    /// first and the grade arrives later.
+    GradeMove {
+        req: EngineRequest,
+        mv: xq_core::types::Move,
         req_id: u64,
     },
     Stop,
@@ -59,6 +70,15 @@ pub enum AiResponse {
         req_id: u64,
         lines: Vec<AnalysisLine>,
     },
+    /// The grade for a `GradeMove` request: the grade itself, the
+    /// engine's best move at that position (for "nước đúng"), and the
+    /// explanation.
+    Graded {
+        req_id: u64,
+        grade: Grade,
+        best: Option<xq_core::types::Move>,
+        explanation: String,
+    },
 }
 
 impl AiResponse {
@@ -69,7 +89,8 @@ impl AiResponse {
         match self {
             AiResponse::Info { req_id, .. }
             | AiResponse::BestMove { req_id, .. }
-            | AiResponse::Analysis { req_id, .. } => *req_id,
+            | AiResponse::Analysis { req_id, .. }
+            | AiResponse::Graded { req_id, .. } => *req_id,
         }
     }
 }
@@ -209,6 +230,50 @@ fn run_analyze(
     run_analyze_on(&mut **guard, req, top_n, req_id, res_tx)
 }
 
+/// Grade one move the human just played, against the engine: the best
+/// move + the played move's score at the position before it, turned
+/// into a grade (same rule as the old synchronous grading in
+/// `VsAiState::play`, now on the worker thread). Sends the `Graded`
+/// response. Returns the engine error, if any.
+fn run_grade_on(
+    engine: &mut dyn Engine,
+    req: &EngineRequest,
+    mv: xq_core::types::Move,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let best = engine.best_move(req, &mut |_| {})?;
+    let best_cp = best.score.to_cp_clamped();
+    let mv_cp = engine
+        .score_move(req, mv)
+        .map(|s| s.to_cp_clamped())
+        .unwrap_or(best_cp);
+    let grade = grade_from_delta_with(best_cp - mv_cp, false, engine.grade_thresholds());
+    let explanation = match req.position() {
+        Ok(pos) => explain_tags(&tags_for(&pos, mv)),
+        Err(_) => String::new(),
+    };
+    let _ = res_tx.send(AiResponse::Graded {
+        req_id,
+        grade,
+        best: Some(best.mv),
+        explanation,
+    });
+    Ok(())
+}
+
+/// Run one grade request against the shared engine.
+fn run_grade(
+    engine: &SharedEngine,
+    req: &EngineRequest,
+    mv: xq_core::types::Move,
+    req_id: u64,
+    res_tx: &Sender<AiResponse>,
+) -> Result<(), EngineError> {
+    let mut guard = engine.lock().expect("engine lock");
+    run_grade_on(&mut **guard, req, mv, req_id, res_tx)
+}
+
 /// What to do after an engine error (§7.3).
 enum Fallback {
     /// Do nothing (user cancelled).
@@ -329,6 +394,28 @@ impl AiWorker {
                                 Fallback::RetryOneOff => {
                                     retry_one_off(&engine, &mut one_off, |fb| {
                                         let _ = run_analyze_on(fb, &req, top_n, req_id, &res_tx);
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    AiRequest::GradeMove { req, mv, req_id } => {
+                        let result = run_grade(&engine, &req, mv, req_id, &res_tx);
+                        if let Err(e) = result {
+                            let action = fallback_action(
+                                &e,
+                                &engine,
+                                &notice_for_thread,
+                                &mut illegal_count,
+                            );
+                            match action {
+                                Fallback::None => {}
+                                Fallback::RetryShared => {
+                                    let _ = run_grade(&engine, &req, mv, req_id, &res_tx);
+                                }
+                                Fallback::RetryOneOff => {
+                                    retry_one_off(&engine, &mut one_off, |fb| {
+                                        let _ = run_grade_on(fb, &req, mv, req_id, &res_tx);
                                     });
                                 }
                             }
@@ -486,6 +573,47 @@ mod tests {
             w.rx.recv_timeout(std::time::Duration::from_secs(5))
                 .expect("worker answers");
         assert_eq!(r.req_id(), req_id);
+    }
+
+    #[test]
+    fn grade_move_returns_a_grade() {
+        use xq_core::analysis::Grade;
+        use xq_core::notation::parse_cn;
+        let mut w = test_worker();
+        let pos = Position::startpos();
+        // The classic best opening move: the engine's best should match
+        // it (or come very close), so the grade is Best/Book.
+        let mv = parse_cn(&pos, "炮二平五").expect("parse opening move");
+        let req_id = w.alloc_req_id();
+        w.tx.send(AiRequest::GradeMove {
+            req: startpos_req(SearchLimits::depth(3)),
+            mv,
+            req_id,
+        })
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(AiResponse::Graded {
+                req_id: got,
+                grade,
+                best,
+                ..
+            }) = w.rx.recv_timeout(std::time::Duration::from_millis(50))
+            {
+                assert_eq!(got, req_id);
+                assert!(
+                    matches!(grade, Grade::Best | Grade::Book),
+                    "炮二平五 should grade Best/Book, got {grade:?}"
+                );
+                let best = best.expect("a best move");
+                assert!(pos.legal_moves().contains(&best));
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not answer within 10 s"
+            );
+        }
     }
 
     #[test]
