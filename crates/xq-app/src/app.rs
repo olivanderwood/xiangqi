@@ -297,13 +297,11 @@ impl XiangqiApp {
     /// the worker). Stale responses (overtaken by the next move) are
     /// dropped by `req_id`.
     ///
-    /// DIAG (crash 0xc0000409 vẫn còn sau khi bỏ ureq, 2026-11-12):
-    /// ChessDB đang tắt hẳn để khoanh vùng — hàm này không làm gì.
-    /// Bỏ `#[allow]` + `return` để bật lại.
-    #[allow(unreachable_code)]
+    /// DIAG (crash 0xc0000409, 2026-11-12): worker đã bật lại để
+    /// khoanh vùng — chỉ có section vẽ là còn tắt. Nếu bản này vẫn
+    /// crash -> lỗi ở worker (HTTP/parse); nếu hết crash -> lỗi ở
+    /// phần vẽ section.
     pub fn poll_chessdb(&mut self, fen: &str, ctx: &egui::Context) {
-        let _ = (fen, ctx);
-        return;
         while let Ok(resp) = self.chessdb.rx.try_recv() {
             let ChessDbResponse::Evaluated { req_id, result } = resp;
             if !crate::chessdb_worker::response_is_current(req_id, self.chessdb_req_id) {
