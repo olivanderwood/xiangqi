@@ -9,6 +9,7 @@ mod engine_manager;
 mod i18n;
 mod screens;
 mod settings;
+mod sound;
 
 #[cfg(test)]
 mod smoke_tests;

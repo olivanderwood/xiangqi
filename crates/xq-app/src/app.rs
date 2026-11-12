@@ -12,9 +12,11 @@ use crate::engine_manager::{open_folder, spawn_install, EngineEvent};
 use crate::i18n::{self, Key};
 use crate::screens::learn::LearnState;
 use crate::screens::learn_select::LearnSelectState;
+use crate::screens::practice::{PracticeAction, PracticeHandles, PracticeScreen};
 use crate::screens::summary::SummaryState;
 use crate::screens::vs_ai::VsAiState;
 use crate::settings::{NotationChoice, Settings};
+use crate::sound::{SharedSound, SoundPlayer};
 use egui::{FontData, FontDefinitions, FontFamily};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -27,6 +29,16 @@ use xq_core::notation;
 use xq_core::types::Move;
 use xq_engine::SharedEngine;
 
+/// Shared button + panel widgets (Hieu, 2026-11-12): one style for
+/// every button, written once in `widgets.rs` and reused everywhere.
+/// Declared here (not in `main.rs`) via `#[path]` so the module lives
+/// in one file; `big_button` is re-exported so existing call sites
+/// (`crate::app::big_button`) keep working.
+#[path = "widgets.rs"]
+pub mod widgets;
+
+pub use widgets::big_button;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
     Menu,
@@ -34,6 +46,8 @@ pub enum Screen {
     LearnSelect,
     Learn,
     Summary,
+    /// Self practice: play both sides with suggestions + grading.
+    Practice,
 }
 
 pub struct XiangqiApp {
@@ -62,8 +76,13 @@ pub struct XiangqiApp {
     pub learn_select: LearnSelectState,
     pub learn: LearnState,
     pub summary: SummaryState,
+    /// Self practice screen (Hieu, 2026-11-12).
+    pub practice: PracticeScreen,
     /// The shared engine (also held by the worker and the screens).
     pub engine: SharedEngine,
+    /// Sound effects (shared with the screens; `try_lock`ed, never
+    /// blocking). Enabled follows `settings.sound`.
+    pub sfx: SharedSound,
     /// Display name of the active engine ("AI tích hợp" until Pikafish
     /// is installed).
     pub engine_name: String,
@@ -152,15 +171,6 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// A button with the app's uniform minimum size (§7.5): every action
-/// button on every screen is at least 120 x 46 px, so buttons look
-/// equally big and are easy to tap. Use for all panel/dialog buttons;
-/// the Menu and lesson-picker cards use their own larger `add_sized`.
-#[must_use]
-pub fn big_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
-    ui.add(egui::Button::new(text).min_size(egui::Vec2::new(120.0, 46.0)))
-}
-
 /// A section title, the same on every screen: strong 24 px, then a
 /// small gap. Sections themselves are separated by `ui.separator()`.
 pub fn section_title(ui: &mut egui::Ui, text: &str) {
@@ -224,7 +234,14 @@ impl XiangqiApp {
     #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
+        // Image loaders for the practice screen's board-photo upload
+        // (Hieu, 2026-11-12): without this, `egui::Image::from_bytes`
+        // shows only a placeholder.
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         let settings = cc.storage.map(Settings::load).unwrap_or_default();
+        // Apply the saved UI language before anything renders (Hieu,
+        // 2026-11-12: Vietnamese / English).
+        i18n::set_language(i18n::Language::from_name(&settings.language));
         let book = Book::load_embedded().unwrap_or(Book {
             lessons: Vec::new(),
         });
@@ -233,6 +250,10 @@ impl XiangqiApp {
         // Pikafish is pre-warmed on a background thread below and swaps
         // in when it is ready.
         let engine = xq_engine::shared_engine(Box::new(xq_engine::BuiltinEngine::new()));
+        // Sound effects (Hieu, 2026-11-12): one player shared with
+        // the screens; enabled follows the saved `sound` setting.
+        let sfx: SharedSound = std::sync::Arc::new(std::sync::Mutex::new(SoundPlayer::new()));
+        sfx.lock().expect("sfx lock").set_enabled(settings.sound);
         let level = settings.level();
         // Rotating engine log next to eframe's storage; a missing log
         // dir disables logging instead of breaking startup.
@@ -254,6 +275,9 @@ impl XiangqiApp {
             settings.engine_hash_mb,
             level,
         ));
+        // Practice difficulty (read before `settings` moves into the struct).
+        let practice_difficulty = settings.difficulty;
+        let practice_custom_elo = settings.custom_elo;
         Self {
             screen: Screen::Menu,
             settings,
@@ -267,11 +291,13 @@ impl XiangqiApp {
             chessdb_view: ChessDbView::Idle,
             chessdb_req_id: None,
             chessdb_last_fen: None,
-            vs_ai: VsAiState::new(engine.clone()),
+            vs_ai: VsAiState::new(engine.clone(), sfx.clone()),
             learn_select: LearnSelectState::new(),
-            learn: LearnState::new(engine.clone()),
+            learn: LearnState::new(engine.clone(), sfx.clone()),
             summary: SummaryState::new(),
+            practice: PracticeScreen::new(practice_difficulty, practice_custom_elo),
             engine: engine.clone(),
+            sfx,
             engine_name: "AI tích hợp".to_string(),
             engine_dir: None,
             engine_notice: None,
@@ -284,8 +310,8 @@ impl XiangqiApp {
     #[must_use]
     pub fn render_move(&self, pos: &Position, mv: Move) -> String {
         match self.settings.notation {
-            NotationChoice::Chinese => notation::render_cn(pos, mv),
             NotationChoice::Vietnamese => notation::render_vn(pos, mv),
+            NotationChoice::English => notation::render_en(pos, mv),
         }
     }
 
@@ -331,7 +357,11 @@ impl XiangqiApp {
     /// chip, not a replacement for it. Shown in both the Play-vs-AI
     /// and Learn panels. `pos` is the position the section is about
     /// (used to render the best move in the user's notation).
-    pub fn chessdb_section_ui(&self, ui: &mut egui::Ui, pos: &Position) {
+    /// `show_win_rate` hides the win/draw/loss percentages: the Learn
+    /// screen (Hieu, 2026-11-12) shows only the score chip + best
+    /// move, no "%" — the data is unchanged, only the display drops
+    /// the rates.
+    pub fn chessdb_section_ui(&self, ui: &mut egui::Ui, pos: &Position, show_win_rate: bool) {
         section_title(ui, i18n::t(Key::ChessDbTitle));
         match &self.chessdb_view {
             ChessDbView::Idle | ChessDbView::Loading => {
@@ -341,13 +371,15 @@ impl XiangqiApp {
                 if let Some(score) = eval.score {
                     ui.horizontal(|ui| {
                         advantage_chip_ui(ui, score);
-                        if let Some(best) = eval.top.first() {
-                            ui.label(
-                                i18n::t(Key::ChessDbWinRate)
-                                    .replace("{n}", &format!("{:.0}", best.winrate))
-                                    .replace("{m}", &format!("{:.0}", best.drawrate))
-                                    .replace("{k}", &format!("{:.0}", best.lossrate)),
-                            );
+                        if show_win_rate {
+                            if let Some(best) = eval.top.first() {
+                                ui.label(
+                                    i18n::t(Key::ChessDbWinRate)
+                                        .replace("{n}", &format!("{:.0}", best.winrate))
+                                        .replace("{m}", &format!("{:.0}", best.drawrate))
+                                        .replace("{k}", &format!("{:.0}", best.lossrate)),
+                                );
+                            }
                         }
                     });
                 }
@@ -405,6 +437,28 @@ impl XiangqiApp {
         self.screen = screen;
     }
 
+    /// Self practice screen (Hieu, 2026-11-12): play both sides with
+    /// ChessDB/Pikafish suggestions + grading. Wires the practice
+    /// screen's handles to the shared worker, ChessDB worker, engine
+    /// and settings. `BackToMenu` returns to the main menu.
+    fn show_practice(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let action = self.practice.show(
+            ctx,
+            ui,
+            &mut PracticeHandles {
+                worker: &mut self.worker,
+                chessdb: &mut self.chessdb,
+                pending_ai: &mut self.pending_ai,
+                engine: &self.engine,
+                sfx: &self.sfx,
+                settings: &self.settings,
+            },
+        );
+        if action == PracticeAction::BackToMenu {
+            self.goto(Screen::Menu);
+        }
+    }
+
     /// One-time engine fallback banner (§7.3), shown at the top of
     /// every screen until dismissed.
     fn engine_banner(&mut self, ui: &mut egui::Ui) {
@@ -414,7 +468,7 @@ impl XiangqiApp {
         ui.horizontal(|ui| {
             ui.colored_label(egui::Color32::from_rgb(0xC0, 0x39, 0x2B), "⚠");
             ui.label(&notice);
-            if ui.button("✕").clicked() {
+            if widgets::icon_button(ui, "✕", i18n::t(Key::Close)).clicked() {
                 self.engine_notice = None;
             }
         });
@@ -431,104 +485,16 @@ impl XiangqiApp {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
+            .default_width(560.0)
             .show(ctx, |ui| {
-                changed |= ui
-                    .checkbox(&mut self.settings.sound, i18n::t(Key::SoundOn))
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.settings.animate, i18n::t(Key::AnimateLabel))
-                    .changed();
-                ui.label(i18n::t(Key::NotationLabel));
-                changed |= ui
-                    .radio_value(
-                        &mut self.settings.notation,
-                        NotationChoice::Vietnamese,
-                        i18n::t(Key::NotationVn),
-                    )
-                    .changed();
-                changed |= ui
-                    .radio_value(
-                        &mut self.settings.notation,
-                        NotationChoice::Chinese,
-                        i18n::t(Key::NotationCn),
-                    )
-                    .changed();
-                section_title(ui, i18n::t(Key::Difficulty));
-                for d in 0..=4u8 {
-                    changed |= ui
-                        .radio_value(&mut self.settings.difficulty, d, i18n::difficulty_name(d))
-                        .changed();
-                }
-                if self.settings.difficulty == 4 {
-                    ui.horizontal(|ui| {
-                        ui.label(i18n::t(Key::EngineCustomElo));
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.settings.custom_elo, 1200..=3000)
-                                    .step_by(50.0),
-                            )
-                            .changed();
-                        ui.label(format!("Elo {}", self.settings.custom_elo));
+                // Grouped into sections (Hieu, 2026-11-12); the dialog
+                // is taller than a small window, so it scrolls instead
+                // of overflowing.
+                egui::ScrollArea::vertical()
+                    .max_height(600.0)
+                    .show(ui, |ui| {
+                        self.settings_sections(ui, &mut changed);
                     });
-                }
-                ui.separator();
-                ui.heading(i18n::t(Key::EngineSection));
-                ui.label(i18n::t(Key::EngineInUse).replace("{n}", &self.engine_name));
-                ui.horizontal(|ui| {
-                    ui.label(i18n::t(Key::EngineThreads));
-                    changed |= ui
-                        .add(egui::Slider::new(&mut self.settings.engine_threads, 1..=8))
-                        .changed();
-                });
-                ui.horizontal(|ui| {
-                    ui.label(i18n::t(Key::EngineHash));
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(&mut self.settings.engine_hash_mb, 0..=1024)
-                                .step_by(64.0),
-                        )
-                        .changed();
-                    if self.settings.engine_hash_mb == 0 {
-                        ui.label(i18n::t(Key::EngineHashAuto));
-                    } else {
-                        ui.label(format!("{} MB", self.settings.engine_hash_mb));
-                    }
-                });
-                changed |= ui
-                    .checkbox(&mut self.settings.diversity, i18n::t(Key::EngineDiversity))
-                    .changed();
-                changed |= ui
-                    .checkbox(
-                        &mut self.settings.tournament,
-                        i18n::t(Key::EngineTournament),
-                    )
-                    .changed();
-                changed |= ui
-                    .checkbox(
-                        &mut self.settings.engine_trace_log,
-                        i18n::t(Key::EngineTraceLog),
-                    )
-                    .changed();
-                ui.label(i18n::t(Key::EnginePath));
-                changed |= ui
-                    .text_edit_singleline(&mut self.settings.pikafish_path)
-                    .changed();
-                if big_button(ui, i18n::t(Key::EngineRetry)).clicked() {
-                    // Re-run the install with the current settings; the
-                    // outcome arrives via `engine_install_rx` like the
-                    // startup pre-warm. Disabled while one is running.
-                    if self.engine_install_rx.is_none() {
-                        let level = self.settings.level();
-                        self.engine_install_rx = Some(spawn_install(
-                            self.engine.clone(),
-                            self.settings.pikafish_path(),
-                            self.settings.engine_threads,
-                            self.settings.engine_hash_mb,
-                            level,
-                        ));
-                    }
-                }
-                ui.label(i18n::t(Key::AboutNoSound));
             });
         if !open {
             self.show_settings = false;
@@ -536,6 +502,151 @@ impl XiangqiApp {
         if changed {
             self.settings_dirty = true;
         }
+    }
+
+    /// The settings dialog body, grouped into labelled sections with
+    /// big radio options and value labels on sliders (Hieu,
+    /// 2026-11-12). Every control here is a persisted setting;
+    /// `changed` reports whether anything was edited.
+    fn settings_sections(&mut self, ui: &mut egui::Ui, changed: &mut bool) {
+        // Language (Hieu, 2026-11-12): Vietnamese or English.
+        // Applies at once and is persisted in `settings.language`.
+        section_title(ui, i18n::t(Key::LanguageLabel));
+        let mut lang = i18n::Language::from_name(&self.settings.language);
+        let lang_before = lang;
+        ui.horizontal(|ui| {
+            widgets::big_radio(
+                ui,
+                &mut lang,
+                i18n::Language::Vietnamese,
+                i18n::t(Key::LanguageVi),
+            );
+            widgets::big_radio(
+                ui,
+                &mut lang,
+                i18n::Language::English,
+                i18n::t(Key::LanguageEn),
+            );
+        });
+        if lang != lang_before {
+            self.settings.language = lang.name().to_string();
+            i18n::set_language(lang);
+            *changed = true;
+        }
+        ui.separator();
+        // Sound + animation.
+        section_title(ui, i18n::t(Key::SoundOn));
+        let sound_before = self.settings.sound;
+        *changed |= ui
+            .checkbox(&mut self.settings.sound, i18n::t(Key::SoundOn))
+            .changed();
+        // Keep the sound player in sync with the toggle (Hieu,
+        // 2026-11-12): turning sound off must silence the next move.
+        if self.settings.sound != sound_before {
+            if let Ok(mut sfx) = self.sfx.try_lock() {
+                sfx.set_enabled(self.settings.sound);
+            }
+        }
+        *changed |= ui
+            .checkbox(&mut self.settings.animate, i18n::t(Key::AnimateLabel))
+            .changed();
+        ui.separator();
+        // Move notation.
+        section_title(ui, i18n::t(Key::NotationLabel));
+        *changed |= widgets::big_radio(
+            ui,
+            &mut self.settings.notation,
+            NotationChoice::Vietnamese,
+            i18n::t(Key::NotationVn),
+        )
+        .changed();
+        *changed |= widgets::big_radio(
+            ui,
+            &mut self.settings.notation,
+            NotationChoice::English,
+            i18n::t(Key::NotationEn),
+        )
+        .changed();
+        ui.separator();
+        // Difficulty.
+        section_title(ui, i18n::t(Key::Difficulty));
+        for d in 0..=4u8 {
+            *changed |= widgets::big_radio(
+                ui,
+                &mut self.settings.difficulty,
+                d,
+                i18n::difficulty_name(d),
+            )
+            .changed();
+        }
+        if self.settings.difficulty == 4 {
+            ui.horizontal(|ui| {
+                ui.label(i18n::t(Key::EngineCustomElo));
+                *changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.settings.custom_elo, 1200..=3000).step_by(50.0),
+                    )
+                    .changed();
+                ui.label(format!("Elo {}", self.settings.custom_elo));
+            });
+        }
+        ui.separator();
+        // Engine.
+        section_title(ui, i18n::t(Key::EngineSection));
+        ui.label(i18n::t(Key::EngineInUse).replace("{n}", &self.engine_name));
+        ui.horizontal(|ui| {
+            ui.label(i18n::t(Key::EngineThreads));
+            *changed |= ui
+                .add(egui::Slider::new(&mut self.settings.engine_threads, 1..=8))
+                .changed();
+            ui.label(format!("{}", self.settings.engine_threads));
+        });
+        ui.horizontal(|ui| {
+            ui.label(i18n::t(Key::EngineHash));
+            *changed |= ui
+                .add(egui::Slider::new(&mut self.settings.engine_hash_mb, 0..=1024).step_by(64.0))
+                .changed();
+            if self.settings.engine_hash_mb == 0 {
+                ui.label(i18n::t(Key::EngineHashAuto));
+            } else {
+                ui.label(format!("{} MB", self.settings.engine_hash_mb));
+            }
+        });
+        *changed |= ui
+            .checkbox(&mut self.settings.diversity, i18n::t(Key::EngineDiversity))
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut self.settings.tournament,
+                i18n::t(Key::EngineTournament),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut self.settings.engine_trace_log,
+                i18n::t(Key::EngineTraceLog),
+            )
+            .changed();
+        ui.label(i18n::t(Key::EnginePath));
+        *changed |= ui
+            .text_edit_singleline(&mut self.settings.pikafish_path)
+            .changed();
+        if widgets::primary_button(ui, i18n::t(Key::EngineRetry)).clicked() {
+            // Re-run the install with the current settings; the
+            // outcome arrives via `engine_install_rx` like the
+            // startup pre-warm. Disabled while one is running.
+            if self.engine_install_rx.is_none() {
+                let level = self.settings.level();
+                self.engine_install_rx = Some(spawn_install(
+                    self.engine.clone(),
+                    self.settings.pikafish_path(),
+                    self.settings.engine_threads,
+                    self.settings.engine_hash_mb,
+                    level,
+                ));
+            }
+        }
+        ui.label(i18n::t(Key::AboutNoSound));
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
@@ -616,6 +727,8 @@ impl eframe::App for XiangqiApp {
             self.vs_ai.hint_req_id,
             self.vs_ai.diverse_req_id,
             self.learn.opponent_ai_req,
+            self.practice.suggest_req_id,
+            self.practice.grade_req_id,
         ];
         self.pending_ai
             .retain(|r| wanted.contains(&Some(r.req_id())));
@@ -627,6 +740,7 @@ impl eframe::App for XiangqiApp {
                 Screen::LearnSelect => self.show_learn_select(ctx, ui),
                 Screen::Learn => self.show_learn(ctx, ui),
                 Screen::Summary => self.show_summary(ctx, ui),
+                Screen::Practice => self.show_practice(ctx, ui),
             }
         });
         self.settings_window(ctx);

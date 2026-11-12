@@ -10,14 +10,17 @@
 //! played by the AI worker).
 
 use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
+use crate::app::widgets::{
+    big_radio, primary_button, secondary_button, side_panel, SIDE_PANEL_WIDTH,
+};
 use crate::app::{
-    advantage_chip_ui, big_button, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen,
-    XiangqiApp,
+    advantage_chip_ui, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen, XiangqiApp,
 };
 use crate::board_view::{
     draw_board, legal_targets, BoardDraw, BoardGeometry, BoardInteraction, HintArrow, MoveAnim,
 };
 use crate::i18n::{self, Key};
+use crate::sound::{sound_for_move, SharedSound};
 use std::time::Duration;
 use xq_book::schema::{BookNode, Lesson};
 use xq_book::tree::node_at;
@@ -47,6 +50,14 @@ pub struct LearnState {
     pub out_of_book: bool,
     pub plies_after_book: usize,
     pub hints: Vec<BookHint>,
+    /// Position the hints were generated for (set in `refresh_hints`).
+    /// The move names are rendered from this position, not the current
+    /// one: after the learner moves, the hints list still holds the
+    /// previous position's moves until the next refresh, and rendering
+    /// them against the new position panics (the source square is
+    /// empty). Stored so the display never needs the moving piece to
+    /// be on the current board.
+    pub hint_pos: Option<Position>,
     pub hint_hover: Option<usize>,
     pub hide_hints: bool,
     pub hint_ply: Option<usize>,
@@ -79,11 +90,14 @@ pub struct LearnState {
     /// Shared engine (builtin now, Pikafish when available) for the
     /// synchronous grading/hint fallbacks and for the `Tutor`.
     pub engine: SharedEngine,
+    /// Sound effects (shared with the app; `try_lock`ed, never
+    /// blocking). Played after every move in `play_move_common`.
+    pub sfx: SharedSound,
     pub rng_state: u64,
 }
 
 impl LearnState {
-    pub fn new(engine: SharedEngine) -> Self {
+    pub fn new(engine: SharedEngine, sfx: SharedSound) -> Self {
         Self {
             lesson: None,
             tutor: None,
@@ -96,6 +110,7 @@ impl LearnState {
             out_of_book: false,
             plies_after_book: 0,
             hints: Vec::new(),
+            hint_pos: None,
             hint_hover: None,
             hide_hints: false,
             hint_ply: None,
@@ -117,6 +132,7 @@ impl LearnState {
             started: false,
             last_board: None,
             engine,
+            sfx,
             rng_state: 0x9E3779B97F4A7C15,
         }
     }
@@ -270,6 +286,10 @@ impl LearnState {
             return;
         }
         self.hint_ply = Some(self.game.moves.len());
+        // Remember the position these hints belong to, so the display
+        // renders their move names against it (not the position after
+        // the learner's next move, where the source square is empty).
+        self.hint_pos = Some(self.game.pos.clone());
         if let Some(tutor) = &mut self.tutor {
             if let TutorEvent::YourTurn { book_moves } = tutor.hints_for_learner_turn() {
                 self.hints = book_moves;
@@ -304,6 +324,7 @@ impl LearnState {
     }
 
     fn play_move_common(&mut self, mv: Move, now: f64, animate: bool) {
+        let pos_before = self.game.pos.clone();
         let piece = self.game.pos.piece_at(mv.from);
         if self.game.play(mv).is_err() {
             return;
@@ -315,6 +336,10 @@ impl LearnState {
             None
         };
         self.board.clear();
+        // Sound for the move just played (Hieu, 2026-11-12): move /
+        // capture / check / checkmate. Non-blocking and silent when
+        // sound is off or no audio device is present.
+        sound_for_move(&self.sfx, &pos_before, mv, &self.game.pos);
     }
 
     /// The learner played `mv`. Returns nothing; state (grade, dialogs,
@@ -775,7 +800,7 @@ impl XiangqiApp {
 
         if self.learn.lesson.is_none() {
             ui.label(i18n::t(Key::LessonNotFound));
-            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
+            if secondary_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
             return;
@@ -783,13 +808,16 @@ impl XiangqiApp {
         // NOTE: capture the CentralPanel's available size before the
         // horizontal row (see vs_ai.rs: inside `ui.horizontal` egui only
         // offers the current row height, which shrinks the board to ~20 px).
+        // The side panel has one fixed width (`SIDE_PANEL_WIDTH`) and
+        // scrolls vertically (Hieu, 2026-11-12): long content scrolls
+        // instead of flexing the board/panel.
         let avail = ui.available_size();
         let narrow = is_narrow(ctx);
         if narrow {
             ui.vertical(|ui| {
                 self.learn_board(ctx, ui, avail);
                 ui.add_space(8.0);
-                self.learn_panel(ctx, ui);
+                side_panel(ui, avail.x, |ui| self.learn_panel(ctx, ui));
             });
         } else {
             ui.horizontal(|ui| {
@@ -797,13 +825,11 @@ impl XiangqiApp {
                 let s = eval::eval(&pos);
                 let score_red = if pos.side() == Color::Red { s } else { -s };
                 eval_bar_ui(ui, score_red, avail.y);
-                let budget = egui::Vec2::new(avail.x - 20.0 - 12.0 - 380.0 - 24.0, avail.y);
+                let budget =
+                    egui::Vec2::new(avail.x - 20.0 - 12.0 - SIDE_PANEL_WIDTH - 24.0, avail.y);
                 self.learn_board(ctx, ui, budget);
                 ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_width(380.0);
-                    self.learn_panel(ctx, ui);
-                });
+                side_panel(ui, SIDE_PANEL_WIDTH, |ui| self.learn_panel(ctx, ui));
             });
         }
         self.learn_off_book_dialog(ctx);
@@ -891,8 +917,9 @@ impl XiangqiApp {
         let Some(lesson) = self.learn.lesson.clone() else {
             return;
         };
+        // Section 1 — lesson + progress. The Undo button is disabled
+        // when there is nothing to undo.
         ui.heading(lesson.name_vi.clone());
-        ui.label(lesson.name_zh.clone());
         let remaining = self.learn.main_branch_remaining();
         let total_est = self.learn.game.moves.len() + remaining;
         ui.horizontal(|ui| {
@@ -902,21 +929,20 @@ impl XiangqiApp {
                     .replace("{m}", &total_est.to_string()),
             );
             // Undo (Hieu, 2026-11-12): back to before the learner's
-            // last move, so they can try a different one. Disabled
-            // when there is nothing to undo.
+            // last move, so they can try a different one.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_undo = self.learn.started
                     && self.learn.complete.is_none()
                     && !self.learn.game.moves.is_empty();
-                if ui
-                    .add_enabled(can_undo, egui::Button::new(i18n::t(Key::Undo)))
-                    .clicked()
-                {
-                    self.learn.undo(&self.worker);
-                }
+                ui.add_enabled_ui(can_undo, |ui| {
+                    if secondary_button(ui, i18n::t(Key::Undo)).clicked() {
+                        self.learn.undo(&self.worker);
+                    }
+                });
             });
         });
         ui.separator();
+        // Section 2 — tutor feedback (message + grade for the last move).
         section_title(ui, i18n::t(Key::TutorTitle));
         ui.label(self.learn.tutor_message.clone());
         if let Some((grade, expl, best)) = &self.learn.last_grade {
@@ -942,11 +968,12 @@ impl XiangqiApp {
                 );
             }
         }
-        // Next moves from the book, shown at once after the learner's
-        // move (Hieu, 2026-11-12) — before the opponent's board move
-        // and before any live score. The opponent's main reply, then
-        // the learner's book moves after it. Display-only: it is the
-        // opponent's turn, so these cannot be played yet.
+        // Section 3 — next moves from the book, shown at once after
+        // the learner's move (Hieu, 2026-11-12) — before the
+        // opponent's board move and before any live score. The
+        // opponent's main reply, then the learner's book moves after
+        // it. Display-only: it is the opponent's turn, so these cannot
+        // be played yet.
         if let Some((reply, follow)) = &self.learn.next_preview {
             ui.separator();
             section_title(ui, i18n::t(Key::NextMovesTitle));
@@ -988,10 +1015,16 @@ impl XiangqiApp {
                 }
             }
         }
-        // ChessDB: a separate live score for the current position.
-        let pos = self.learn.game.pos.clone();
-        self.chessdb_section_ui(ui, &pos);
+        // Section 4 — ChessDB: a separate live score for the current
+        // position. No win/draw/loss percentages here (Hieu,
+        // 2026-11-12): only the score chip + best move — the data is
+        // unchanged, only the "%" display is dropped in Learn.
         ui.separator();
+        let pos = self.learn.game.pos.clone();
+        self.chessdb_section_ui(ui, &pos, false);
+        ui.separator();
+        // Section 5 — opponent variations to pick from, or the hint
+        // list (best directions) for the learner's turn.
         if self.learn.show_opponent_choice {
             // Opponent variations (§8): the learner picks which prepared
             // variation the opponent plays. Rows mirror the hint rows;
@@ -1048,13 +1081,13 @@ impl XiangqiApp {
                     .play_opponent_choice(&mut self.worker, idx, now, self.settings.animate);
             }
         } else if self.learn.hide_hints {
-            if big_button(ui, i18n::t(Key::ShowHints)).clicked() {
+            if secondary_button(ui, i18n::t(Key::ShowHints)).clicked() {
                 self.learn.hide_hints = false;
             }
         } else {
             ui.horizontal(|ui| {
                 section_title(ui, i18n::t(Key::BestDirections));
-                if big_button(ui, i18n::t(Key::HideHints)).clicked() {
+                if secondary_button(ui, i18n::t(Key::HideHints)).clicked() {
                     self.learn.hide_hints = true;
                 }
             });
@@ -1083,7 +1116,25 @@ impl XiangqiApp {
                                         .strong()
                                         .size(24.0),
                                 );
-                                ui.label(egui::RichText::new(&hint.mv_cn).strong().size(22.0));
+                                // Move name in the chosen notation
+                                // (Vietnamese/English — Hieu, 2026-11-12:
+                                // Chinese characters appear only on the
+                                // board pieces, never in UI text).
+                                // Rendered against `hint_pos` (the
+                                // position the hints belong to), not the
+                                // current board — after the learner
+                                // moves, the source square is empty on
+                                // the new position.
+                                let hint_pos = self
+                                    .learn
+                                    .hint_pos
+                                    .clone()
+                                    .unwrap_or_else(|| self.learn.game.pos.clone());
+                                ui.label(
+                                    egui::RichText::new(self.render_move(&hint_pos, hint.mv))
+                                        .strong()
+                                        .size(22.0),
+                                );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -1120,19 +1171,19 @@ impl XiangqiApp {
             }
         }
         ui.separator();
-        // Compact move list.
+        // Section 6 — compact move list.
         let moves = self.move_strings(&self.learn.game);
         let mut dummy_review: Option<usize> = None;
         move_list_ui(ui, &moves, &mut dummy_review);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            if big_button(ui, i18n::t(Key::FlipBoard)).clicked() {
+            if secondary_button(ui, i18n::t(Key::FlipBoard)).clicked() {
                 self.learn.flipped = !self.learn.flipped;
             }
-            if big_button(ui, i18n::t(Key::OtherLesson)).clicked() {
+            if secondary_button(ui, i18n::t(Key::OtherLesson)).clicked() {
                 self.goto(Screen::LearnSelect);
             }
-            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
+            if secondary_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });
@@ -1158,10 +1209,10 @@ impl XiangqiApp {
                     }
                 }
                 ui.horizontal(|ui| {
-                    if big_button(ui, i18n::t(Key::RetryMove)).clicked() {
+                    if primary_button(ui, i18n::t(Key::RetryMove)).clicked() {
                         retry = true;
                     }
-                    if big_button(ui, i18n::t(Key::ContinueMove)).clicked() {
+                    if secondary_button(ui, i18n::t(Key::ContinueMove)).clicked() {
                         cont = true;
                     }
                 });
@@ -1217,17 +1268,18 @@ impl XiangqiApp {
                 );
                 section_title(ui, i18n::t(Key::Difficulty));
                 for d in 0..=3u8 {
-                    ui.radio_value(
+                    big_radio(
+                        ui,
                         &mut self.learn.continue_difficulty,
                         d,
                         i18n::difficulty_name(d),
                     );
                 }
                 ui.horizontal(|ui| {
-                    if big_button(ui, i18n::t(Key::StopAndSummary)).clicked() {
+                    if primary_button(ui, i18n::t(Key::StopAndSummary)).clicked() {
                         to_summary = true;
                     }
-                    if big_button(ui, i18n::t(Key::ContinueWithAi)).clicked() {
+                    if secondary_button(ui, i18n::t(Key::ContinueWithAi)).clicked() {
                         to_vs_ai = true;
                     }
                 });

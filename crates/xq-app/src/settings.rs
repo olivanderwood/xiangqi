@@ -3,10 +3,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// How move names are shown in the UI. Chinese characters appear only
+/// on the board pieces (Hieu, 2026-11-12); move names are Vietnamese
+/// or English.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum NotationChoice {
-    Chinese,
     Vietnamese,
+    English,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +24,9 @@ pub struct Settings {
     pub difficulty: u8,
     pub human_color: Option<String>,
     pub notation: NotationChoice,
+    /// UI language (`"vi"` / `"en"`), persisted; applied at startup.
+    #[serde(default)]
+    pub language: String,
     pub sound: bool,
     pub animate: bool,
     /// §5: varied Master moves (default on).
@@ -65,6 +71,7 @@ impl Default for Settings {
             difficulty: 1,
             human_color: None,
             notation: NotationChoice::Vietnamese,
+            language: "vi".to_string(),
             sound: true,
             animate: true,
             diversity: true,

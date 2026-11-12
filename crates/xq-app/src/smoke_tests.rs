@@ -59,8 +59,10 @@ fn wait_for_ai(harness: &mut Harness<'static, XiangqiApp>, min_moves: usize) {
 #[test]
 fn menu_to_vs_ai_plays_cannon_opening() {
     let mut harness = new_harness();
-    // Chinese notation, so the move list shows 炮二平五 as in §8.9.
-    harness.state_mut().settings.notation = NotationChoice::Chinese;
+    // English notation, so the move list shows C2=5 (Chinese notation
+    // was removed from the UI — Hieu, 2026-11-12; Chinese characters
+    // appear only on the board pieces).
+    harness.state_mut().settings.notation = NotationChoice::English;
     harness.run_ok();
 
     harness.get_by_label("Đấu với AI").click();
@@ -101,11 +103,11 @@ fn menu_to_vs_ai_plays_cannon_opening() {
         let pos = xq_core::board::Position::startpos();
         app.render_move(&pos, moves[0])
     };
-    assert_eq!(rendered, "炮二平五");
+    assert_eq!(rendered, "C2=5");
     // The move list widget shows the same string.
     assert!(
-        harness.query_by_label_contains("炮二平五").is_some(),
-        "move list should contain 炮二平五"
+        harness.query_by_label_contains("C2=5").is_some(),
+        "move list should contain C2=5"
     );
     // The AI (Black) answers afterwards.
     wait_for_ai(&mut harness, 2);

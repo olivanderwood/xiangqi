@@ -391,6 +391,19 @@ pub fn render_wxf(pos: &Position, m: Move) -> String {
     format!("{}{}{}{}", wxf_piece(piece.kind), prefix, action, suffix)
 }
 
+/// Render in English (WXF) notation, e.g. `C2=5`, `H2+3`, `R1+1`
+/// (Hieu, 2026-11-12: move names are Vietnamese or English; Chinese
+/// characters appear only on the board pieces). Same as `render_wxf`.
+#[must_use]
+pub fn render_en(pos: &Position, m: Move) -> String {
+    render_wxf(pos, m)
+}
+
+/// Parse an English (WXF) move string. Same as `parse_wxf`.
+pub fn parse_en(pos: &Position, s: &str) -> Result<Move, NotationError> {
+    parse_wxf(pos, s)
+}
+
 pub fn parse_wxf(pos: &Position, s: &str) -> Result<Move, NotationError> {
     let want = s.trim().to_string();
     let matches: Vec<Move> = pos

@@ -17,9 +17,16 @@ xq-pikafish = { path = "../xq-pikafish" }
 xq-chessdb = { path = "../xq-chessdb" }
 eframe = { version = "0.31", features = ["persistence"] }
 egui = "0.31"
+# Image loaders for the practice screen's board-photo upload (Hieu,
+# 2026-11-12): egui 0.31 ships no raster decoder; without this the
+# photo shows only a placeholder.
+egui_extras = { version = "0.31", features = ["image"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.33"
+# Sound effects (Hieu, 2026-11-12): tones are synthesized in code
+# (`sound.rs`), no audio files. Linux needs ALSA dev (present on VM).
+rodio = "0.21"
 
 [dev-dependencies]
 egui_kittest = { version = "0.31", features = ["eframe"] }

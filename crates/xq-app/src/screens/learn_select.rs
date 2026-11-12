@@ -86,21 +86,12 @@ impl XiangqiApp {
                 ui.set_width(420.0);
                 for lesson in &lessons {
                     let progress = self.settings.progress.get(&lesson.id);
-                    let mut label = format!(
-                        "{} {}  {}",
-                        lesson.name_vi,
-                        lesson.name_zh,
-                        "★".repeat(lesson.level as usize),
-                    );
+                    let mut label =
+                        format!("{}  {}", lesson.name_vi, "★".repeat(lesson.level as usize),);
                     if let Some(p) = progress {
                         if p.completed {
                             label.push_str(&format!("  {}", i18n::t(Key::CompletedMark)));
                         }
-                        label.push_str(&format!(
-                            "  {}",
-                            i18n::t(Key::BestScore)
-                                .replace("{n}", &format!("{:.0}", p.best_book_ratio * 100.0))
-                        ));
                     }
                     let selected =
                         self.learn_select.selected.as_deref() == Some(lesson.id.as_str());
@@ -115,7 +106,6 @@ impl XiangqiApp {
                     ui.vertical(|ui| {
                         ui.set_width(480.0);
                         ui.heading(lesson.name_vi.clone());
-                        ui.label(lesson.name_zh.clone());
                         ui.label(
                             i18n::t(Key::LevelStars).replace("{n}", &lesson.level.to_string()),
                         );
@@ -133,10 +123,6 @@ impl XiangqiApp {
                             &pos,
                             &BoardDraw::default(),
                         );
-                        section_title(ui, i18n::t(Key::SourcesTitle));
-                        for src in &lesson.sources {
-                            ui.hyperlink_to(src.title.clone(), src.url.clone());
-                        }
                         if big_button(ui, i18n::t(Key::StartLesson)).clicked() {
                             let lesson = lesson.clone();
                             self.learn.start_lesson(lesson, ctx.input(|i| i.time));

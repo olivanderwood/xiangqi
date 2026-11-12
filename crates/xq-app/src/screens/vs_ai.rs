@@ -5,14 +5,17 @@
 //! the start dialog (see `docs/DECISIONS-m3.md`).
 
 use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
+use crate::app::widgets::{
+    big_radio, primary_button, secondary_button, side_panel, SIDE_PANEL_WIDTH,
+};
 use crate::app::{
-    advantage_chip_ui, big_button, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen,
-    XiangqiApp,
+    advantage_chip_ui, eval_bar_ui, is_narrow, move_list_ui, section_title, Screen, XiangqiApp,
 };
 use crate::board_view::{
     draw_board, legal_targets, BoardDraw, BoardGeometry, BoardInteraction, HintArrow, MoveAnim,
 };
 use crate::i18n::{self, Key};
+use crate::sound::{sound_for_move, SharedSound};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xq_core::analysis::Grade;
 use xq_core::board::Position;
@@ -99,10 +102,13 @@ pub struct VsAiState {
     /// Shared engine (builtin now, Pikafish when available) for the
     /// synchronous grading in continue-from-learn mode.
     pub engine: SharedEngine,
+    /// Sound effects (shared with the app; `try_lock`ed, never
+    /// blocking). Played after every move in `play()`.
+    pub sfx: SharedSound,
 }
 
 impl VsAiState {
-    pub fn new(engine: SharedEngine) -> Self {
+    pub fn new(engine: SharedEngine, sfx: SharedSound) -> Self {
         Self {
             game: Game::new(Position::startpos()),
             opponent: VsOpponent::Ai {
@@ -142,6 +148,7 @@ impl VsAiState {
             diversity: true,
             tournament: false,
             engine,
+            sfx,
         }
     }
 
@@ -209,6 +216,11 @@ impl VsAiState {
         if self.game.result().is_over() {
             self.result_ack = false;
         }
+        // Sound for the move just played (Hieu, 2026-11-12): move /
+        // capture / check / checkmate, decided from the positions
+        // before and after. Non-blocking (try_lock) and silent when
+        // sound is off or no audio device is present.
+        sound_for_move(&self.sfx, &pos_before, mv, &self.game.pos);
     }
 
     /// Start a fresh game from the start dialog.
@@ -707,13 +719,16 @@ impl XiangqiApp {
         // offers the current row height (~one line) as available height,
         // so reading `ui.available_size()` inside the row shrinks the
         // board to ~20 px (it was invisible after pressing Start).
+        // The side panel has one fixed width (`SIDE_PANEL_WIDTH`) and
+        // scrolls vertically (Hieu, 2026-11-12): long content scrolls
+        // instead of flexing the board/panel.
         let avail = ui.available_size();
         let narrow = is_narrow(ctx);
         if narrow {
             ui.vertical(|ui| {
                 self.vs_ai_board(ctx, ui, avail);
                 ui.add_space(8.0);
-                self.vs_ai_panel(ctx, ui);
+                side_panel(ui, avail.x, |ui| self.vs_ai_panel(ctx, ui));
             });
         } else {
             ui.horizontal(|ui| {
@@ -722,14 +737,12 @@ impl XiangqiApp {
                 let score_red = if pos.side() == Color::Red { s } else { -s };
                 eval_bar_ui(ui, score_red, avail.y);
                 // Board budget: full height, width left after eval bar (20),
-                // gap (12), panel (380) and row spacing.
-                let budget = egui::Vec2::new(avail.x - 20.0 - 12.0 - 380.0 - 24.0, avail.y);
+                // gap (12), panel (SIDE_PANEL_WIDTH) and row spacing.
+                let budget =
+                    egui::Vec2::new(avail.x - 20.0 - 12.0 - SIDE_PANEL_WIDTH - 24.0, avail.y);
                 self.vs_ai_board(ctx, ui, budget);
                 ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_width(380.0);
-                    self.vs_ai_panel(ctx, ui);
-                });
+                side_panel(ui, SIDE_PANEL_WIDTH, |ui| self.vs_ai_panel(ctx, ui));
             });
         }
 
@@ -868,7 +881,9 @@ impl XiangqiApp {
             ui.label(msg.clone());
         }
         // ChessDB: a separate live score for the position on display.
-        self.chessdb_section_ui(ui, &pos);
+        // The win/draw/loss rates stay visible here (only the Learn
+        // screen hides them, Hieu 2026-11-12).
+        self.chessdb_section_ui(ui, &pos, true);
         ui.separator();
         // Game info.
         let (side_txt, diff_txt) = match self.vs_ai.opponent {
@@ -889,25 +904,25 @@ impl XiangqiApp {
         let mut review = self.vs_ai.review;
         move_list_ui(ui, &moves, &mut review);
         self.vs_ai.review = review;
-        if self.vs_ai.review.is_some() && big_button(ui, i18n::t(Key::BackToEnd)).clicked() {
+        if self.vs_ai.review.is_some() && secondary_button(ui, i18n::t(Key::BackToEnd)).clicked() {
             self.vs_ai.review = None;
         }
         ui.separator();
         // Buttons.
         ui.horizontal_wrapped(|ui| {
-            if big_button(ui, i18n::t(Key::Undo)).clicked() {
+            if secondary_button(ui, i18n::t(Key::Undo)).clicked() {
                 let w = &self.worker;
                 self.vs_ai.undo(w);
             }
-            if big_button(ui, i18n::t(Key::Hint)).clicked() {
+            if secondary_button(ui, i18n::t(Key::Hint)).clicked() {
                 self.vs_ai.request_hint(&mut self.worker, 1);
             }
             if matches!(self.vs_ai.opponent, VsOpponent::Ai { .. })
-                && big_button(ui, i18n::t(Key::DrawOffer)).clicked()
+                && secondary_button(ui, i18n::t(Key::DrawOffer)).clicked()
             {
                 self.vs_ai.offer_draw();
             }
-            if big_button(ui, i18n::t(Key::Resign)).clicked() {
+            if secondary_button(ui, i18n::t(Key::Resign)).clicked() {
                 let side = match self.vs_ai.opponent {
                     VsOpponent::Ai { human, .. } => human,
                     VsOpponent::TwoPlayer => self.vs_ai.game.pos.side(),
@@ -915,13 +930,13 @@ impl XiangqiApp {
                 self.vs_ai.game.resign(side);
                 self.vs_ai.result_ack = false;
             }
-            if big_button(ui, i18n::t(Key::NewGame)).clicked() {
+            if secondary_button(ui, i18n::t(Key::NewGame)).clicked() {
                 self.vs_ai.show_start_dialog = true;
             }
-            if big_button(ui, i18n::t(Key::FlipBoard)).clicked() {
+            if secondary_button(ui, i18n::t(Key::FlipBoard)).clicked() {
                 self.vs_ai.flipped = !self.vs_ai.flipped;
             }
-            if big_button(ui, i18n::t(Key::BackToMenu)).clicked() {
+            if secondary_button(ui, i18n::t(Key::BackToMenu)).clicked() {
                 self.goto(Screen::Menu);
             }
         });
@@ -953,39 +968,44 @@ impl XiangqiApp {
             .resizable(false)
             .show(ctx, |ui| {
                 section_title(ui, i18n::t(Key::Side));
-                ui.radio_value(
+                big_radio(
+                    ui,
                     &mut self.vs_ai.start_side,
                     StartSide::Red,
                     i18n::t(Key::SideRed),
                 );
-                ui.radio_value(
+                big_radio(
+                    ui,
                     &mut self.vs_ai.start_side,
                     StartSide::Black,
                     i18n::t(Key::SideBlack),
                 );
-                ui.radio_value(
+                big_radio(
+                    ui,
                     &mut self.vs_ai.start_side,
                     StartSide::Random,
                     i18n::t(Key::SideRandom),
                 );
-                ui.radio_value(
+                big_radio(
+                    ui,
                     &mut self.vs_ai.start_side,
                     StartSide::TwoPlayer,
                     i18n::t(Key::TwoPlayers),
                 );
                 section_title(ui, i18n::t(Key::Difficulty));
                 for d in 0..=4u8 {
-                    ui.radio_value(
+                    big_radio(
+                        ui,
                         &mut self.vs_ai.start_difficulty,
                         d,
                         i18n::difficulty_name(d),
                     );
                 }
                 ui.horizontal(|ui| {
-                    if big_button(ui, i18n::t(Key::Start)).clicked() {
+                    if primary_button(ui, i18n::t(Key::Start)).clicked() {
                         start = true;
                     }
-                    if big_button(ui, i18n::t(Key::Cancel)).clicked() {
+                    if secondary_button(ui, i18n::t(Key::Cancel)).clicked() {
                         cancel = true;
                     }
                 });
@@ -1026,13 +1046,13 @@ impl XiangqiApp {
             .show(ctx, |ui| {
                 ui.label(result.describe_vi());
                 ui.horizontal(|ui| {
-                    if big_button(ui, i18n::t(Key::NewGame)).clicked() {
+                    if primary_button(ui, i18n::t(Key::NewGame)).clicked() {
                         new_game = true;
                     }
-                    if big_button(ui, i18n::t(Key::ReviewGame)).clicked() {
+                    if secondary_button(ui, i18n::t(Key::ReviewGame)).clicked() {
                         review = true;
                     }
-                    if big_button(ui, i18n::t(Key::Close)).clicked() {
+                    if secondary_button(ui, i18n::t(Key::Close)).clicked() {
                         close = true;
                     }
                 });

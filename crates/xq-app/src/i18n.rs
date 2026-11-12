@@ -1,7 +1,67 @@
-//! All Vietnamese UI strings live here (§7.5) — no hardcoded strings in screens.
+//! All UI strings live here (§7.5) — no hardcoded strings in screens.
+//! Two languages: Vietnamese (default) and English (Hieu, 2026-11-12).
+//! The current language is a process-wide setting (see `set_language`);
+//! `t(key)` returns the string for it, so call sites never change.
+//! Chinese characters appear ONLY on the board pieces; every UI string
+//! and every move name is Vietnamese or English.
 //!
 //! Templates use `{n}` / `{name}` placeholders; screens substitute values
 //! with `str::replace`, the template itself stays in this file.
+
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// UI language.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Language {
+    /// Tiếng Việt (default).
+    #[default]
+    Vietnamese,
+    English,
+}
+
+impl Language {
+    /// Parse the persisted language name (`"vi"` / `"en"`).
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "en" => Language::English,
+            _ => Language::Vietnamese,
+        }
+    }
+
+    /// Persisted name (`"vi"` / `"en"`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Language::Vietnamese => "vi",
+            Language::English => "en",
+        }
+    }
+}
+
+/// Current UI language (process-wide). 0 = Vietnamese, 1 = English.
+static LANGUAGE: AtomicU8 = AtomicU8::new(0);
+
+/// Set the UI language (called once at startup from saved settings,
+/// and whenever the user changes it in Settings).
+pub fn set_language(lang: Language) {
+    LANGUAGE.store(
+        match lang {
+            Language::Vietnamese => 0,
+            Language::English => 1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Current UI language.
+#[must_use]
+pub fn language() -> Language {
+    match LANGUAGE.load(Ordering::Relaxed) {
+        1 => Language::English,
+        _ => Language::Vietnamese,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Key {
@@ -53,9 +113,7 @@ pub enum Key {
     NoLessonsYet,
     LevelStars,
     CompletedMark,
-    BestScore,
     IntroTitle,
-    SourcesTitle,
     StartLesson,
     TutorTitle,
     HideHints,
@@ -80,8 +138,11 @@ pub enum Key {
     AdvantageScore,
     SoundOn,
     NotationLabel,
-    NotationCn,
     NotationVn,
+    NotationEn,
+    LanguageLabel,
+    LanguageVi,
+    LanguageEn,
     AnimateLabel,
     AboutBody,
     AboutFonts,
@@ -118,10 +179,59 @@ pub enum Key {
     ChessDbNoData,
     ChessDbWinRate,
     ChessDbBestMove,
+    // --- Self practice mode (Hieu, 2026-11-12) ---
+    PracticeTitle,
+    PracticeDifficulty,
+    PracticeStartPos,
+    PracticeFromFen,
+    PracticeFromImage,
+    PracticeFenLabel,
+    PracticeFenHint,
+    PracticeLoadFen,
+    PracticeFenInvalid,
+    PracticeImagePath,
+    PracticeLoadImage,
+    PracticeImageNote,
+    PracticeImageNotFound,
+    PracticeImageRef,
+    PracticeEditorTitle,
+    PracticeEditorHint,
+    PracticeUsePosition,
+    PracticeEditorInvalid,
+    PracticeSideToMove,
+    PracticeClearBoard,
+    PracticeEraser,
+    PracticeSuggestions,
+    PracticeSuggestChessDb,
+    PracticeSuggestEngine,
+    PracticeThinking,
+    PracticeNoSuggestions,
+    PracticeGradeBest,
+    PracticeGradeGood,
+    PracticeGradeAcceptable,
+    PracticeGradeInaccurate,
+    PracticeGradeBlunder,
+    PracticeLastMove,
+    PracticeRedWins,
+    PracticeBlackWins,
+    PracticeDraw,
+    PracticeReasonCheckmate,
+    PracticeReasonStalemate,
+    PracticeReasonRepetition,
+    PracticeBackToSetup,
 }
 
+/// UI string for `key` in the current language (see `set_language`).
 #[must_use]
 pub fn t(key: Key) -> &'static str {
+    match language() {
+        Language::Vietnamese => t_vi(key),
+        Language::English => t_en(key),
+    }
+}
+
+/// Vietnamese strings.
+fn t_vi(key: Key) -> &'static str {
     match key {
         Key::AppTitle => "Cờ Tướng AI",
         Key::AppSubtitle => "Đấu với máy • Học chơi khai cuộc",
@@ -171,9 +281,7 @@ pub fn t(key: Key) -> &'static str {
         Key::NoLessonsYet => "Chưa có bài học cho bên này.",
         Key::LevelStars => "Mức {n}/3",
         Key::CompletedMark => "✓ Đã hoàn thành",
-        Key::BestScore => "Điểm cao nhất: {n}%",
         Key::IntroTitle => "Giới thiệu bài",
-        Key::SourcesTitle => "Nguồn",
         Key::StartLesson => "Bắt đầu",
         Key::TutorTitle => "Gia sư",
         Key::HideHints => "Ẩn gợi ý",
@@ -198,7 +306,6 @@ pub fn t(key: Key) -> &'static str {
         Key::AdvantageScore => "Điểm lợi thế",
         Key::SoundOn => "Âm thanh",
         Key::NotationLabel => "Ký hiệu nước đi",
-        Key::NotationCn => "Trung Quốc (炮二平五)",
         Key::NotationVn => "Việt Nam (P2-5)",
         Key::AnimateLabel => "Hiệu ứng chuyển quân",
         Key::AboutBody => "Cờ Tướng AI {n} — game cờ tướng viết bằng Rust.",
@@ -236,6 +343,210 @@ pub fn t(key: Key) -> &'static str {
         Key::ChessDbNoData => "ChessDB chưa có dữ liệu cho thế cờ này",
         Key::ChessDbWinRate => "Đỏ thắng {n}% • Hòa {m}% • Thua {k}%",
         Key::ChessDbBestMove => "Nước tốt nhất: {name}",
+        Key::NotationEn => "Tiếng Anh (C2-5)",
+        Key::LanguageLabel => "Ngôn ngữ",
+        Key::LanguageVi => "Tiếng Việt",
+        Key::LanguageEn => "English",
+        // --- Tự luyện tập ---
+        Key::PracticeTitle => "Tự luyện tập",
+        Key::PracticeDifficulty => "Độ khó (Pikafish)",
+        Key::PracticeStartPos => "Thế cờ ban đầu",
+        Key::PracticeFromFen => "Từ FEN",
+        Key::PracticeFromImage => "Từ ảnh bàn cờ",
+        Key::PracticeFenLabel => "Dán FEN của thế cờ",
+        Key::PracticeFenHint => "Dán FEN vào đây…",
+        Key::PracticeLoadFen => "Tải thế cờ",
+        Key::PracticeFenInvalid => "FEN không hợp lệ.",
+        Key::PracticeImagePath => "Đường dẫn file ảnh",
+        Key::PracticeLoadImage => "Tải ảnh",
+        Key::PracticeImageNote => "Ảnh chỉ dùng làm tham chiếu — app chưa tự đọc được thế cờ từ ảnh (cần mô hình nhận diện riêng). Dùng bộ soạn bên dưới để đặt quân theo ảnh.",
+        Key::PracticeImageNotFound => "Không tìm thấy file ảnh.",
+        Key::PracticeImageRef => "Ảnh tham chiếu",
+        Key::PracticeEditorTitle => "Soạn thế cờ theo ảnh",
+        Key::PracticeEditorHint => "Chọn một quân rồi bấm vào ô để đặt; bấm vào quân trên bàn để xóa.",
+        Key::PracticeUsePosition => "Dùng thế cờ này",
+        Key::PracticeEditorInvalid => "Thế cờ chưa hợp lệ: cần đủ 2 Tướng và 2 Tướng không được đối mặt.",
+        Key::PracticeSideToMove => "Bên đi",
+        Key::PracticeClearBoard => "Xóa bàn",
+        Key::PracticeEraser => "Tẩy",
+        Key::PracticeSuggestions => "Gợi ý nước đi",
+        Key::PracticeSuggestChessDb => "Gợi ý (ChessDB)",
+        Key::PracticeSuggestEngine => "Gợi ý (Pikafish)",
+        Key::PracticeThinking => "Đang tính gợi ý…",
+        Key::PracticeNoSuggestions => "Chưa có gợi ý cho thế cờ này.",
+        Key::PracticeGradeBest => "Nước tốt nhất",
+        Key::PracticeGradeGood => "Tốt",
+        Key::PracticeGradeAcceptable => "Chấp nhận được",
+        Key::PracticeGradeInaccurate => "Thiếu chính xác",
+        Key::PracticeGradeBlunder => "Sai lầm",
+        Key::PracticeLastMove => "Nước vừa đi",
+        Key::PracticeRedWins => "Đỏ thắng",
+        Key::PracticeBlackWins => "Đen thắng",
+        Key::PracticeDraw => "Hòa",
+        Key::PracticeReasonCheckmate => "chiếu hết",
+        Key::PracticeReasonStalemate => "hết nước đi",
+        Key::PracticeReasonRepetition => "lặp nước",
+        Key::PracticeBackToSetup => "Đổi thế cờ",
+    }
+}
+
+/// English strings.
+fn t_en(key: Key) -> &'static str {
+    match key {
+        Key::AppTitle => "Xiangqi AI",
+        Key::AppSubtitle => "Play vs AI • Learn openings",
+        Key::PlayVsAi => "Play vs AI",
+        Key::LearnOpenings => "Learn openings",
+        Key::Settings => "Settings",
+        Key::About => "About",
+        Key::NewGame => "New game",
+        Key::Undo => "Undo",
+        Key::Hint => "Hint",
+        Key::DrawOffer => "Offer draw",
+        Key::Resign => "Resign",
+        Key::FlipBoard => "Flip board",
+        Key::Thinking => "AI is thinking…",
+        Key::ThinkingDepth => "AI is thinking… (depth {n})",
+        Key::Check => "Check!",
+        Key::BackToMenu => "Back to menu",
+        Key::Close => "Close",
+        Key::Start => "Start",
+        Key::Cancel => "Cancel",
+        Key::Side => "Side",
+        Key::SideRed => "Red first",
+        Key::SideBlack => "Black",
+        Key::SideRandom => "Random",
+        Key::TwoPlayers => "2 players",
+        Key::Difficulty => "Difficulty",
+        Key::DiffEasy => "Easy",
+        Key::DiffMedium => "Medium",
+        Key::DiffHard => "Hard",
+        Key::DiffMaster => "Master",
+        Key::StartGameTitle => "Start a new game",
+        Key::RedToMove => "Red to move",
+        Key::BlackToMove => "Black to move",
+        Key::RedSide => "Red",
+        Key::BlackSide => "Black",
+        Key::MovesTitle => "Move list",
+        Key::GameInfo => "Game info",
+        Key::HintsUsed => "Used {n} hints",
+        Key::AiAcceptedDraw => "AI accepted the draw.",
+        Key::AiDeclinedDraw => "AI declined the draw.",
+        Key::ResultTitle => "Game result",
+        Key::ReviewGame => "Review game",
+        Key::Reviewing => "Reviewing move {n}/{m}",
+        Key::BackToEnd => "Back to end",
+        Key::LearnFirst => "First player (Red)",
+        Key::LearnSecond => "Second player (Black)",
+        Key::NoLessonsYet => "No lessons for this side yet.",
+        Key::LevelStars => "Level {n}/3",
+        Key::CompletedMark => "✓ Completed",
+        Key::IntroTitle => "Lesson intro",
+        Key::StartLesson => "Start",
+        Key::TutorTitle => "Tutor",
+        Key::HideHints => "Hide hints",
+        Key::ShowHints => "Show hints",
+        Key::RetryMove => "Retry",
+        Key::ContinueMove => "Continue",
+        Key::OffBookTitle => "Out-of-book move",
+        Key::OffBookBody => "This move is not in the opening book.",
+        Key::BookMoveShouldBe => "Book move: {name}",
+        Key::OpeningCompleteTitle => "Opening complete",
+        Key::CorrectBookMoves => "Book moves: {n}/{m}",
+        Key::MistakesAndInaccuracies => "Mistakes: {n} • Inaccuracies: {m}",
+        Key::EngineScore => "Engine score at the end: {n}",
+        Key::StopAndSummary => "Stop and view summary",
+        Key::ContinueWithAi => "Continue vs AI",
+        Key::SummaryTitle => "Lesson summary",
+        Key::LearnAgain => "Learn this lesson again",
+        Key::OtherLesson => "Another lesson",
+        Key::ViewPosition => "Tap a line to view the position.",
+        Key::ProgressMoves => "Move {n} / about {m}",
+        Key::BestDirections => "Best lines",
+        Key::AdvantageScore => "Advantage",
+        Key::SoundOn => "Sound",
+        Key::NotationLabel => "Move notation",
+        Key::NotationVn => "Vietnamese (P2-5)",
+        Key::NotationEn => "English (C2-5)",
+        Key::LanguageLabel => "Language",
+        Key::LanguageVi => "Tiếng Việt",
+        Key::LanguageEn => "English",
+        Key::AnimateLabel => "Piece slide animation",
+        Key::AboutBody => "Xiangqi AI {n} — a Xiangqi game written in Rust.",
+        Key::AboutFonts => "Chinese fonts: Noto Serif CJK SC (SIL Open Font License 1.1, see assets/fonts/OFL.txt). UI font: Noto Sans (OFL 1.1).",
+        Key::AboutNoSound => "Sound is currently only a saved toggle; this build has no audio playback yet.",
+        Key::VsAiContinueNote => "Continuing from a lesson — auto hints on.",
+        Key::YourTurnLearn => "Your turn. Pick a suggested move, or play your own.",
+        Key::NoHintAvailable => "No hint yet.",
+        Key::OpponentChooseTitle => "Which line does the opponent play?",
+        Key::OpponentChooseMsg => "Opponent to move — tap a line for the opponent to play it.",
+        Key::NextMovesTitle => "Next moves from the book",
+        Key::NextMovesOpponent => "Opponent will play {name}",
+        Key::NextMovesFollow => "Then you can play:",
+        Key::LessonNotFound => "Lesson not found.",
+        Key::GradeLabel => "Grade",
+        Key::EngineSection => "Engine (Pikafish)",
+        Key::EngineInUse => "Engine in use: {n}",
+        Key::EngineThreads => "Threads",
+        Key::EngineHash => "Hash memory (MB)",
+        Key::EngineHashAuto => "Auto (by RAM)",
+        Key::EngineCustomElo => "Custom Elo",
+        Key::DiffCustom => "Custom (Elo)",
+        Key::EngineDiversity => "Varied moves (Master)",
+        Key::EngineTournament => "Tournament mode (variety off)",
+        Key::EnginePath => "Pikafish path (empty = auto)",
+        Key::EngineRetry => "Retry Pikafish",
+        Key::EngineTraceLog => "Log UCI details to engine.log",
+        Key::AboutEngine => "Pikafish engine {n} — GPLv3, source: github.com/official-pikafish/Pikafish.",
+        Key::AboutEngineBody => "The default AI is Pikafish (the strongest Xiangqi engine today). When Pikafish cannot run, the game falls back to the built-in AI.",
+        Key::AboutNnue => "The pikafish.nnue network is for non-commercial use only (see NNUE-License).",
+        Key::OpenEngineFolder => "Open engine folder",
+        Key::OpenEngineLog => "Open engine.log",
+        Key::ChessDbTitle => "ChessDB score",
+        Key::ChessDbLoading => "Loading ChessDB score…",
+        Key::ChessDbNoData => "ChessDB has no data for this position",
+        Key::ChessDbWinRate => "Red wins {n}% • Draw {m}% • Loses {k}%",
+        Key::ChessDbBestMove => "Best move: {name}",
+        // --- Self practice ---
+        Key::PracticeTitle => "Self practice",
+        Key::PracticeDifficulty => "Difficulty (Pikafish)",
+        Key::PracticeStartPos => "Starting position",
+        Key::PracticeFromFen => "From FEN",
+        Key::PracticeFromImage => "From a board photo",
+        Key::PracticeFenLabel => "Paste the position FEN",
+        Key::PracticeFenHint => "Paste a FEN here…",
+        Key::PracticeLoadFen => "Load position",
+        Key::PracticeFenInvalid => "Invalid FEN.",
+        Key::PracticeImagePath => "Image file path",
+        Key::PracticeLoadImage => "Load image",
+        Key::PracticeImageNote => "The photo is only a reference — the app cannot read a position from a photo yet (it needs a separate vision model). Use the editor below to place the pieces from the photo.",
+        Key::PracticeImageNotFound => "Image file not found.",
+        Key::PracticeImageRef => "Reference photo",
+        Key::PracticeEditorTitle => "Set up the position from the photo",
+        Key::PracticeEditorHint => "Pick a piece, then tap a square to place it; tap a piece on the board to remove it.",
+        Key::PracticeUsePosition => "Use this position",
+        Key::PracticeEditorInvalid => "Position not valid: both Generals are required and they must not face each other.",
+        Key::PracticeSideToMove => "Side to move",
+        Key::PracticeClearBoard => "Clear board",
+        Key::PracticeEraser => "Eraser",
+        Key::PracticeSuggestions => "Suggested moves",
+        Key::PracticeSuggestChessDb => "Suggestions (ChessDB)",
+        Key::PracticeSuggestEngine => "Suggestions (Pikafish)",
+        Key::PracticeThinking => "Calculating suggestions…",
+        Key::PracticeNoSuggestions => "No suggestions for this position.",
+        Key::PracticeGradeBest => "Best move",
+        Key::PracticeGradeGood => "Good",
+        Key::PracticeGradeAcceptable => "Acceptable",
+        Key::PracticeGradeInaccurate => "Inaccurate",
+        Key::PracticeGradeBlunder => "Blunder",
+        Key::PracticeLastMove => "Last move",
+        Key::PracticeRedWins => "Red wins",
+        Key::PracticeBlackWins => "Black wins",
+        Key::PracticeDraw => "Draw",
+        Key::PracticeReasonCheckmate => "checkmate",
+        Key::PracticeReasonStalemate => "stalemate",
+        Key::PracticeReasonRepetition => "repetition",
+        Key::PracticeBackToSetup => "Change position",
     }
 }
 

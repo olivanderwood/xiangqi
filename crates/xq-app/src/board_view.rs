@@ -556,35 +556,143 @@ pub fn draw_board(
         );
     }
 
-    // Last-move corner brackets.
+    // Last-move highlight: a translucent amber wash on the from/to
+    // squares (easy to spot at a glance) plus the corner brackets.
+    // The wash is drawn under the pieces, so the board layout and
+    // the pieces themselves are untouched.
     if let Some(mv) = draw.last_move {
+        for sq in [mv.from, mv.to] {
+            let c = at(sq);
+            painter.rect_filled(
+                Rect::from_center_size(c, Vec2::splat(0.92 * cell)),
+                egui::CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(0xFF, 0xC1, 0x07, 70),
+            );
+        }
         corner_brackets(painter, at(mv.from), cell, LAST_MOVE_COLOR);
         corner_brackets(painter, at(mv.to), cell, LAST_MOVE_COLOR);
+    }
+    // Capture flash: the last move was a capture exactly when the
+    // halfmove clock is 0 after it (this codebase resets the clock
+    // only on captures — see `Position::make_move`). An expanding
+    // ring at the captured square fades out over ~400 ms from the
+    // move's slide start; without a slide animation there is no
+    // start time, so a steady ring marks the square until the next
+    // move instead. The ring is gone as soon as the next move is a
+    // quiet one (clock > 0), so it never gets stuck.
+    if pos.halfmove_clock() == 0 {
+        if let Some(mv) = draw.last_move {
+            let c = at(mv.to);
+            let (radius, alpha) = match draw.anim.filter(|a| a.mv == mv) {
+                Some(anim) => {
+                    let elapsed = (draw.now - anim.start) as f32;
+                    let p = (elapsed / 0.4).clamp(0.0, 1.0);
+                    (0.48 + 0.30 * p, ((1.0 - p) * 220.0) as u8)
+                }
+                None => (0.58, 150),
+            };
+            if alpha > 0 {
+                painter.circle_stroke(
+                    c,
+                    radius * cell,
+                    Stroke::new(
+                        4.0_f32,
+                        Color32::from_rgba_unmultiplied(0xE6, 0x51, 0x00, alpha),
+                    ),
+                );
+            }
+        }
     }
     // Hint arrows (under the pieces).
     for arrow in draw.arrows {
         draw_arrow(painter, geom, rect.min, arrow);
     }
-    // Check halo around the king in check.
+    // Check halo around the king in check — pulsing, so it is easy to
+    // spot. Checkmate (king in check with no legal move) gets a
+    // stronger effect: a thicker, faster-pulsing halo plus a
+    // "Chiếu hết!" / "Checkmate!" banner across the board.
     if let Some(ksq) = draw.check_sq {
-        let pulse = 0.5 + 0.5 * (draw.now * 8.0).sin();
-        let alpha = (90.0 + 90.0 * pulse) as u8;
+        // Checkmate = in check and no legal move for the side to move.
+        // `legal_moves` is only generated while in check (rare), so
+        // this costs nothing on a normal frame.
+        let is_mate = pos.legal_moves().is_empty();
+        let speed = if is_mate { 12.0 } else { 8.0 };
+        let pulse = 0.5 + 0.5 * ((draw.now * speed) as f32).sin();
         let c = at(ksq);
-        painter.circle_filled(
-            c,
-            0.58 * cell,
-            Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha / 3),
-        );
-        painter.circle_stroke(
-            c,
-            0.58 * cell,
-            Stroke::new(
-                3.0_f32,
-                Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha),
-            ),
-        );
+        if is_mate {
+            // Strong halo: wider radius swing, higher alpha, thick ring.
+            let radius = (0.58 + 0.10 * pulse) * cell;
+            let alpha = (140.0 + 115.0 * pulse) as u8;
+            painter.circle_filled(
+                c,
+                radius,
+                Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha / 4),
+            );
+            painter.circle_stroke(
+                c,
+                radius,
+                Stroke::new(
+                    5.0_f32,
+                    Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha),
+                ),
+            );
+            // Banner across the middle of the board.
+            let mate_text = match crate::i18n::language() {
+                crate::i18n::Language::English => "Checkmate!",
+                crate::i18n::Language::Vietnamese => "Chiếu hết!",
+            };
+            let mid = Pos2::new(
+                rect.min.x + geom.board_size().x / 2.0,
+                rect.min.y + geom.board_size().y / 2.0,
+            );
+            let banner_h = 0.62 * cell;
+            painter.rect_filled(
+                Rect::from_center_size(mid, Vec2::new(geom.board_size().x * 0.72, banner_h)),
+                egui::CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(0x7B, 0x1F, 0x1F, 225),
+            );
+            painter.text(
+                mid,
+                Align2::CENTER_CENTER,
+                mate_text,
+                sans(0.38 * cell),
+                Color32::WHITE,
+            );
+        } else {
+            // Check: pulsing radius + alpha, plus a thin outer ring
+            // that expands and fades in a loop (a "shockwave").
+            let radius = (0.56 + 0.06 * pulse) * cell;
+            let alpha = (120.0 + 100.0 * pulse) as u8;
+            painter.circle_filled(
+                c,
+                radius,
+                Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha / 3),
+            );
+            painter.circle_stroke(
+                c,
+                radius,
+                Stroke::new(
+                    3.0_f32,
+                    Color32::from_rgba_unmultiplied(0xFF, 0x00, 0x00, alpha),
+                ),
+            );
+            let wave_p = ((draw.now * 1.25) as f32).fract();
+            painter.circle_stroke(
+                c,
+                (0.55 + 0.30 * wave_p) * cell,
+                Stroke::new(
+                    2.0_f32,
+                    Color32::from_rgba_unmultiplied(
+                        0xFF,
+                        0x00,
+                        0x00,
+                        ((1.0 - wave_p) * 140.0) as u8,
+                    ),
+                ),
+            );
+        }
         if let Some(since) = draw.check_since {
-            if draw.now - since < 1.0 {
+            if draw.now - since < 1.0 && !is_mate {
                 painter.text(
                     c + Vec2::new(0.0, -0.85 * cell),
                     Align2::CENTER_CENTER,
