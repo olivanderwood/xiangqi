@@ -30,9 +30,6 @@
 
 use std::time::Duration;
 
-/// ChessDB API endpoint (plain HTTP; the service has no HTTPS).
-pub const CHESSDB_URL: &str = "http://www.chessdb.cn/chessdb.php";
-
 /// How long a ChessDB request may take before it counts as failed.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -97,11 +94,30 @@ impl std::fmt::Display for ChessDbError {
 
 impl std::error::Error for ChessDbError {}
 
-/// A ChessDB client. Cheap to clone (the agent is internally shared);
-/// create one per worker thread.
+/// A ChessDB client. Cheap to clone (it only holds the proxy config
+/// read once at creation); create one per worker thread.
+///
+/// The client speaks plain HTTP/1.1 over `std::net::TcpStream`
+/// directly — no HTTP client dependency. ChessDB is plain HTTP, and
+/// the app must not crash on Windows when the network is up: the
+/// previous `ureq`-based client was implicated in a 0xc0000409
+/// (STATUS_STACK_BUFFER_OVERRUN) crash on entering either board
+/// screen whenever the network was available (offline = no crash,
+/// Hieu, 2026-11-12). A minimal hand-rolled client leaves nothing
+/// outside this crate to go wrong.
 #[derive(Clone, Debug)]
 pub struct ChessDbClient {
-    agent: ureq::Agent,
+    proxy: Option<ProxyConfig>,
+}
+
+/// An HTTP proxy from the environment: host/port to connect to, plus
+/// an optional `Proxy-Authorization: Basic ...` value.
+#[derive(Clone, Debug)]
+struct ProxyConfig {
+    host: String,
+    port: u16,
+    /// Base64 of `user:password`, when the proxy URL carries credentials.
+    auth: Option<String>,
 }
 
 impl Default for ChessDbClient {
@@ -122,12 +138,8 @@ impl ChessDbClient {
     /// egress proxy). No proxy is ever hardcoded.
     #[must_use]
     pub fn new() -> Self {
-        let mut builder = ureq::AgentBuilder::new().timeout(TIMEOUT);
-        if let Some(proxy) = proxy_from_env() {
-            builder = builder.proxy(proxy);
-        }
         Self {
-            agent: builder.build(),
+            proxy: proxy_from_env(),
         }
     }
 
@@ -136,20 +148,18 @@ impl ChessDbClient {
     /// no data for the position; returns `Err` only on network, HTTP
     /// or parse failures.
     pub fn query_all(&self, fen: &str) -> Result<ChessDbEval, ChessDbError> {
-        let resp = self
-            .agent
-            .get(CHESSDB_URL)
-            .query("action", "queryall")
-            .query("board", fen)
-            .call()
-            .map_err(|e| match e {
-                ureq::Error::Status(code, _) => ChessDbError::HttpStatus(code),
-                ureq::Error::Transport(t) => ChessDbError::Network(t.to_string()),
-            })?;
-        let text = resp
-            .into_string()
-            .map_err(|e| ChessDbError::Parse(e.to_string()))?;
-        let top = parse_queryall(&text)?;
+        let query = format!("action=queryall&board={}", percent_encode(fen));
+        let (status, body) = http_get(
+            CHESSDB_HOST,
+            CHESSDB_PORT,
+            CHESSDB_PATH,
+            &query,
+            self.proxy.as_ref(),
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(ChessDbError::HttpStatus(status));
+        }
+        let top = parse_queryall(&body)?;
         Ok(ChessDbEval {
             fen: fen.to_string(),
             score: top.first().map(|m| m.score),
@@ -158,18 +168,229 @@ impl ChessDbClient {
     }
 }
 
+/// ChessDB host / port / path (plain HTTP; the service has no HTTPS).
+const CHESSDB_HOST: &str = "www.chessdb.cn";
+const CHESSDB_PORT: u16 = 80;
+const CHESSDB_PATH: &str = "/chessdb.php";
+
+/// Percent-encode a query value (RFC 3986 unreserved set kept as-is;
+/// everything else becomes `%XX`, uppercase hex). The FEN contains
+/// spaces and `/`, both of which must be encoded.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Minimal base64 (standard alphabet, with `=` padding) for the
+/// `Proxy-Authorization: Basic ...` header. Only used for proxy
+/// credentials from the environment.
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[(n >> 6) as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[n as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 /// Read the HTTP proxy from the environment (`http_proxy`, falling
 /// back to `HTTP_PROXY`), the same variables curl honours. Returns
-/// `None` when no proxy is configured (direct connection).
-fn proxy_from_env() -> Option<ureq::Proxy> {
+/// `None` when no proxy is configured (direct connection). The URL
+/// may carry credentials (`http://user:pass@host:port`); they are
+/// turned into a Basic auth value, never logged or stored elsewhere.
+fn proxy_from_env() -> Option<ProxyConfig> {
     let url = std::env::var("http_proxy")
         .or_else(|_| std::env::var("HTTP_PROXY"))
         .ok()?;
+    parse_proxy_url(url.trim())
+}
+
+/// Parse a proxy URL (`http://[user:pass@]host[:port][/...]`) into a
+/// [`ProxyConfig`]. Returns `None` for an empty or unusable URL.
+fn parse_proxy_url(url: &str) -> Option<ProxyConfig> {
     let url = url.trim();
     if url.is_empty() {
         return None;
     }
-    ureq::Proxy::new(url).ok()
+    // Strip the scheme (`http://`); this client only speaks HTTP.
+    let rest = url.strip_prefix("http://").unwrap_or(url);
+    // Split off `user:pass@` when present.
+    let (auth, hostport) = match rest.rsplit_once('@') {
+        Some((userinfo, hostport)) => (Some(base64_encode(userinfo.as_bytes())), hostport),
+        None => (None, rest),
+    };
+    // Split off a trailing `/...` path, if any.
+    let hostport = hostport.split('/').next().unwrap_or(hostport);
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse::<u16>().ok()?),
+        None => (hostport.to_string(), 80),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(ProxyConfig { host, port, auth })
+}
+
+/// One plain HTTP/1.1 GET. Returns `(status, body)`.
+///
+/// With a proxy, the client connects to the proxy and sends the
+/// absolute URI (the standard HTTP-proxy request form); without one
+/// it connects to the host directly and sends the origin form. The
+/// body is read by `Content-Length`, by chunked transfer encoding,
+/// or — when neither is given — until the server closes the
+/// connection. Read/write timeouts are [`TIMEOUT`], so a hung server
+/// cannot block the worker thread forever.
+fn http_get(
+    host: &str,
+    port: u16,
+    path: &str,
+    query: &str,
+    proxy: Option<&ProxyConfig>,
+) -> Result<(u16, String), ChessDbError> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let (connect_host, connect_port, request_target) = match proxy {
+        Some(p) => (
+            p.host.as_str(),
+            p.port,
+            format!("http://{host}:{port}{path}?{query}"),
+        ),
+        None => (host, port, format!("{path}?{query}")),
+    };
+    let mut stream = TcpStream::connect((connect_host, connect_port))
+        .map_err(|e| ChessDbError::Network(e.to_string()))?;
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|e| ChessDbError::Network(e.to_string()))?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|e| ChessDbError::Network(e.to_string()))?;
+
+    let mut request = format!(
+        "GET {request_target} HTTP/1.1\r\nHost: {host}:{port}\r\nUser-Agent: xiangqi-app/0.1.0\r\nAccept: */*\r\nConnection: close\r\n"
+    );
+    if let Some(p) = proxy {
+        if let Some(auth) = &p.auth {
+            request.push_str(&format!("Proxy-Authorization: Basic {auth}\r\n"));
+        }
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| ChessDbError::Network(e.to_string()))?;
+
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .map_err(|e| ChessDbError::Network(e.to_string()))?;
+    parse_http_response(&raw)
+}
+
+/// Split a raw HTTP/1.1 response into `(status, body)`. Handles
+/// `Content-Length`, `Transfer-Encoding: chunked`, and bodies that
+/// simply run to the end of the connection.
+fn parse_http_response(raw: &[u8]) -> Result<(u16, String), ChessDbError> {
+    // Headers end at the first blank line (`\r\n\r\n`).
+    let header_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| ChessDbError::Parse("trả lời HTTP không có đầu mục".to_string()))?;
+    let head = String::from_utf8_lossy(&raw[..header_end]).into_owned();
+    let mut lines = head.lines();
+    let status_line = lines
+        .next()
+        .ok_or_else(|| ChessDbError::Parse("trả lời HTTP trống".to_string()))?;
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| {
+            ChessDbError::Parse(format!("không đọc được trạng thái HTTP: {status_line}"))
+        })?;
+
+    let mut content_length: Option<usize> = None;
+    let mut chunked = false;
+    for line in lines {
+        let (name, value) = match line.split_once(':') {
+            Some((n, v)) => (n.trim().to_ascii_lowercase(), v.trim()),
+            None => continue,
+        };
+        if name == "content-length" {
+            content_length = value.parse().ok();
+        } else if name == "transfer-encoding" && value.eq_ignore_ascii_case("chunked") {
+            chunked = true;
+        }
+    }
+
+    let body_bytes = &raw[header_end + 4..];
+    let body: Vec<u8> = if chunked {
+        decode_chunked(body_bytes)?
+    } else if let Some(len) = content_length {
+        body_bytes
+            .get(..len.min(body_bytes.len()))
+            .unwrap_or(&[])
+            .to_vec()
+    } else {
+        body_bytes.to_vec()
+    };
+    let text = String::from_utf8_lossy(&body).into_owned();
+    Ok((status, text))
+}
+
+/// Decode a chunked transfer-encoded body (`<hex-len>\r\n<data>\r\n`,
+/// repeated, terminated by a zero-length chunk).
+fn decode_chunked(mut data: &[u8]) -> Result<Vec<u8>, ChessDbError> {
+    let mut out = Vec::new();
+    loop {
+        let line_end = data
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or_else(|| ChessDbError::Parse("chunk HTTP không hợp lệ".to_string()))?;
+        let len_str = std::str::from_utf8(&data[..line_end])
+            .map_err(|_| ChessDbError::Parse("độ dài chunk không phải ASCII".to_string()))?;
+        // Chunk extensions (`;...`) are ignored.
+        let len_str = len_str.split(';').next().unwrap_or(len_str).trim();
+        let len = usize::from_str_radix(len_str, 16)
+            .map_err(|_| ChessDbError::Parse(format!("độ dài chunk sai: {len_str}")))?;
+        if len == 0 {
+            break;
+        }
+        let chunk_start = line_end + 2;
+        let chunk_end = chunk_start + len;
+        if chunk_end > data.len() {
+            return Err(ChessDbError::Parse(
+                "chunk HTTP dài hơn phần thân còn lại".to_string(),
+            ));
+        }
+        out.extend_from_slice(&data[chunk_start..chunk_end]);
+        // Skip the chunk data and its trailing `\r\n`.
+        data = &data[chunk_end + 2..];
+    }
+    Ok(out)
 }
 
 /// Parse a `queryall` response body into the top moves. Public so the
@@ -298,6 +519,82 @@ mod tests {
         let body = [one; 6].join("|");
         let moves = parse_queryall(&body).expect("parse được");
         assert_eq!(moves.len(), 4);
+    }
+
+    #[test]
+    fn percent_encode_fen() {
+        // The startpos FEN: spaces and `/` must be encoded, `-` kept.
+        let fen = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+        let enc = percent_encode(fen);
+        assert!(!enc.contains(' '), "không còn khoảng trắng");
+        assert!(!enc.contains('/'), "không còn dấu /");
+        assert!(enc.contains("%20"), "khoảng trắng thành %20");
+        assert!(enc.contains("%2F"), "/ thành %2F");
+        assert!(enc.contains("w%20-%20-%20"), "phần sau FEN giữ nguyên dạng");
+    }
+
+    #[test]
+    fn base64_known_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn proxy_url_parsing() {
+        let p = parse_proxy_url("http://proxy.example:8080").expect("parse được");
+        assert_eq!(p.host, "proxy.example");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.auth, None);
+
+        let p = parse_proxy_url("http://user:pass@hatch-egress-proxy:3128").expect("parse được");
+        assert_eq!(p.host, "hatch-egress-proxy");
+        assert_eq!(p.port, 3128);
+        assert_eq!(p.auth.as_deref(), Some("dXNlcjpwYXNz"));
+
+        // No port -> 80; no scheme -> still parsed; empty -> None.
+        let p = parse_proxy_url("http://proxy.example").expect("parse được");
+        assert_eq!(p.port, 80);
+        let p = parse_proxy_url("proxy.example:3128").expect("parse được");
+        assert_eq!(p.host, "proxy.example");
+        assert!(parse_proxy_url("").is_none());
+        assert!(parse_proxy_url("http://").is_none());
+    }
+
+    #[test]
+    fn http_response_content_length() {
+        let raw =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: text/plain\r\n\r\nhelloEXTRA";
+        let (status, body) = parse_http_response(raw).expect("parse được");
+        assert_eq!(status, 200);
+        assert_eq!(body, "hello");
+    }
+
+    #[test]
+    fn http_response_chunked() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let (status, body) = parse_http_response(raw).expect("parse được");
+        assert_eq!(status, 200);
+        assert_eq!(body, "hello world");
+    }
+
+    #[test]
+    fn http_response_reads_to_close() {
+        let raw = b"HTTP/1.1 404 Not Found\r\n\r\nunknown";
+        let (status, body) = parse_http_response(raw).expect("parse được");
+        assert_eq!(status, 404);
+        assert_eq!(body, "unknown");
+    }
+
+    #[test]
+    fn http_response_bad_status_is_parse_error() {
+        let raw = b"GARBAGE\r\n\r\n";
+        assert!(matches!(
+            parse_http_response(raw),
+            Err(ChessDbError::Parse(_))
+        ));
     }
 
     /// Live check against the real service. Ignored by default: it
