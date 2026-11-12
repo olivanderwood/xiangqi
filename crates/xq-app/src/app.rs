@@ -296,11 +296,6 @@ impl XiangqiApp {
     /// and a position change costs one HTTP call (cached per FEN in
     /// the worker). Stale responses (overtaken by the next move) are
     /// dropped by `req_id`.
-    ///
-    /// DIAG (crash 0xc0000409, 2026-11-12): worker đã bật lại để
-    /// khoanh vùng — chỉ có section vẽ là còn tắt. Nếu bản này vẫn
-    /// crash -> lỗi ở worker (HTTP/parse); nếu hết crash -> lỗi ở
-    /// phần vẽ section.
     pub fn poll_chessdb(&mut self, fen: &str, ctx: &egui::Context) {
         while let Ok(resp) = self.chessdb.rx.try_recv() {
             let ChessDbResponse::Evaluated { req_id, result } = resp;
@@ -336,14 +331,7 @@ impl XiangqiApp {
     /// chip, not a replacement for it. Shown in both the Play-vs-AI
     /// and Learn panels. `pos` is the position the section is about
     /// (used to render the best move in the user's notation).
-    ///
-    /// DIAG (crash 0xc0000409 vẫn còn sau khi bỏ ureq, 2026-11-12):
-    /// section đang tắt hẳn để khoanh vùng. Bỏ `#[allow]` + `return`
-    /// để bật lại.
-    #[allow(unreachable_code)]
     pub fn chessdb_section_ui(&self, ui: &mut egui::Ui, pos: &Position) {
-        let _ = (ui, pos);
-        return;
         section_title(ui, i18n::t(Key::ChessDbTitle));
         match &self.chessdb_view {
             ChessDbView::Idle | ChessDbView::Loading => {
@@ -364,12 +352,21 @@ impl XiangqiApp {
                     });
                 }
                 if let Some(best) = eval.top.first() {
-                    // The best move in the user's notation; fall back
-                    // to the raw ICCS when it does not parse (it always
-                    // should — the FEN and the move come from ChessDB
-                    // for this same position).
+                    // The best move in the user's notation. Only
+                    // render it when the move is actually legal in
+                    // this position: `render_cn`/`render_vn` expect a
+                    // piece on the source square and panic otherwise,
+                    // and the ChessDB answer can be for a different
+                    // position than the one on screen (review ply, or
+                    // a move made while the reply was in flight) —
+                    // that stale best move used to panic the app
+                    // (crash 0xc0000409, release `panic = "abort"`).
+                    // An unparseable or illegal best move falls back
+                    // to the raw ICCS string, never a panic.
+                    let legal = pos.legal_moves();
                     let name = notation::parse_iccs(&best.mv)
                         .ok()
+                        .filter(|mv| legal.contains(mv))
                         .map(|mv| self.render_move(pos, mv))
                         .unwrap_or_else(|| best.mv.clone());
                     ui.label(i18n::t(Key::ChessDbBestMove).replace("{name}", &name));
