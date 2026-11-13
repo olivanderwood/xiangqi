@@ -25,23 +25,17 @@ impl XiangqiApp {
             if hero_button(ui, i18n::t(Key::PracticeTitle)).clicked() {
                 self.goto(Screen::Practice);
             }
-            ui.add_space(24.0);
-            // Settings + About, centred and lined up evenly with the
-            // mode buttons (Hieu, 2026-11-12): two half-hero buttons
-            // side by side span exactly one hero button (340 px), so
-            // the row has the same width and centre as the modes
-            // above it. A plain `ui.horizontal` inside
-            // `vertical_centered` lays its buttons out from the row's
-            // left edge, so `horizontal_centered` centres the pair.
-            ui.horizontal_centered(|ui| {
-                if hero_half_button(ui, i18n::t(Key::Settings)).clicked() {
-                    self.show_settings = true;
-                }
-                ui.add_space(12.0);
-                if hero_half_button(ui, i18n::t(Key::About)).clicked() {
-                    self.show_about = true;
-                }
-            });
+            ui.add_space(12.0);
+            // Settings + About, each on its own centred row (Hieu,
+            // 2026-11-13): stacked vertically instead of side by
+            // side, so each is centred under the mode buttons.
+            if hero_half_button(ui, i18n::t(Key::Settings)).clicked() {
+                self.show_settings = true;
+            }
+            ui.add_space(12.0);
+            if hero_half_button(ui, i18n::t(Key::About)).clicked() {
+                self.show_about = true;
+            }
         });
     }
 }
