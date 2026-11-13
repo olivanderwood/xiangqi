@@ -238,7 +238,11 @@ impl App {
             dialog: None,
             install_rx,
         };
-        (app, theme::load_cjk_font().map(Message::FontLoaded))
+        (
+            app,
+            iced::Task::batch([theme::load_cjk_font(), theme::load_inter_fonts()])
+                .map(Message::FontLoaded),
+        )
     }
 
     /// Go to a screen, closing any open dialog (dialogs are transient

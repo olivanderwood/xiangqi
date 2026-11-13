@@ -57,7 +57,7 @@ use crate::app::Shared;
 use crate::engine_manager::open_folder;
 use crate::i18n::{self, difficulty_name, Key, Language};
 use crate::settings::NotationChoice;
-use crate::theme::{self, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE};
+use crate::theme::{self, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, SPACE_12, SPACE_16, SPACE_8};
 use crate::widgets::{primary_button, secondary_button, section_title};
 
 /// Which dialog this state shows.
@@ -284,14 +284,16 @@ impl State {
         };
         let card = container(
             column![
-                text(title).size(FONT_SCREEN_TITLE),
+                text(title)
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold()),
                 scrollable(body).height(body_height).width(Length::Fill),
                 secondary_button(i18n::t(Key::Close), Msg::Close),
             ]
-            .spacing(12)
+            .spacing(SPACE_12)
             .width(Length::Fill),
         )
-        .padding(16)
+        .padding(SPACE_16)
         .width(Length::Fixed(560.0))
         .style(theme::card_container_style);
         let backdrop = mouse_area(
@@ -368,7 +370,7 @@ impl State {
             .spacing(16),
             section_title(i18n::t(Key::Difficulty)),
         ]
-        .spacing(8);
+        .spacing(SPACE_8);
         for d in 0..=4u8 {
             col = col.push(radio(
                 difficulty_name(d),
@@ -470,8 +472,8 @@ impl State {
             text(i18n::t(Key::AboutSoundNote)).size(FONT_BODY),
             text(i18n::t(Key::AboutChessDbNote)).size(FONT_BODY),
         ]
-        .spacing(8);
-        let mut buttons = row![].spacing(8);
+        .spacing(SPACE_8);
+        let mut buttons = row![].spacing(SPACE_8);
         if self.engine_dir.is_some() {
             buttons = buttons.push(secondary_button(
                 i18n::t(Key::OpenEngineFolder),

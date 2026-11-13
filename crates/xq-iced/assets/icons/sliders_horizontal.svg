@@ -1,0 +1,11 @@
+<!-- Lucide-style "sliders-horizontal" icon extracted from the Iced design mockup
+     (~/workspace/user/files/C__t__ng___Thi_t_k__giao_di_n__iced.html, pages dtpl_1.html, dtpl_2.html, dtpl_4.html, dtpl_5.html).
+     Original markup: viewBox 0 0 24 24, fill="none", stroke="currentColor",
+     stroke-width 2, round caps/joins. stroke is baked to #ECE7DC (theme TEXT)
+     because iced's Svg renderer has no inherited currentColor: usvg would
+     resolve currentColor to black on the dark theme. Tint at use site with
+     `.style(|_, _| iced::widget::svg::Style { color: Some(...) })` — the
+     style colour repaints the whole icon, ignoring this baked colour. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ECE7DC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <line x1="21" x2="14" y1="4" y2="4"></line><line x1="10" x2="3" y1="4" y2="4"></line><line x1="21" x2="12" y1="12" y2="12"></line><line x1="8" x2="3" y1="12" y2="12"></line><line x1="21" x2="16" y1="20" y2="20"></line><line x1="12" x2="3" y1="20" y2="20"></line><line x1="14" x2="14" y1="2" y2="6"></line><line x1="8" x2="8" y1="10" y2="14"></line><line x1="16" x2="16" y1="18" y2="22"></line>
+</svg>

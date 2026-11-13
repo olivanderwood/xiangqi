@@ -1,0 +1,11 @@
+<!-- Lucide-style "flag" icon extracted from the Iced design mockup
+     (~/workspace/user/files/C__t__ng___Thi_t_k__giao_di_n__iced.html, pages dtpl_2.html).
+     Original markup: viewBox 0 0 24 24, fill="none", stroke="currentColor",
+     stroke-width 2, round caps/joins. stroke is baked to #ECE7DC (theme TEXT)
+     because iced's Svg renderer has no inherited currentColor: usvg would
+     resolve currentColor to black on the dark theme. Tint at use site with
+     `.style(|_, _| iced::widget::svg::Style { color: Some(...) })` — the
+     style colour repaints the whole icon, ignoring this baked colour. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ECE7DC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" x2="4" y1="22" y2="15"></line>
+</svg>

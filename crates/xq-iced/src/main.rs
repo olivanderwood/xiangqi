@@ -21,6 +21,7 @@ mod engine_log;
 mod engine_manager;
 mod helpers;
 mod i18n;
+mod icons;
 mod screens;
 mod settings;
 mod sound;
@@ -33,6 +34,15 @@ fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .subscription(App::subscription)
         .theme(|_: &App| theme::custom_theme())
+        // Window title follows the app name ("Cờ Tướng" / "Xiangqi",
+        // Hieu 2026-11-13) and the current language setting.
+        .title(|_: &App| i18n::t(i18n::Key::AppTitle).to_string())
+        // Inter is the UI typeface (DESIGN-iced.md §1): the default
+        // font, so every `text` without an explicit weight renders
+        // in Inter Regular; Semibold / Bold / Medium are set
+        // per-element with the `theme::inter_font_*` helpers. The
+        // four weights are loaded at boot (`App::new`).
+        .default_font(theme::inter_font())
         .window(iced::window::Settings {
             size: iced::Size::new(1280.0, 800.0),
             min_size: Some(iced::Size::new(1100.0, 720.0)),

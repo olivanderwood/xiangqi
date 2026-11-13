@@ -45,7 +45,7 @@ use iced::widget::canvas::{
 use iced::widget::text::Alignment;
 use iced::{Color, Element, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use xq_core::board::Position;
-use xq_core::types::{file_of, rank_of, Color as SideColor, Piece};
+use xq_core::types::{file_of, rank_of, Color as SideColor, Piece, PieceKind};
 
 use crate::theme::{
     self, BLACK_PIECE, BLUE, BOARD_LINE, GOLD, PIECE_BG, PIECE_INNER_RADIUS, PIECE_RADIUS, PURPLE,
@@ -424,16 +424,116 @@ fn draw_piece(frame: &mut Frame<Renderer>, center: Point, scale: f32, piece: Pie
     });
 }
 
-/// Draw one suggestion arrow: line + V arrowhead + optional number
-/// badge at the midpoint. `alpha` is 0.38 by default, 1.0 when the
-/// arrow is highlighted.
-fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow) {
-    let a = g.square_point(arrow.from);
-    let b = g.square_point(arrow.to);
+/// The "horse leg" square a horse move bends through, if `from -> to`
+/// is a horse move (ported from the egui app, `board_view::horse_leg`).
+/// Squares are 0..89, `file = sq % 9`, `rank = sq / 9`: a (1, 2) move
+/// bends through `(f0, r0 + dr.signum())`, a (2, 1) move through
+/// `(f0 + df.signum(), r0)`; anything else is not a horse move.
+#[must_use]
+pub fn horse_leg(from: Square, to: Square) -> Option<Square> {
+    let (f0, r0) = ((from % 9) as i32, (from / 9) as i32);
+    let (f1, r1) = ((to % 9) as i32, (to / 9) as i32);
+    let (df, dr) = (f1 - f0, r1 - r0);
+    let (lf, lr) = match (df.abs(), dr.abs()) {
+        (1, 2) => (f0, r0 + dr.signum()),
+        (2, 1) => (f0 + df.signum(), r0),
+        _ => return None,
+    };
+    if (0..9).contains(&lf) && (0..10).contains(&lr) {
+        Some((lr * 9 + lf) as u8)
+    } else {
+        None
+    }
+}
+
+/// Screen points of an arrow's polyline, ready to stroke.
+///
+/// * Non-horse arrow: two points, `[start, end]` — the straight line
+///   from `from` to `to`, shortened at BOTH ends by
+///   `PIECE_RADIUS + 4` (× scale) so it does not sit under either
+///   piece, exactly as before.
+/// * Horse arrow (`is_horse` and `horse_leg(from, to)` is `Some`):
+///   three points, `[from, leg, end]` — the polyline bends through
+///   the horse leg, like the egui app. Only the LAST segment is
+///   shortened (by `PIECE_RADIUS + 4` along its own direction, to
+///   leave room for the arrowhead); the first segment starts at the
+///   source square's centre, under the piece, which the board draws
+///   on top of the arrow afterwards.
+///
+/// Returns an empty vec when `from == to` (nothing to draw).
+#[must_use]
+pub fn arrow_points(g: &Geom, from: Square, to: Square, is_horse: bool) -> Vec<Point> {
+    let a = g.square_point(from);
+    let b = g.square_point(to);
+    let inset = PIECE_RADIUS * g.scale + 4.0 * g.scale;
+    if is_horse {
+        if let Some(leg) = horse_leg(from, to) {
+            let leg_pt = g.square_point(leg);
+            let dx = b.x - leg_pt.x;
+            let dy = b.y - leg_pt.y;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1.0 {
+                return Vec::new();
+            }
+            let end = Point::new(b.x - dx / len * inset, b.y - dy / len * inset);
+            return vec![a, leg_pt, end];
+        }
+    }
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let len = (dx * dx + dy * dy).sqrt();
     if len < 1.0 {
+        return Vec::new();
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    vec![
+        Point::new(a.x + ux * inset, a.y + uy * inset),
+        Point::new(b.x - ux * inset, b.y - uy * inset),
+    ]
+}
+
+/// The point `fraction` (0..1) of the way along a polyline, measured
+/// by segment length. For a straight (2-point) polyline this is the
+/// midpoint at 0.5; for a bent horse arrow it lands on whichever
+/// segment the halfway mark falls on, so the badge stays on the bend.
+#[must_use]
+pub fn point_at_fraction(points: &[Point], fraction: f32) -> Point {
+    if points.is_empty() {
+        return Point::ORIGIN;
+    }
+    if points.len() == 1 {
+        return points[0];
+    }
+    let total: f32 = points
+        .windows(2)
+        .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+        .sum();
+    if total < 1e-6 {
+        return points[0];
+    }
+    let mut target = fraction.clamp(0.0, 1.0) * total;
+    for w in points.windows(2) {
+        let (p, q) = (w[0], w[1]);
+        let len = ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
+        if target <= len {
+            let t = if len < 1e-6 { 0.0 } else { target / len };
+            return Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t);
+        }
+        target -= len;
+    }
+    *points.last().unwrap()
+}
+
+/// Draw one suggestion arrow: line + V arrowhead + optional number
+/// badge. `alpha` is 0.38 by default, 1.0 when the arrow is
+/// highlighted. `is_horse` says the piece on `arrow.from` is a horse
+/// (the caller reads it from the position); the arrow only bends when
+/// the move is actually horse-shaped — see [`arrow_points`].
+/// The badge sits at 50% of the polyline length (the midpoint for a
+/// straight arrow, on the bend for a horse arrow).
+fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow, is_horse: bool) {
+    let points = arrow_points(g, arrow.from, arrow.to, is_horse);
+    if points.len() < 2 {
         return;
     }
     let alpha = if arrow.highlighted {
@@ -441,16 +541,6 @@ fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow) {
     } else {
         ARROW_ALPHA_DEFAULT
     };
-    let (ux, uy) = (dx / len, dy / len);
-    let r = PIECE_RADIUS * g.scale;
-    let start = Point::new(
-        a.x + ux * (r + 4.0 * g.scale),
-        a.y + uy * (r + 4.0 * g.scale),
-    );
-    let end = Point::new(
-        b.x - ux * (r + 4.0 * g.scale),
-        b.y - uy * (r + 4.0 * g.scale),
-    );
     let col = Color {
         a: alpha,
         ..arrow.color.color()
@@ -464,8 +554,23 @@ fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow) {
             offset: 0,
         };
     }
-    frame.stroke(&Path::line(start, end), stroke);
-    // Arrowhead: two short lines forming a V at `end`.
+    // The polyline (one segment for a straight arrow, two for a bent
+    // horse arrow); the dash pattern, if any, applies to both.
+    for w in points.windows(2) {
+        frame.stroke(&Path::line(w[0], w[1]), stroke);
+    }
+    // Arrowhead: two short lines forming a V at the end, pointing
+    // along the LAST segment (the leg -> destination segment for a
+    // bent horse arrow).
+    let end = *points.last().unwrap();
+    let before = points[points.len() - 2];
+    let dx = end.x - before.x;
+    let dy = end.y - before.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1.0 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
     let head = 12.0 * g.scale;
     let (px, py) = (-uy, ux);
     let b1 = Point::new(
@@ -478,9 +583,9 @@ fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow) {
     );
     frame.stroke(&Path::line(end, b1), stroke);
     frame.stroke(&Path::line(end, b2), stroke);
-    // Badge at the middle of the arrow.
+    // Badge at 50% of the polyline length.
     if let Some(label) = &arrow.label {
-        let mid = Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
+        let mid = point_at_fraction(&points, 0.5);
         frame.fill(&Path::circle(mid, 11.0 * g.scale), col);
         frame.fill_text(CanvasText {
             content: label.clone(),
@@ -661,9 +766,15 @@ impl Program<BoardMsg> for BoardProgram {
             );
         }
 
-        // Suggestion / opponent arrows.
+        // Suggestion / opponent arrows. A horse arrow bends through
+        // its leg; the moving piece is read from the position, so
+        // `Arrow` needs no `horse` flag and no screen changes.
         for arrow in &render.arrows {
-            draw_arrow(&mut frame, &g, arrow);
+            let is_horse = render
+                .position
+                .piece_at(arrow.from)
+                .is_some_and(|p| p.kind == PieceKind::Horse);
+            draw_arrow(&mut frame, &g, arrow, is_horse);
         }
 
         // Pieces (skip the dragged one and the sliding one — they are
@@ -892,6 +1003,107 @@ mod tests {
         let later = Instant::now() + ANIM_DURATION + Duration::from_millis(10);
         assert!(state.finish_anim(later));
         assert!(!state.is_animating());
+    }
+
+    /// Distance from `p` to segment `a -> b` (0 when on the segment).
+    fn dist_to_segment(p: Point, a: Point, b: Point) -> f32 {
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 < 1e-12 {
+            0.0
+        } else {
+            (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+        };
+        let q = Point::new(a.x + dx * t, a.y + dy * t);
+        ((p.x - q.x).powi(2) + (p.y - q.y).powi(2)).sqrt()
+    }
+
+    fn dist_to_polyline(p: Point, points: &[Point]) -> f32 {
+        points
+            .windows(2)
+            .map(|w| dist_to_segment(p, w[0], w[1]))
+            .fold(f32::INFINITY, f32::min)
+    }
+
+    #[test]
+    fn horse_leg_bends_correctly() {
+        // Mirror of the egui test (board_view.rs): b0 -> c2 (file
+        // 1->2, rank 0->2): leg is b1 (sq 10).
+        assert_eq!(horse_leg(1, 20), Some(10));
+        // b0 -> a2: leg b1 as well.
+        assert_eq!(horse_leg(1, 18), Some(10));
+        // b0 -> d1 (file 1->3, rank 0->1): leg c0 (sq 2).
+        assert_eq!(horse_leg(1, 12), Some(2));
+        // Not a horse move.
+        assert_eq!(horse_leg(16, 13), None);
+        // A (2, 1) move in the other direction: d1 -> b2, leg c1.
+        assert_eq!(horse_leg(12, 19), Some(11));
+        // Same square / straight move: no leg.
+        assert_eq!(horse_leg(1, 1), None);
+        assert_eq!(horse_leg(0, 9), None);
+    }
+
+    #[test]
+    fn arrow_points_horse_bends_through_leg() {
+        let g = Geom::from_bounds(bounds_1x());
+        // Red horse on b0 (sq 1) -> c2 (sq 20), leg b1 (sq 10).
+        let pts = arrow_points(&g, 1, 20, true);
+        assert_eq!(pts.len(), 3, "bent arrow has 3 points, got {pts:?}");
+        assert_eq!(pts[0], g.square_point(1));
+        assert_eq!(pts[1], g.square_point(10), "middle point is the leg");
+        // Only the last segment is shortened: its end sits
+        // PIECE_RADIUS + 4 px short of the destination along the
+        // leg -> destination direction.
+        let dest = g.square_point(20);
+        let d = ((dest.x - pts[2].x).powi(2) + (dest.y - pts[2].y).powi(2)).sqrt();
+        assert!((d - (PIECE_RADIUS + 4.0)).abs() < 1e-4, "end inset {d}");
+        // The end still lies on the leg -> destination line.
+        assert!(dist_to_segment(pts[2], pts[1], dest) < 1e-4);
+    }
+
+    #[test]
+    fn arrow_points_non_horse_stays_straight() {
+        let g = Geom::from_bounds(bounds_1x());
+        // Same squares, but the moving piece is not a horse.
+        let pts = arrow_points(&g, 1, 20, false);
+        assert_eq!(pts.len(), 2, "straight arrow has 2 points");
+        // Both ends shortened by PIECE_RADIUS + 4, as before.
+        let a = g.square_point(1);
+        let b = g.square_point(20);
+        let start_d = ((pts[0].x - a.x).powi(2) + (pts[0].y - a.y).powi(2)).sqrt();
+        let end_d = ((pts[1].x - b.x).powi(2) + (pts[1].y - b.y).powi(2)).sqrt();
+        assert!((start_d - (PIECE_RADIUS + 4.0)).abs() < 1e-4);
+        assert!((end_d - (PIECE_RADIUS + 4.0)).abs() < 1e-4);
+        // A horse piece making a non-horse-shaped move stays straight.
+        let pts = arrow_points(&g, 16, 13, true);
+        assert_eq!(pts.len(), 2);
+        // A zero-length arrow has no points.
+        assert!(arrow_points(&g, 5, 5, false).is_empty());
+        assert!(arrow_points(&g, 5, 5, true).is_empty());
+    }
+
+    #[test]
+    fn bent_arrow_badge_lies_on_the_polyline() {
+        let g = Geom::from_bounds(bounds_1x());
+        let pts = arrow_points(&g, 1, 20, true);
+        let badge = point_at_fraction(&pts, 0.5);
+        assert!(
+            dist_to_polyline(badge, &pts) < 1e-4,
+            "badge {badge:?} off the bent polyline {pts:?}"
+        );
+        // Halfway along the drawn polyline (first segment 64 px of
+        // ~123.5 px total) falls just before the leg, i.e. on the
+        // from -> leg segment.
+        assert!(dist_to_segment(badge, pts[0], pts[1]) < 1e-4);
+        // A straight arrow's badge is still its midpoint.
+        let straight = arrow_points(&g, 1, 20, false);
+        let mid = point_at_fraction(&straight, 0.5);
+        let expected = Point::new(
+            (straight[0].x + straight[1].x) / 2.0,
+            (straight[0].y + straight[1].y) / 2.0,
+        );
+        assert!((mid.x - expected.x).abs() < 1e-4 && (mid.y - expected.y).abs() < 1e-4);
     }
 
     #[test]

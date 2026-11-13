@@ -40,9 +40,10 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text, Column, Space, Stack};
+use iced::widget::{column, container, mouse_area, row, scrollable, text, Column, Stack};
 use iced::{
-    Alignment, Background, Border, Element, Length, Point, Rectangle, Subscription, Task, Theme,
+    Alignment, Background, Border, Element, Length, Point, Rectangle, Size, Subscription, Task,
+    Theme,
 };
 use xq_chessdb::{ChessDbError, ChessDbEval};
 use xq_core::analysis::Grade;
@@ -62,13 +63,17 @@ use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
 use crate::chessdb_worker::ChessDbResponse;
 use crate::helpers::{move_strings, position_at, render_move};
 use crate::i18n::{self, difficulty_name, Key};
+use crate::icons::Icon;
 use crate::settings::Settings;
 use crate::sound::sound_for_move;
 use crate::theme::{
-    BOARD_HEIGHT, BOARD_WIDTH, BORDER, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, RED, SURFACE2,
+    self, BLACK_PIECE, BORDER, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GOLD, GREEN, RADIUS_6,
+    RED, RED_PIECE, SPACE_16, SPACE_24, SPACE_4, SPACE_8, SURFACE2, TEXT_DIM,
 };
 use crate::widgets::{
-    advantage_chip, card, danger_button, eval_bar, primary_button, secondary_button, section_title,
+    advantage_chip, board_size_for_window, card, danger_button_with_icon, eval_bar,
+    ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
+    secondary_button, secondary_button_with_icon, side_card, status_chip, HEADER_HEIGHT,
     PANEL_WIDTH,
 };
 
@@ -129,17 +134,18 @@ fn legal_targets(pos: &Position, sq: Square) -> Vec<Square> {
 }
 
 /// Convert a canvas-local drop point to a square. The canvas is
-/// exactly `BOARD_WIDTH` × `BOARD_HEIGHT` (fixed size), and
-/// `BoardMsg::DragEnded` points are local to the canvas
-/// (`Cursor::position_in` subtracts the widget position), so the
-/// geometry rect is at the origin.
-fn square_from_canvas_point(p: Point, flipped: bool) -> Option<Square> {
+/// [`board_size_for_window`](crate::widgets::board_size_for_window)
+/// at the screen's current window size — NOT always the design
+/// 592 × 656 — so the geometry must use that same size, or a drop
+/// lands on the wrong square as soon as the window shrinks the
+/// board below scale 1 (the old code hardcoded the design bounds).
+fn square_from_canvas_point(p: Point, size: Size, flipped: bool) -> Option<Square> {
     Geom::from_bounds_flipped(
         Rectangle {
             x: 0.0,
             y: 0.0,
-            width: BOARD_WIDTH,
-            height: BOARD_HEIGHT,
+            width: size.width,
+            height: size.height,
         },
         flipped,
     )
@@ -248,7 +254,7 @@ fn review_cell_style(selected: bool) -> impl Fn(&Theme) -> container::Style {
         border: Border {
             color: BORDER,
             width: if selected { 1.0 } else { 0.0 },
-            radius: 6.0.into(),
+            radius: RADIUS_6.into(),
         },
         ..Default::default()
     }
@@ -315,6 +321,11 @@ pub struct State {
     ai_stop: StopHandle,
     next_req_id: u64,
     chessdb: ChessDbPanel,
+    /// Current window size (tracked via `Msg::WindowResized`, seeded
+    /// with the default 1280 × 800): the board's display size comes
+    /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)),
+    /// so the board shrinks with the window instead of overflowing.
+    window: Size,
 }
 
 #[derive(Debug, Clone)]
@@ -327,6 +338,8 @@ pub enum Msg {
     ShowAbout,
     /// A board interaction (click / drag).
     Board(BoardMsg),
+    /// The window was resized: the board's display size follows it.
+    WindowResized(Size),
     /// Animation / check-halo tick.
     Tick(Instant),
     /// An answer from the AI worker.
@@ -455,6 +468,7 @@ impl State {
             ai_stop,
             next_req_id,
             chessdb: ChessDbPanel::new(true),
+            window: Size::new(1280.0, 800.0),
         }
     }
 
@@ -463,6 +477,10 @@ impl State {
     pub fn update(&mut self, msg: Msg, shared: &mut Shared) -> Task<Msg> {
         match msg {
             Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout => Task::none(),
+            Msg::WindowResized(size) => {
+                self.window = size;
+                Task::none()
+            }
             Msg::Board(bm) => {
                 self.handle_board(bm, shared);
                 Task::none()
@@ -627,6 +645,7 @@ impl State {
         let mut subs = vec![
             bridge::from_mpsc("ai", Arc::clone(&self.ai_rx)).map(ai_bridge_msg),
             self.chessdb.subscription().map(chessdb_bridge_msg),
+            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
         if self.board.is_animating() || self.check_flash_active() {
             subs.push(iced::time::every(Duration::from_millis(50)).map(Msg::Tick));
@@ -1260,7 +1279,9 @@ impl State {
                 if !self.board_enabled() || self.board.is_animating() {
                     return;
                 }
-                if let Some(sq) = square_from_canvas_point(p, self.flipped) {
+                if let Some(sq) =
+                    square_from_canvas_point(p, board_size_for_window(self.window), self.flipped)
+                {
                     self.drop_on(sq, shared);
                 }
             }
@@ -1332,27 +1353,47 @@ impl State {
     fn view_base<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let display_pos = self.display_pos();
         let score = score_red(&display_pos);
+        let board_size = board_size_for_window(self.window);
+        // Header (64) + divider (1) + content (16 px vertical
+        // padding + the board height) add up to exactly the window
+        // height — the board never overflows at the 1100 × 720
+        // minimum, it shrinks to `board_size` instead.
         column![
             self.header(shared),
-            row![
-                eval_bar(score, BOARD_HEIGHT),
-                container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
-                    .width(Length::Fixed(BOARD_WIDTH))
-                    .height(Length::Fixed(BOARD_HEIGHT)),
-                self.panel(shared, &display_pos),
-            ]
-            .spacing(12)
+            header_divider(),
+            container(
+                row![
+                    row![
+                        eval_bar(score, board_size.height),
+                        container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
+                            .width(Length::Fixed(board_size.width))
+                            .height(Length::Fixed(board_size.height)),
+                    ]
+                    .spacing(SPACE_16),
+                    self.panel(shared, &display_pos),
+                ]
+                .spacing(SPACE_24)
+                .height(Length::Fill),
+            )
+            .padding(iced::Padding {
+                top: SPACE_16,
+                right: SPACE_24,
+                bottom: SPACE_16,
+                left: SPACE_24,
+            })
+            .width(Length::Fill)
             .height(Length::Fill),
         ]
-        .spacing(12)
-        .padding(12)
+        .spacing(0)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
     }
 
-    /// Header (DESIGN-iced.md §2.2): Back · "Chơi với máy" · level ·
-    /// engine name · Settings.
+    /// Header (mockup page 2): 64 px surface bar — ghost "Quay lại"
+    /// with arrow icon, the 20 px Semibold title (flex), level chip,
+    /// engine-status chip (green dot when Pikafish is ready), ghost
+    /// "Cài đặt" with icon.
     fn header<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let level = match self.opponent {
             VsOpponent::Ai { difficulty, .. } => format!(
@@ -1362,19 +1403,44 @@ impl State {
             ),
             VsOpponent::TwoPlayer => i18n::t(Key::TwoPlayers).to_string(),
         };
+        let (engine_label, engine_dot) = (
+            shared.engine_name.clone(),
+            if self.engine_ready { Some(GREEN) } else { None },
+        );
         container(
             row![
-                secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
-                text(i18n::t(Key::PlayVsAi)).size(FONT_SCREEN_TITLE),
-                text(level).size(FONT_BODY),
-                text(shared.engine_name.as_str()).size(FONT_BODY),
-                Space::new().width(Length::Fill),
-                secondary_button(i18n::t(Key::Settings), Msg::ShowSettings),
+                ghost_button_with_icon(
+                    i18n::t(Key::BackToMenu),
+                    Icon::ArrowLeft,
+                    Msg::Navigate(Screen::Home)
+                ),
+                text(i18n::t(Key::PlayVsAi))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold())
+                    .width(Length::Fill),
+                status_chip(level, None, TEXT_DIM),
+                status_chip(engine_label, engine_dot, TEXT_DIM),
+                ghost_button_with_icon(
+                    i18n::t(Key::Settings),
+                    Icon::SlidersHorizontal,
+                    Msg::ShowSettings
+                ),
             ]
-            .spacing(12)
+            .spacing(SPACE_16)
             .align_y(Alignment::Center),
         )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: SPACE_24,
+            bottom: 0.0,
+            left: SPACE_24,
+        })
         .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::SURFACE)),
+            ..Default::default()
+        })
         .into()
     }
 
@@ -1428,21 +1494,35 @@ impl State {
     /// Side panel (fixed 380 px, scrollable so long content never
     /// flexes the board — the egui layout rule).
     fn panel<'a>(&'a self, shared: &'a Shared, display_pos: &Position) -> Element<'a, Msg> {
-        let mut col = column![text(self.status_text()).size(FONT_BODY)].spacing(12);
+        let mut col = column![text(self.status_text()).size(FONT_BODY)].spacing(SPACE_16);
 
-        // Opponent card (DESIGN-iced.md §2.2).
+        // Opponent + player cards (mockup page 2: 44 px piece disc,
+        // Semibold 16 name, 13 px Medium subtitle, status chip;
+        // gold border on the side to move).
+        let (opp_color, player_color) = match self.opponent {
+            VsOpponent::Ai { human, .. } => (human.opposite(), human),
+            VsOpponent::TwoPlayer => (self.game.pos.side().opposite(), self.game.pos.side()),
+        };
+        let (opp_glyph, opp_glyph_color) = match opp_color {
+            Color::Red => ("帥", RED_PIECE),
+            Color::Black => ("將", BLACK_PIECE),
+        };
+        let (player_glyph, player_glyph_color) = match player_color {
+            Color::Red => ("帥", RED_PIECE),
+            Color::Black => ("將", BLACK_PIECE),
+        };
         let opp_status = self.opponent_status();
         let opp_subtitle = match self.opponent {
             VsOpponent::Ai { difficulty, .. } => difficulty_name(difficulty).to_string(),
             VsOpponent::TwoPlayer => i18n::t(Key::TwoPlayers).to_string(),
         };
-        col = col.push(card(
+        col = col.push(side_card(
+            opp_glyph,
+            opp_glyph_color,
             "Pikafish",
-            column![
-                text(opp_subtitle).size(FONT_BODY),
-                text(opp_status).size(FONT_BODY),
-            ]
-            .spacing(4),
+            opp_subtitle,
+            status_chip(opp_status, None, TEXT_DIM),
+            false,
         ));
 
         // Player card.
@@ -1464,13 +1544,19 @@ impl State {
             ),
             VsOpponent::TwoPlayer => (i18n::t(Key::TwoPlayers).to_string(), self.status_text()),
         };
-        col = col.push(card(
+        let player_active =
+            self.game.result() == GameResult::Ongoing && self.game.pos.side() == player_color;
+        col = col.push(side_card(
+            player_glyph,
+            player_glyph_color,
             i18n::t(Key::PlayerYou),
-            column![
-                text(player_subtitle).size(FONT_BODY),
-                text(player_status).size(FONT_BODY),
-            ]
-            .spacing(4),
+            player_subtitle,
+            status_chip(
+                player_status,
+                if player_active { Some(GOLD) } else { None },
+                if player_active { GOLD } else { TEXT_DIM },
+            ),
+            player_active,
         ));
 
         // Advantage chip (from the human's perspective in AI games,
@@ -1537,36 +1623,74 @@ impl State {
                 .size(FONT_CAPTION),
         );
 
-        // Move list (click a move to review that position).
-        col = col.push(section_title(i18n::t(Key::MovesTitle)));
-        col = col.push(self.move_list_view(shared));
+        // Move list card (mockup page 2: card, flex-1, padding 16;
+        // click a move to review that position).
+        let mut moves_content = column![self.move_list_view(shared)].spacing(SPACE_8);
         if self.review.is_some() {
-            col = col.push(secondary_button(i18n::t(Key::BackToEnd), Msg::BackToEnd));
+            moves_content =
+                moves_content.push(secondary_button(i18n::t(Key::BackToEnd), Msg::BackToEnd));
         }
+        col = col.push(card(i18n::t(Key::MovesTitle), moves_content));
 
-        // Hint list (hover highlights its arrow, click plays it).
+        // Hint list card (hover highlights its arrow, click plays it).
         if !self.hint_lines.is_empty() && self.review.is_none() {
-            col = col.push(section_title(i18n::t(Key::Hint)));
-            col = col.push(self.hint_list_view(shared));
+            col = col.push(card(i18n::t(Key::Hint), self.hint_list_view(shared)));
         }
 
-        // Buttons (egui `vs_ai_panel`).
-        let mut buttons = row![
-            secondary_button(i18n::t(Key::Undo), Msg::Undo),
-            secondary_button(i18n::t(Key::Hint), Msg::Hint),
-            secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard),
-        ]
-        .spacing(8);
-        if matches!(self.opponent, VsOpponent::Ai { .. }) {
-            buttons = buttons.push(secondary_button(i18n::t(Key::DrawOffer), Msg::OfferDraw));
-        }
-        col = col.push(buttons);
+        // Buttons (mockup page 2: 2-column grid, 40 px, then the
+        // full-width gold "Ván mới"). "Xin hòa" has no icon in the
+        // mockup; "Lật bàn" is a kept feature with no mockup icon.
+        let action = |btn: iced::widget::Button<'a, Msg>| {
+            btn.width(Length::Fill).height(Length::Fixed(40.0))
+        };
         col = col.push(
             row![
-                danger_button(i18n::t(Key::Resign), Msg::Resign),
-                secondary_button(i18n::t(Key::NewGame), Msg::NewGame),
+                action(secondary_button_with_icon(
+                    i18n::t(Key::Undo),
+                    Icon::Undo,
+                    Msg::Undo
+                )),
+                action(secondary_button_with_icon(
+                    i18n::t(Key::Hint),
+                    Icon::Lightbulb,
+                    Msg::Hint
+                )),
             ]
-            .spacing(8),
+            .spacing(SPACE_8),
+        );
+        if matches!(self.opponent, VsOpponent::Ai { .. }) {
+            col = col.push(
+                row![
+                    action(secondary_button(i18n::t(Key::DrawOffer), Msg::OfferDraw)),
+                    action(danger_button_with_icon(
+                        i18n::t(Key::Resign),
+                        Icon::Flag,
+                        Msg::Resign
+                    )),
+                ]
+                .spacing(SPACE_8),
+            );
+            col = col.push(action(secondary_button(
+                i18n::t(Key::FlipBoard),
+                Msg::FlipBoard,
+            )));
+        } else {
+            col = col.push(
+                row![
+                    action(secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard,)),
+                    action(danger_button_with_icon(
+                        i18n::t(Key::Resign),
+                        Icon::Flag,
+                        Msg::Resign
+                    )),
+                ]
+                .spacing(SPACE_8),
+            );
+        }
+        col = col.push(
+            primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::NewGame)
+                .width(Length::Fill)
+                .height(Length::Fixed(44.0)),
         );
 
         scrollable(col)
@@ -1599,12 +1723,16 @@ impl State {
     /// the position after it.
     fn move_list_view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let moves = move_strings(&self.game, shared.settings.notation);
-        let mut col = Column::new().spacing(4);
+        let mut col = Column::new().spacing(SPACE_4);
         let mut i = 0;
         while i < moves.len() {
             let no = i / 2 + 1;
             let mut r = row![text(format!("{no}."))
                 .size(FONT_BODY)
+                .font(theme::inter_font_medium())
+                .style(|_: &Theme| iced::widget::text::Style {
+                    color: Some(TEXT_DIM),
+                })
                 .width(Length::Fixed(32.0))]
             .spacing(10);
             for (j, mv) in moves.iter().skip(i).take(2).enumerate() {
@@ -1613,9 +1741,13 @@ impl State {
                 // `text` takes the move name by value (an owned
                 // `String`): the `moves` vec is local, so a borrow
                 // would not live long enough for the returned element.
-                let cell = container(text(mv.clone()).size(FONT_BODY))
-                    .padding(4)
-                    .style(review_cell_style(selected));
+                let cell = container(
+                    text(mv.clone())
+                        .size(FONT_BODY)
+                        .font(theme::inter_font_medium()),
+                )
+                .padding(SPACE_4)
+                .style(review_cell_style(selected));
                 r = r.push(mouse_area(cell).on_press(Msg::Review(ply)));
             }
             col = col.push(r);
@@ -1630,17 +1762,21 @@ impl State {
     /// Hint list: rank, move name, score chip. Hovering a row
     /// highlights its arrow on the board; clicking it plays it.
     fn hint_list_view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
-        let mut col = Column::new().spacing(4);
+        let mut col = Column::new().spacing(SPACE_4);
         for (j, line) in self.hint_lines.iter().enumerate() {
             let name = render_move(&self.game.pos, line.mv, shared.settings.notation);
             let row_el = row![
                 text(format!("{}.", j + 1))
                     .size(FONT_BODY)
+                    .font(theme::inter_font_medium())
                     .width(Length::Fixed(24.0)),
-                text(name).size(FONT_BODY).width(Length::Fill),
+                text(name)
+                    .size(FONT_BODY)
+                    .font(theme::inter_font_medium())
+                    .width(Length::Fill),
                 advantage_chip(line.score),
             ]
-            .spacing(8)
+            .spacing(SPACE_8)
             .align_y(Alignment::Center);
             col = col.push(
                 mouse_area(row_el)
@@ -1684,7 +1820,7 @@ impl State {
                 side_col,
                 diff_col,
                 row![
-                    primary_button(i18n::t(Key::Start), Msg::StartGame),
+                    primary_button_with_icon(i18n::t(Key::Start), Icon::Plus, Msg::StartGame),
                     secondary_button(i18n::t(Key::Cancel), Msg::CancelStart),
                 ]
                 .spacing(12),
@@ -1710,7 +1846,7 @@ impl State {
                 text(i18n::t(Key::ResultTitle)).size(FONT_SCREEN_TITLE),
                 text(self.game.result().describe_vi()).size(FONT_BODY),
                 row![
-                    primary_button(i18n::t(Key::NewGame), Msg::ResultNewGame),
+                    primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::ResultNewGame),
                     secondary_button(i18n::t(Key::ReviewGame), Msg::ResultReview),
                     secondary_button(i18n::t(Key::Close), Msg::ResultClose),
                 ]
@@ -1791,28 +1927,71 @@ mod tests {
 
     #[test]
     fn drag_end_point_maps_to_squares() {
-        // Canvas-local points (the canvas is exactly 592 × 656):
+        // Canvas-local points at the design size (592 × 656):
         // (40, 616) is Red's back-rank corner, sq 0.
+        let design = Size::new(592.0, 656.0);
         assert_eq!(
-            square_from_canvas_point(Point::new(40.0, 616.0), false),
+            square_from_canvas_point(Point::new(40.0, 616.0), design, false),
             Some(0)
         );
         assert_eq!(
-            square_from_canvas_point(Point::new(552.0, 40.0), false),
+            square_from_canvas_point(Point::new(552.0, 40.0), design, false),
             Some(89)
         );
         assert_eq!(
-            square_from_canvas_point(Point::new(10.0, 10.0), false),
+            square_from_canvas_point(Point::new(10.0, 10.0), design, false),
             None
         );
         // Flipped: the same screen points map to mirrored squares.
         assert_eq!(
-            square_from_canvas_point(Point::new(40.0, 616.0), true),
+            square_from_canvas_point(Point::new(40.0, 616.0), design, true),
             Some(89)
         );
         assert_eq!(
-            square_from_canvas_point(Point::new(552.0, 40.0), true),
+            square_from_canvas_point(Point::new(552.0, 40.0), design, true),
             Some(0)
+        );
+        // A shrunk board (the 1100 × 720 minimum window): the same
+        // corner squares still map, with the scaled geometry — the
+        // old hardcoded 592 × 656 bounds mis-mapped these drops.
+        // Round-trip through the drawn centres: the centre of a
+        // square must map back to that square at the scaled size
+        // (naive `design_point * scale` is off by the board's
+        // vertical centring offset `by`, a fraction of a pixel,
+        // which is enough to push the top row out of range).
+        let small = board_size_for_window(Size::new(1100.0, 720.0));
+        let small_geom = Geom::from_bounds_flipped(
+            Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: small.width,
+                height: small.height,
+            },
+            false,
+        );
+        assert_eq!(
+            square_from_canvas_point(small_geom.square_point(0), small, false),
+            Some(0)
+        );
+        assert_eq!(
+            square_from_canvas_point(small_geom.square_point(89), small, false),
+            Some(89)
+        );
+    }
+
+    #[test]
+    fn window_resize_is_remembered_for_the_board_size() {
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        assert_eq!(state.window, Size::new(1280.0, 800.0));
+        let _ = state.update(
+            Msg::WindowResized(Size::new(1100.0, 720.0)),
+            &mut Shared::new(),
+        );
+        assert_eq!(state.window, Size::new(1100.0, 720.0));
+        assert!(
+            board_size_for_window(state.window).height < 656.0,
+            "the board shrinks at the minimum window"
         );
     }
 

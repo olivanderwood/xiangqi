@@ -36,7 +36,7 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use iced::widget::{column, text};
+use iced::widget::{column, container, text};
 use iced::{Element, Length, Subscription, Task};
 use xq_chessdb::ChessDbEval;
 use xq_core::board::Position;
@@ -49,8 +49,8 @@ use crate::chessdb_worker::{
 use crate::helpers::render_move;
 use crate::i18n::{self, Key};
 use crate::settings::Settings;
-use crate::theme::FONT_BODY;
-use crate::widgets::{advantage_chip, section_title};
+use crate::theme::{FONT_BODY, SPACE_12, SPACE_16, SPACE_8};
+use crate::widgets::{advantage_chip, card_style, section_title};
 
 /// Messages for the ChessDB panel.
 #[derive(Debug)]
@@ -164,8 +164,11 @@ impl ChessDbPanel {
     /// stale best move used to crash the app (0xc0000409, release
     /// `panic = "abort"`, 2026-11-12). An unparseable or illegal best
     /// move falls back to the raw ICCS string, never a panic.
+    ///
+    /// The section is its own card (radius 14, padding 16) so it
+    /// reads as one separated block inside the side panel.
     pub fn view<'a>(&'a self, pos: &Position, settings: &Settings) -> Element<'a, ChessDbPanelMsg> {
-        let mut col = column![section_title(i18n::t(Key::ChessDbTitle))].spacing(8);
+        let mut col = column![section_title(i18n::t(Key::ChessDbTitle))].spacing(SPACE_8);
         match &self.view {
             ChessDbView::Idle | ChessDbView::Loading => {
                 col = col.push(text(i18n::t(Key::ChessDbLoading)).size(FONT_BODY));
@@ -177,7 +180,11 @@ impl ChessDbPanel {
                 col = col.push(text(msg).size(FONT_BODY));
             }
         }
-        col.width(Length::Fill).into()
+        container(col.width(Length::Fill))
+            .padding(SPACE_16)
+            .width(Length::Fill)
+            .style(card_style)
+            .into()
     }
 
     /// The `Ready` branch of [`ChessDbPanel::view`].
@@ -187,9 +194,9 @@ impl ChessDbPanel {
         settings: &Settings,
         eval: &'a ChessDbEval,
     ) -> Element<'a, ChessDbPanelMsg> {
-        let mut col = column![].spacing(8);
+        let mut col = column![].spacing(SPACE_8);
         if let Some(score) = eval.score {
-            let mut score_row = iced::widget::row![advantage_chip(score)].spacing(12);
+            let mut score_row = iced::widget::row![advantage_chip(score)].spacing(SPACE_12);
             if self.show_win_rate {
                 if let Some(best) = eval.top.first() {
                     score_row = score_row.push(

@@ -1,11 +1,12 @@
 //! Lesson picker screen: choose side + opening (DESIGN-iced.md
-//! §2.3, `xq-app/src/screens/learn_select.rs`).
+//! §2.3, `xq-app/src/screens/learn_select.rs`, mockup page 3).
 //!
-//! Two big side cards (Tiên/Red, Hậu/Black), the lesson list for the
-//! chosen side (name + level stars + completed mark, from the shared
-//! embedded book), an intro panel with a mini board after the first
-//! 3 main-branch plies, and "Bắt đầu học" (only enabled once a
-//! lesson is picked).
+//! A centred 880 px card: title + subtitle, a segmented Tiên/Hậu
+//! control, the lesson list for the chosen side (name + level stars
+//! and a green Check icon when completed, from the shared embedded
+//! book), an intro panel with a mini board after the first 3
+//! main-branch plies, and "Bắt đầu học" bottom-right (only enabled
+//! once a lesson is picked).
 //!
 //! # Lesson handover (integration)
 //!
@@ -15,15 +16,22 @@
 //! [`State::take_choice`] and [`super::learn::State::start`] with it
 //! (see `learn.rs` for the contract).
 
-use iced::widget::{column, container, row, scrollable, text, Button};
+use iced::widget::{column, container, row, scrollable, text, Button, Space};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::app::{Screen, Shared};
 use crate::board::{BoardProgram, BoardRender};
 use crate::i18n::{self, Key};
+use crate::icons::{icon_tinted, Icon, ICON_SIZE_SMALL};
 use crate::screens::learn::LessonChoice;
-use crate::theme::{self, FONT_BODY, FONT_SCREEN_TITLE};
-use crate::widgets::{primary_button, secondary_button};
+use crate::theme::{
+    self, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GREEN, SPACE_12, SPACE_16, SPACE_24,
+    SPACE_32, SPACE_4, SPACE_8, TEXT_DIM,
+};
+use crate::widgets::{
+    card_style, ghost_button_with_icon, header_divider, primary_button_with_icon,
+    segment_button_style, HEADER_HEIGHT,
+};
 use xq_book::Lesson;
 use xq_core::board::Position;
 use xq_core::notation;
@@ -128,126 +136,249 @@ impl State {
         }
     }
 
-    /// Side cards, lesson list for the chosen side, intro panel with
-    /// a mini board, "Bắt đầu học".
-    pub fn view(&self, shared: &Shared) -> Element<'_, Msg> {
-        let header = row![
-            secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
-            column![
-                text(i18n::t(Key::LearnOpenings)).size(FONT_SCREEN_TITLE),
-                text(i18n::t(Key::LearnSelectSubtitle)).size(FONT_BODY),
+    /// Header bar (mockup page 3): 64 px surface bar, ghost "Quay
+    /// lại" with arrow icon, 20 px Semibold title.
+    fn header() -> Element<'static, Msg> {
+        container(
+            row![
+                ghost_button_with_icon(
+                    i18n::t(Key::BackToMenu),
+                    Icon::ArrowLeft,
+                    Msg::Navigate(Screen::Home)
+                ),
+                text(i18n::t(Key::LearnOpenings))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold())
+                    .width(Length::Fill),
             ]
-            .spacing(4),
-        ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center);
+            .spacing(SPACE_16)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: SPACE_24,
+            bottom: 0.0,
+            left: SPACE_24,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .style(|_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::SURFACE)),
+            ..Default::default()
+        })
+        .into()
+    }
 
+    /// The Tiên/Hậu segmented control (mockup page 3: 320 px pill,
+    /// dark background, 40 px buttons, gold = selected). The mockup
+    /// labels it "Bạn chơi bên", but there is no i18n key for that
+    /// label (and `i18n.rs` is out of scope here), so the control
+    /// stands alone — the two side buttons name the sides.
+    fn side_control(&self) -> Element<'_, Msg> {
         let side_button = |label: &'static str, side: Color| -> Element<'_, Msg> {
-            if self.side == Some(side) {
-                primary_button(label, Msg::SelectSide(side))
-                    .width(Length::Fixed(300.0))
-                    .height(Length::Fixed(72.0))
-                    .into()
-            } else {
-                secondary_button(label, Msg::SelectSide(side))
-                    .width(Length::Fixed(300.0))
-                    .height(Length::Fixed(72.0))
-                    .into()
-            }
+            let selected = self.side == Some(side);
+            Button::new(text(label).size(14.0).font(theme::inter_font_semibold()))
+                .on_press(Msg::SelectSide(side))
+                .style(segment_button_style(selected))
+                .height(Length::Fixed(40.0))
+                .width(Length::Fill)
+                .into()
         };
-        let sides = row![
-            side_button(i18n::t(Key::LearnFirst), Color::Red),
-            side_button(i18n::t(Key::LearnSecond), Color::Black),
+        container(
+            row![
+                side_button(i18n::t(Key::LearnFirst), Color::Red),
+                side_button(i18n::t(Key::LearnSecond), Color::Black),
+            ]
+            .spacing(SPACE_4),
+        )
+        .padding(SPACE_4)
+        .width(Length::Fixed(320.0))
+        .style(|_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG)),
+            border: iced::Border {
+                color: theme::BORDER,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    }
+
+    /// One lesson row: name + level stars, and a green Check icon +
+    /// "Đã hoàn thành" when the lesson is done. `CompletedMark`
+    /// carries its own "✓" glyph, so the glyph is stripped here —
+    /// the icon replaces it, it must not appear twice.
+    fn lesson_row(&self, lesson: &Lesson, progress_completed: bool) -> Element<'_, Msg> {
+        let mut label = row![
+            text(format!(
+                "{}  {}",
+                lesson.name_vi,
+                "★".repeat(lesson.level as usize),
+            ))
+            .size(FONT_BODY)
+            .font(theme::inter_font_medium()),
+            Space::new().width(Length::Fill),
         ]
-        .spacing(12);
-
-        let mut col = column![header, sides].spacing(12);
-        let Some(side) = self.side else {
-            return container(col)
-                .padding(12)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into();
+        .spacing(SPACE_8)
+        .align_y(iced::Alignment::Center);
+        if progress_completed {
+            let done_text = i18n::t(Key::CompletedMark)
+                .trim_start_matches('✓')
+                .trim_start();
+            label = label.push(
+                icon_tinted(Icon::Check, GREEN)
+                    .width(ICON_SIZE_SMALL)
+                    .height(ICON_SIZE_SMALL),
+            );
+            label = label.push(
+                text(done_text)
+                    .size(FONT_CAPTION)
+                    .font(theme::inter_font_medium())
+                    .style(|_: &iced::Theme| iced::widget::text::Style { color: Some(GREEN) }),
+            );
+        }
+        let selected = self.selected.as_deref() == Some(lesson.id.as_str());
+        let style = if selected {
+            theme::primary_button_style
+        } else {
+            theme::secondary_button_style
         };
+        Button::new(label)
+            .on_press(Msg::SelectLesson(lesson.id.clone()))
+            .style(style)
+            .padding(SPACE_12)
+            .width(Length::Fill)
+            .into()
+    }
 
-        let lessons: Vec<&Lesson> = shared.book.by_learner(side);
-        if lessons.is_empty() {
-            col = col.push(text(i18n::t(Key::NoLessonsYet)).size(FONT_BODY));
-            return container(col)
-                .padding(12)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into();
-        }
+    /// Centred 880 px card: title, subtitle, side control, lesson
+    /// list + intro panel, "Bắt đầu học" bottom-right.
+    pub fn view(&self, shared: &Shared) -> Element<'_, Msg> {
+        let mut card_col = column![
+            text(i18n::t(Key::LearnOpenings))
+                .size(FONT_SCREEN_TITLE)
+                .font(theme::inter_font_semibold()),
+            text(i18n::t(Key::LearnSelectSubtitle))
+                .size(FONT_BODY)
+                .style(|_: &iced::Theme| iced::widget::text::Style {
+                    color: Some(TEXT_DIM),
+                }),
+            self.side_control(),
+        ]
+        .spacing(SPACE_8);
 
-        // Lesson list (left) + intro panel (right).
-        let mut list = column![].spacing(8);
-        for lesson in &lessons {
-            let progress = shared.settings.progress.get(&lesson.id);
-            let mut label = format!("{}  {}", lesson.name_vi, "★".repeat(lesson.level as usize),);
-            if let Some(p) = progress {
-                if p.completed {
-                    label.push_str(&format!("  {}", i18n::t(Key::CompletedMark)));
-                }
-            }
-            let selected = self.selected.as_deref() == Some(lesson.id.as_str());
-            // `label` is built per lesson (owned `String`): the button
-            // takes it by value, so the row owns its text instead of
-            // borrowing a local.
-            let btn: Element<'_, Msg> = if selected {
-                Button::new(text(label).size(FONT_BODY))
-                    .on_press(Msg::SelectLesson(lesson.id.clone()))
-                    .style(theme::primary_button_style)
-                    .padding(12)
-                    .width(Length::Fill)
-                    .into()
+        if let Some(side) = self.side {
+            let lessons: Vec<&Lesson> = shared.book.by_learner(side);
+            if lessons.is_empty() {
+                card_col = card_col.push(text(i18n::t(Key::NoLessonsYet)).size(FONT_BODY));
             } else {
-                Button::new(text(label).size(FONT_BODY))
-                    .on_press(Msg::SelectLesson(lesson.id.clone()))
-                    .style(theme::secondary_button_style)
-                    .padding(12)
-                    .width(Length::Fill)
-                    .into()
-            };
-            list = list.push(btn);
-        }
-        let list_el = scrollable(list)
-            .height(Length::Fill)
-            .width(Length::Fixed(420.0));
+                // Lesson list (left, fixed height so the card's
+                // height stays deterministic) + intro panel (right).
+                let mut list = column![].spacing(SPACE_8);
+                for lesson in &lessons {
+                    let completed = shared
+                        .settings
+                        .progress
+                        .get(&lesson.id)
+                        .is_some_and(|p| p.completed);
+                    list = list.push(self.lesson_row(lesson, completed));
+                }
+                let list_el = scrollable(list)
+                    .height(Length::Fixed(320.0))
+                    .width(Length::Fixed(380.0));
 
-        let mut body = row![list_el].spacing(12);
-        if let Some(id) = &self.selected {
-            if let Some(lesson) = lessons.iter().find(|l| &l.id == id) {
-                let pos = main_branch_position(lesson, 3);
-                let preview =
-                    container(BoardProgram::canvas(BoardRender::new(pos)).map(|_| Msg::Ignored))
+                let mut body = row![list_el].spacing(SPACE_16);
+                if let Some(id) = &self.selected {
+                    if let Some(lesson) = lessons.iter().find(|l| &l.id == id) {
+                        let pos = main_branch_position(lesson, 3);
+                        let preview = container(
+                            BoardProgram::canvas(BoardRender::new(pos)).map(|_| Msg::Ignored),
+                        )
                         .width(Length::Fixed(300.0))
                         .height(Length::Fixed(330.0));
-                // The intro only renders once a lesson is picked, so
-                // "Bắt đầu học" is always enabled here.
-                let start_btn: Element<'_, Msg> =
-                    primary_button(i18n::t(Key::StartLesson), Msg::StartLesson).into();
-                let intro = column![
-                    text(lesson.name_vi.clone()).size(FONT_SCREEN_TITLE),
-                    text(i18n::t(Key::LevelStars).replace("{n}", &lesson.level.to_string()))
-                        .size(FONT_BODY),
-                    text(i18n::t(Key::IntroTitle)).size(FONT_BODY),
-                    text(lesson.summary_vi.clone()).size(FONT_BODY),
-                    preview,
-                    start_btn,
-                ]
-                .spacing(8)
-                .width(Length::Fixed(480.0));
-                body = body.push(intro);
+                        let intro = column![
+                            text(lesson.name_vi.clone())
+                                .size(FONT_SCREEN_TITLE)
+                                .font(theme::inter_font_semibold()),
+                            text(
+                                i18n::t(Key::LevelStars).replace("{n}", &lesson.level.to_string())
+                            )
+                            .size(FONT_BODY),
+                            text(i18n::t(Key::IntroTitle)).size(FONT_BODY),
+                            text(lesson.summary_vi.clone()).size(FONT_BODY),
+                            preview,
+                        ]
+                        .spacing(SPACE_8)
+                        .width(Length::Fill);
+                        body = body.push(intro);
+                    }
+                }
+                card_col = card_col.push(body);
+
+                // "Bắt đầu học" (mockup: bottom-right, 200 × 48,
+                // gold, BookOpen icon). Disabled-looking until a
+                // lesson is picked — the button simply has no
+                // `on_press` then, so Iced renders it disabled.
+                let start_row = if self.selected.is_some() {
+                    row![
+                        Space::new().width(Length::Fill),
+                        primary_button_with_icon(
+                            i18n::t(Key::StartLesson),
+                            Icon::BookOpen,
+                            Msg::StartLesson
+                        )
+                        .width(Length::Fixed(200.0))
+                        .height(Length::Fixed(48.0)),
+                    ]
+                } else {
+                    row![
+                        Space::new().width(Length::Fill),
+                        Button::new(
+                            row![
+                                icon_tinted(Icon::BookOpen, TEXT_DIM),
+                                text(i18n::t(Key::StartLesson))
+                                    .size(FONT_BODY)
+                                    .font(theme::inter_font_semibold()),
+                            ]
+                            .spacing(SPACE_8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .style(theme::secondary_button_style)
+                        .padding(SPACE_12)
+                        .width(Length::Fixed(200.0))
+                        .height(Length::Fixed(48.0)),
+                    ]
+                };
+                card_col = card_col.push(start_row);
             }
         }
 
-        col = col.push(body);
-        container(col)
-            .padding(12)
+        let card = container(card_col.spacing(SPACE_24))
+            .padding(SPACE_32)
+            .width(Length::Fixed(880.0))
+            .style(card_style);
+        // The card is ~770 px tall with a lesson picked (intro panel
+        // + 330 px preview), taller than a 720 px window even before
+        // the 64 px header — so it scrolls vertically instead of
+        // clipping; at 800 px it still needs the scroll when the
+        // intro is shown.
+        column![
+            Self::header(),
+            header_divider(),
+            container(
+                scrollable(container(card).width(Length::Fill).center_x(Length::Fill))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
             .width(Length::Fill)
             .height(Length::Fill)
-            .into()
+            .padding(SPACE_24),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// No background work (this screen has none, even when real).

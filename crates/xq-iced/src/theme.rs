@@ -52,7 +52,10 @@ pub const BLACK_PIECE: Color = Color::from_rgb8(0x2B, 0x2B, 0x2B);
 // ---------- Font sizes (DESIGN-iced.md §1) ----------
 
 /// Large title (home screen).
-pub const FONT_TITLE_LARGE: f32 = 36.0;
+/// Large title (Home h1). The design-system page says 36, but the
+/// sample's rendered Home title is 52 px — Hieu (2026-11-13) chose to
+/// match the rendered sample, so this is 52.
+pub const FONT_TITLE_LARGE: f32 = 52.0;
 /// Screen title.
 pub const FONT_SCREEN_TITLE: f32 = 20.0;
 /// Card title.
@@ -63,6 +66,33 @@ pub const FONT_BODY: f32 = 15.0;
 pub const FONT_CAPTION: f32 = 13.0;
 /// Chinese character on a piece.
 pub const FONT_PIECE: f32 = 30.0;
+
+// ---------- Spacing & corner radii (DESIGN-iced.md §1) ----------
+//
+// Design tokens for the layout pass: the spacing scale
+// 4 / 8 / 12 / 16 / 24 / 32 and the corner radii 6 / 10 / 14.
+// Named constants (one per step) so call sites read as `SPACE_16`
+// instead of a bare number. Palette / font sizes above are unchanged.
+
+/// Spacing step: 4 px.
+pub const SPACE_4: f32 = 4.0;
+/// Spacing step: 8 px.
+pub const SPACE_8: f32 = 8.0;
+/// Spacing step: 12 px.
+pub const SPACE_12: f32 = 12.0;
+/// Spacing step: 16 px.
+pub const SPACE_16: f32 = 16.0;
+/// Spacing step: 24 px.
+pub const SPACE_24: f32 = 24.0;
+/// Spacing step: 32 px.
+pub const SPACE_32: f32 = 32.0;
+
+/// Corner radius: 6 px.
+pub const RADIUS_6: f32 = 6.0;
+/// Corner radius: 10 px.
+pub const RADIUS_10: f32 = 10.0;
+/// Corner radius: 14 px.
+pub const RADIUS_14: f32 = 14.0;
 
 // ---------- Board geometry (DESIGN-iced.md §1) ----------
 
@@ -114,6 +144,56 @@ pub fn cjk_font() -> Font {
 /// default font).
 pub fn load_cjk_font() -> iced::Task<Result<(), font::Error>> {
     font::load(include_bytes!("../assets/NotoSerifSC-Bold-subset.ttf"))
+}
+
+/// Inter UI font, Regular (weight 400) — the design's UI typeface
+/// (`docs/DESIGN-iced.md` §1; the mẫu uses Inter 400/500/600/700
+/// for all UI text). Embedded static TTFs (`assets/Inter-*.ttf`,
+/// family "Inter", OFL), loaded at boot via [`load_inter_fonts`].
+#[must_use]
+pub fn inter_font() -> Font {
+    Font::with_name("Inter")
+}
+
+/// Inter UI font, Medium (weight 500).
+#[must_use]
+pub fn inter_font_medium() -> Font {
+    Font {
+        weight: Weight::Medium,
+        ..Font::with_name("Inter")
+    }
+}
+
+/// Inter UI font, Semibold (weight 600).
+#[must_use]
+pub fn inter_font_semibold() -> Font {
+    Font {
+        weight: Weight::Semibold,
+        ..Font::with_name("Inter")
+    }
+}
+
+/// Inter UI font, Bold (weight 700).
+#[must_use]
+pub fn inter_font_bold() -> Font {
+    Font {
+        weight: Weight::Bold,
+        ..Font::with_name("Inter")
+    }
+}
+
+/// Load the four embedded Inter weights (400/500/600/700). Call
+/// once at startup, batched with [`load_cjk_font`] (the boot `Task`
+/// in `App::new`); like the CJK load, each result only reports
+/// failure — the app works without them (text falls back to the
+/// default font).
+pub fn load_inter_fonts() -> iced::Task<Result<(), font::Error>> {
+    iced::Task::batch([
+        font::load(include_bytes!("../assets/Inter-Regular.ttf")),
+        font::load(include_bytes!("../assets/Inter-Medium.ttf")),
+        font::load(include_bytes!("../assets/Inter-SemiBold.ttf")),
+        font::load(include_bytes!("../assets/Inter-Bold.ttf")),
+    ])
 }
 
 /// Primary button: gold fill, dark text (spike-proven).

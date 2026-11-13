@@ -1,0 +1,11 @@
+<!-- Lucide-style "chevron-down" icon extracted from the Iced design mockup
+     (~/workspace/user/files/C__t__ng___Thi_t_k__giao_di_n__iced.html, pages dtpl_6.html).
+     Original markup: viewBox 0 0 24 24, fill="none", stroke="currentColor",
+     stroke-width 2, round caps/joins. stroke is baked to #ECE7DC (theme TEXT)
+     because iced's Svg renderer has no inherited currentColor: usvg would
+     resolve currentColor to black on the dark theme. Tint at use site with
+     `.style(|_, _| iced::widget::svg::Style { color: Some(...) })` — the
+     style colour repaints the whole icon, ignoring this baked colour. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ECE7DC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="m6 9 6 6 6-6"></path>
+</svg>

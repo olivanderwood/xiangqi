@@ -255,7 +255,7 @@ pub fn t(key: Key) -> &'static str {
 /// Vietnamese strings.
 fn t_vi(key: Key) -> &'static str {
     match key {
-        Key::AppTitle => "Cờ Tướng AI",
+        Key::AppTitle => "Cờ Tướng",
         Key::AppSubtitle => "Đấu với máy • Học chơi khai cuộc",
         Key::PlayVsAi => "Đấu với AI",
         Key::LearnOpenings => "Học chơi khai cuộc",
@@ -438,7 +438,7 @@ fn t_vi(key: Key) -> &'static str {
 /// English strings.
 fn t_en(key: Key) -> &'static str {
     match key {
-        Key::AppTitle => "Xiangqi AI",
+        Key::AppTitle => "Xiangqi",
         Key::AppSubtitle => "Play vs AI • Learn openings",
         Key::PlayVsAi => "Play vs AI",
         Key::LearnOpenings => "Learn openings",

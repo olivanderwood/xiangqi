@@ -85,13 +85,17 @@ use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
 use crate::chessdb_worker::{ChessDbResponse, ChessDbView};
 use crate::helpers::{format_advantage, position_at, render_move};
 use crate::i18n::{self, difficulty_name, Key};
+use crate::icons::Icon;
 use crate::sound::sound_for_move;
 use crate::theme::{
     self, BLACK_PIECE, BOARD_HEIGHT, BOARD_LINE, BOARD_WIDTH, FONT_BODY, FONT_CAPTION, FONT_PIECE,
-    FONT_SCREEN_TITLE, PIECE_BG, PIECE_INNER_RADIUS, PIECE_RADIUS, RED, RED_PIECE, WOOD,
+    FONT_SCREEN_TITLE, PIECE_BG, PIECE_INNER_RADIUS, PIECE_RADIUS, RED, RED_PIECE, SPACE_12,
+    SPACE_16, SPACE_24, SPACE_8, WOOD,
 };
 use crate::widgets::{
-    advantage_chip, eval_bar, primary_button, secondary_button, section_title, PANEL_WIDTH,
+    advantage_chip, board_size_for_window, card_style, eval_bar, ghost_button_with_icon,
+    header_divider, primary_button, primary_button_with_icon, secondary_button,
+    secondary_button_with_icon, section_title, HEADER_HEIGHT, PANEL_WIDTH,
 };
 
 /// How long an engine suggestion / grade may take before the screen
@@ -269,6 +273,10 @@ pub struct State {
     /// Which suggestion row the mouse is over (`None` = none); its
     /// arrow draws at full opacity, the rest at 38% (DESIGN-iced.md §1).
     hover_suggest: Option<usize>,
+    /// Current window size (tracked via `Msg::WindowResized`, seeded
+    /// with the default 1280 × 800): the board's display size comes
+    /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)).
+    window: Size,
 }
 
 /// i18n key for a `Grade` label.
@@ -401,6 +409,8 @@ pub enum Msg {
     BackToSetup,
     /// A message from the playing board canvas.
     Board(BoardMsg),
+    /// The window was resized: the board's display size follows it.
+    WindowResized(Size),
     /// Animation / check-halo tick (only subscribed while one is active).
     Tick(Instant),
     /// A ChessDB evaluation arrived (rebuilt into the panel's message
@@ -480,6 +490,7 @@ impl State {
             ai_rx: Arc::new(Mutex::new(real_rx)),
             pending_grade: None,
             hover_suggest: None,
+            window: Size::new(1280.0, 800.0),
         }
     }
 
@@ -543,6 +554,10 @@ impl State {
     pub fn update(&mut self, msg: Msg, shared: &mut Shared) -> Task<Msg> {
         match msg {
             Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout | Msg::Noop => Task::none(),
+            Msg::WindowResized(size) => {
+                self.window = size;
+                Task::none()
+            }
             Msg::DifficultyChanged(d) => {
                 self.difficulty = d;
                 Task::none()
@@ -920,13 +935,15 @@ impl State {
                     return;
                 }
                 // The drop point is canvas-relative (see
-                // `BoardProgram`); the canvas is exactly the design
-                // size, so a zero-origin geometry maps it.
+                // `BoardProgram`); the canvas is
+                // `board_size_for_window(self.window)`, so that same
+                // size maps it — not the hardcoded design bounds.
+                let size = board_size_for_window(self.window);
                 let bounds = Rectangle {
                     x: 0.0,
                     y: 0.0,
-                    width: BOARD_WIDTH,
-                    height: BOARD_HEIGHT,
+                    width: size.width,
+                    height: size.height,
                 };
                 if let Some(sq) = Geom::from_bounds_flipped(bounds, self.flipped).square_at(point) {
                     self.click_square(sq, shared);
@@ -1156,11 +1173,13 @@ impl State {
             .spacing(16),
         );
         col = col.push(match self.source {
-            PracticeSource::Start => {
-                column![primary_button(i18n::t(Key::Start), Msg::StartFromStart),]
-                    .spacing(8)
-                    .into()
-            }
+            PracticeSource::Start => column![primary_button_with_icon(
+                i18n::t(Key::Start),
+                Icon::Plus,
+                Msg::StartFromStart
+            ),]
+            .spacing(SPACE_8)
+            .into(),
             PracticeSource::Fen => self.view_setup_fen(),
             PracticeSource::Image => self.view_setup_image(),
         });
@@ -1168,10 +1187,10 @@ impl State {
             i18n::t(Key::BackToMenu),
             Msg::Navigate(Screen::Home),
         ));
-        container(scrollable(col.spacing(12).width(Length::Fill)).width(Length::Fill))
+        container(scrollable(col.spacing(SPACE_12).width(Length::Fill)).width(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding(16)
+            .padding(SPACE_16)
             .into()
     }
 
@@ -1363,29 +1382,79 @@ impl State {
         render.anim = self.board.anim;
         render.pulse = pulse;
         render.flipped = self.flipped;
+        let board_size = board_size_for_window(self.window);
         let board_el = container(BoardProgram::canvas(render).map(Msg::Board))
-            .width(Length::Fixed(BOARD_WIDTH))
-            .height(Length::Fixed(BOARD_HEIGHT));
+            .width(Length::Fixed(board_size.width))
+            .height(Length::Fixed(board_size.height));
         // Eval bar on the LEFT of the board (egui position; the
         // right-side placement was a workaround for the pre-fix
         // `Geom` origin bug — see the module docs).
-        let mut content = row![].spacing(12).align_y(iced::Alignment::Start);
+        let mut board_col = row![].spacing(SPACE_16).align_y(iced::Alignment::Start);
         if let Some(score) = self.score_red() {
-            content = content.push(eval_bar(score, BOARD_HEIGHT));
+            board_col = board_col.push(eval_bar(score, board_size.height));
         }
-        content = content.push(board_el);
-        content = content.push(self.view_panel(shared, &pos, lines_current));
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        board_col = board_col.push(board_el);
+        let content = row![board_col, self.view_panel(shared, &pos, lines_current)]
+            .spacing(SPACE_24)
+            .align_y(iced::Alignment::Start);
+        // Header (same 64 px surface bar as Play / Learn): "Quay
+        // lại" goes back to the setup phase here, not the menu.
+        let header = container(
+            row![
+                ghost_button_with_icon(
+                    i18n::t(Key::PracticeBackToSetup),
+                    Icon::ArrowLeft,
+                    Msg::BackToSetup
+                ),
+                text(i18n::t(Key::PracticeTitle))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold())
+                    .width(Length::Fill),
+                ghost_button_with_icon(
+                    i18n::t(Key::Settings),
+                    Icon::SlidersHorizontal,
+                    Msg::ShowSettings
+                ),
+            ]
+            .spacing(SPACE_16)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: SPACE_24,
+            bottom: 0.0,
+            left: SPACE_24,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(theme::SURFACE)),
+            ..Default::default()
+        });
+        column![
+            header,
+            header_divider(),
+            container(content)
+                .padding(iced::Padding {
+                    top: SPACE_16,
+                    right: SPACE_24,
+                    bottom: SPACE_16,
+                    left: SPACE_24,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// The right panel (playing phase): status, advantage,
     /// suggestions, last move grade, move list, and the action
     /// buttons. Fixed 380 px wide so the board never flexes.
     fn view_panel(&self, shared: &Shared, pos: &Position, lines_current: bool) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(8);
+        let mut col = Column::new().spacing(SPACE_12);
         // Status: result, check, or whose turn it is.
         let status = if let Some(result) = self.result_text() {
             result
@@ -1521,24 +1590,24 @@ impl State {
         // Actions: reset (keeps the difficulty), undo, flip, change position.
         col = col.push(
             row![
-                primary_button(i18n::t(Key::NewGame), Msg::Reset),
-                secondary_button(i18n::t(Key::Undo), Msg::Undo),
+                primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::Reset),
+                secondary_button_with_icon(i18n::t(Key::Undo), Icon::Undo, Msg::Undo),
                 secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard),
             ]
-            .spacing(12),
+            .spacing(SPACE_12),
         );
         col = col.push(
             row![
                 secondary_button(i18n::t(Key::PracticeBackToSetup), Msg::BackToSetup),
                 secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
             ]
-            .spacing(12),
+            .spacing(SPACE_12),
         );
         container(scrollable(col.width(Length::Fill)).width(Length::Fill))
             .width(Length::Fixed(PANEL_WIDTH))
             .height(Length::Fill)
-            .padding(12)
-            .style(theme::card_container_style)
+            .padding(SPACE_16)
+            .style(card_style)
             .into()
     }
 
@@ -1564,6 +1633,7 @@ impl State {
                         Msg::ChessDbEvaluated { req_id, result }
                     }
                 }),
+            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
             bridge::from_mpsc("practice-ai", Arc::clone(&self.ai_rx)).filter_map(|resp| {
                 match resp {
                     AiResponse::Analysis { req_id, lines } => {

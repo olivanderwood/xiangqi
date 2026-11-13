@@ -37,6 +37,9 @@ bản viết lại UI bằng Iced.
 ### Chữ
 - Tiêu đề lớn 36 · Tiêu đề màn hình 20 · Tiêu đề thẻ 16 · Nội dung 15 ·
   Chú thích 13 · Chữ quân (Hán) 30.
+- **Ngoại lệ (Hieu chốt 2026-11-13):** tiêu đề lớn màn Home thực tế mẫu
+  vẽ là **52 px** (trang quy chuẩn ghi 36 nhưng trang Home vẽ 52) — app
+  dùng 52 cho tiêu đề Home (`FONT_TITLE_LARGE`), theo đúng mẫu vẽ.
 - Chữ Hán: nhúng font **Noto Serif SC** (`include_bytes`), `Font::with_name`.
 
 ### Khoảng cách và bo góc

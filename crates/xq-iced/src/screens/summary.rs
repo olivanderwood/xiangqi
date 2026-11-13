@@ -18,9 +18,10 @@ use xq_core::board::Position;
 use crate::app::{Screen, Shared};
 use crate::board::{BoardProgram, BoardRender};
 use crate::i18n::{self, Key};
+use crate::icons::Icon;
 use crate::screens::learn::LessonChoice;
-use crate::theme::{self, FONT_BODY, FONT_SCREEN_TITLE};
-use crate::widgets::{primary_button, secondary_button, section_title};
+use crate::theme::{self, FONT_BODY, FONT_SCREEN_TITLE, SPACE_16, SPACE_24, SPACE_4, SPACE_8};
+use crate::widgets::{primary_button_with_icon, secondary_button, section_title};
 
 /// One graded learner move in the summary table.
 #[derive(Clone, Debug)]
@@ -169,8 +170,12 @@ impl State {
         };
 
         let mut col = column![
-            text(i18n::t(Key::SummaryTitle)).size(FONT_SCREEN_TITLE),
-            text(data.lesson_name.clone()).size(FONT_BODY),
+            text(i18n::t(Key::SummaryTitle))
+                .size(FONT_SCREEN_TITLE)
+                .font(theme::inter_font_semibold()),
+            text(data.lesson_name.clone())
+                .size(FONT_BODY)
+                .font(theme::inter_font_semibold()),
             text(
                 i18n::t(Key::CorrectBookMoves)
                     .replace("{n}", &data.book_moves.to_string())
@@ -184,7 +189,7 @@ impl State {
             )
             .size(FONT_BODY),
         ]
-        .spacing(8);
+        .spacing(SPACE_8);
         if let Some(note) = &data.end_note {
             col = col.push(text(note.clone()).size(FONT_BODY));
         }
@@ -195,17 +200,19 @@ impl State {
         col = col.push(section_title(i18n::t(Key::ViewPosition)));
 
         // Grade table (left) + position viewer (right).
-        let mut table = column![].spacing(4);
+        let mut table = column![].spacing(SPACE_4);
         for row_data in &data.rows {
             let selected = self.selected_ply == Some(row_data.ply);
             let row_el = row![
                 text(format!("{}. {}", row_data.ply, row_data.mv))
                     .size(FONT_BODY)
+                    .font(theme::inter_font_medium())
                     .width(Length::Fixed(140.0)),
                 // Grade labels follow the current language
                 // (`i18n::grade_label`).
                 text(i18n::grade_label(row_data.grade))
                     .size(FONT_BODY)
+                    .font(theme::inter_font_medium())
                     .width(Length::Fixed(140.0))
                     .style({
                         let grade = row_data.grade;
@@ -213,36 +220,37 @@ impl State {
                             color: Some(grade_color(grade)),
                         }
                     }),
-                text(row_data.best.clone().unwrap_or_default()).size(FONT_BODY),
+                text(row_data.best.clone().unwrap_or_default())
+                    .size(FONT_BODY)
+                    .font(theme::inter_font_medium()),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center);
-            let row_box =
-                container(row_el)
-                    .padding(4)
-                    .width(Length::Fill)
-                    .style(move |_: &iced::Theme| container::Style {
-                        background: if selected {
-                            Some(iced::Background::Color(Color {
-                                a: 0.11,
-                                ..theme::GOLD
-                            }))
-                        } else {
-                            None
-                        },
-                        border: iced::Border {
-                            radius: 8.0.into(),
-                            ..Default::default()
-                        },
+            let row_box = container(row_el)
+                .padding(SPACE_4)
+                .width(Length::Fill)
+                .style(move |_: &iced::Theme| container::Style {
+                    background: if selected {
+                        Some(iced::Background::Color(Color {
+                            a: 0.11,
+                            ..theme::GOLD
+                        }))
+                    } else {
+                        None
+                    },
+                    border: iced::Border {
+                        radius: 8.0.into(),
                         ..Default::default()
-                    });
+                    },
+                    ..Default::default()
+                });
             table = table.push(mouse_area(row_box).on_press(Msg::SelectRow(row_data.ply)));
         }
         let table_el = scrollable(table)
             .height(Length::Fixed(400.0))
             .width(Length::Fixed(420.0));
 
-        let mut body = row![table_el].spacing(12);
+        let mut body = row![table_el].spacing(SPACE_16);
         if let Some(ply) = self.selected_ply {
             if let Some(pos) = data.positions.get(ply) {
                 let viewer = container(
@@ -257,18 +265,18 @@ impl State {
 
         col = col.push(
             row![
-                primary_button(i18n::t(Key::LearnAgain), Msg::LearnAgain),
+                primary_button_with_icon(i18n::t(Key::LearnAgain), Icon::BookOpen, Msg::LearnAgain),
                 secondary_button(
                     i18n::t(Key::OtherLesson),
                     Msg::Navigate(Screen::LearnSelect)
                 ),
                 secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
             ]
-            .spacing(8),
+            .spacing(SPACE_8),
         );
 
         container(col)
-            .padding(12)
+            .padding(SPACE_24)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()

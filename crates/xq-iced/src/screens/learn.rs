@@ -43,8 +43,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text, Button, Space};
-use iced::{Color, Element, Length, Point, Rectangle, Subscription, Task, Theme};
+use iced::widget::{column, container, mouse_area, row, scrollable, text, Space};
+use iced::{Color, Element, Length, Point, Rectangle, Size, Subscription, Task, Theme};
 use xq_book::schema::{BookNode, Lesson};
 use xq_book::tree::node_at;
 use xq_book::{direction_count, BookHint, LessonSummary, Tutor, TutorEvent};
@@ -62,12 +62,19 @@ use crate::board::{Arrow, BoardMsg, BoardProgram, BoardRender, BoardState, Geom,
 use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
 use crate::chessdb_worker::ChessDbResponse;
 use crate::helpers::{move_strings, render_move};
-use crate::i18n::{self, Key};
+use crate::i18n::{self, difficulty_name, Key};
+use crate::icons::Icon;
 use crate::screens::summary::{SummaryData, SummaryRow};
 use crate::sound::sound_for_move;
-use crate::theme::{self, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE};
+use crate::theme::{
+    self, BLACK_PIECE, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GOLD, RED_PIECE, SPACE_16,
+    SPACE_24, SPACE_4, SPACE_8, TEXT_DIM,
+};
 use crate::widgets::{
-    advantage_chip, eval_bar, primary_button, secondary_button, section_title, PANEL_WIDTH,
+    advantage_chip, board_size_for_window, card_style, disabled_button_with_icon, eval_bar,
+    ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
+    secondary_button, secondary_button_with_icon, section_title, side_card, status_chip,
+    HEADER_HEIGHT, PANEL_WIDTH,
 };
 
 /// How long the opponent waits before playing its book move
@@ -167,11 +174,53 @@ pub fn grade_color(grade: Grade) -> Color {
     }
 }
 
-/// A button with no `on_press` (rendered disabled by Iced).
-fn disabled_button(label: &str) -> Button<'_, Msg> {
-    Button::new(text(label).size(FONT_BODY))
-        .style(theme::secondary_button_style)
-        .padding(12)
+/// A 2-column-grid action button (mockup pages 2/4/5): full cell
+/// width, 40 px tall.
+fn grid_button<'a>(btn: iced::widget::Button<'a, Msg>) -> iced::widget::Button<'a, Msg> {
+    btn.width(Length::Fill).height(Length::Fixed(40.0))
+}
+
+/// Gold progress bar (mockup page 4: a 6 px track with a gold fill
+/// showing how far through the lesson the learner is).
+fn progress_bar(frac: f32) -> Element<'static, Msg> {
+    let pct = (frac.clamp(0.0, 1.0) * 100.0).round() as u16;
+    let gold = container(text(""))
+        .height(Length::Fixed(6.0))
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(theme::GOLD)),
+            border: iced::Border {
+                radius: 3.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    let inner: Element<'static, Msg> = if pct == 0 {
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fixed(6.0))
+            .into()
+    } else if pct >= 100 {
+        gold.width(Length::Fill).into()
+    } else {
+        row![
+            gold.width(Length::FillPortion(pct)),
+            container(text("")).width(Length::FillPortion(100 - pct)),
+        ]
+        .spacing(0)
+        .into()
+    };
+    container(inner)
+        .width(Length::Fill)
+        .height(Length::Fixed(6.0))
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(theme::BORDER)),
+            border: iced::Border {
+                radius: 3.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// Container style for a hint / opponent-choice row: pale gold when
@@ -204,6 +253,8 @@ pub enum Msg {
     ShowAbout,
     /// Animation / opponent-timer tick.
     Tick(Instant),
+    /// The window was resized: the board's display size follows it.
+    WindowResized(Size),
     /// A board interaction (click / drag / drop).
     Board(BoardMsg),
     /// The cursor entered / left a hint row (`None` = left).
@@ -316,6 +367,10 @@ pub struct State {
     rng_state: u64,
     /// When the screen was created (drives the check-halo pulse).
     boot: Instant,
+    /// Current window size (tracked via `Msg::WindowResized`, seeded
+    /// with the default 1280 × 800): the board's display size comes
+    /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)).
+    window: Size,
 }
 
 impl State {
@@ -366,6 +421,7 @@ impl State {
             next_req_id: 1,
             rng_state: 0x9E37_79B9_7F4A_7C15,
             boot: now,
+            window: Size::new(1280.0, 800.0),
         }
     }
 
@@ -1084,15 +1140,17 @@ impl State {
             || (self.started && self.game.pos.in_check(self.game.pos.side()))
     }
 
-    /// Drop point (canvas-local) → board square. The canvas fills a
-    /// fixed [`theme::BOARD_WIDTH`] × [`theme::BOARD_HEIGHT`]
-    /// container, so its local coordinates map 1:1 to that geometry.
+    /// Drop point (canvas-local) → board square. The canvas is
+    /// [`board_size_for_window`](crate::widgets::board_size_for_window)
+    /// at the screen's current window size, so its local coordinates
+    /// map through that geometry — not the hardcoded design bounds.
     fn square_at_drop(&self, p: Point) -> Option<Square> {
+        let size = board_size_for_window(self.window);
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: theme::BOARD_WIDTH,
-            height: theme::BOARD_HEIGHT,
+            width: size.width,
+            height: size.height,
         };
         Geom::from_bounds_flipped(bounds, self.flipped).square_at(p)
     }
@@ -1147,6 +1205,10 @@ impl State {
     pub fn update(&mut self, msg: Msg, shared: &mut Shared) -> Task<Msg> {
         match msg {
             Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout | Msg::ContinueWithAi => {
+                Task::none()
+            }
+            Msg::WindowResized(size) => {
+                self.window = size;
                 Task::none()
             }
             Msg::Ignored => Task::none(),
@@ -1283,15 +1345,48 @@ impl State {
             Some(SideColor::Black) => i18n::t(Key::LearnSecond),
             _ => i18n::t(Key::LearnFirst),
         };
-        let header = row![
-            secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
-            text(format!("{} · {}", side_text, shared.engine_name)).size(FONT_SCREEN_TITLE),
-            Space::new().width(Length::Fill),
-            secondary_button(i18n::t(Key::Settings), Msg::ShowSettings),
-            secondary_button(i18n::t(Key::About), Msg::ShowAbout),
-        ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center);
+        // Header (mockup pages 4/5): 64 px surface bar — ghost "Quay
+        // lại", 20 px Semibold title, chips for the lesson, the
+        // learner's side and the engine, ghost "Cài đặt".
+        let header = container(
+            row![
+                ghost_button_with_icon(
+                    i18n::t(Key::BackToMenu),
+                    Icon::ArrowLeft,
+                    Msg::Navigate(Screen::Home)
+                ),
+                text(i18n::t(Key::LearnOpenings))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold())
+                    .width(Length::Fill),
+                // No i18n label keys exist for the mockup's
+                // "Khai cuộc: …" / "Bạn: …" prefixes (and i18n.rs is
+                // out of scope here), so the chips show the values
+                // alone: the lesson name and the learner's side.
+                status_chip(lesson.name_vi.clone(), None, TEXT_DIM),
+                status_chip(side_text.to_string(), None, TEXT_DIM),
+                status_chip(shared.engine_name.clone(), None, TEXT_DIM),
+                ghost_button_with_icon(
+                    i18n::t(Key::Settings),
+                    Icon::SlidersHorizontal,
+                    Msg::ShowSettings
+                ),
+            ]
+            .spacing(SPACE_16)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: SPACE_24,
+            bottom: 0.0,
+            left: SPACE_24,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(theme::SURFACE)),
+            ..Default::default()
+        });
 
         // Board: eval bar + canvas + side panel.
         let score = eval::eval(&pos);
@@ -1300,20 +1395,31 @@ impl State {
         } else {
             -score
         };
-        let eval = eval_bar(score_red, theme::BOARD_HEIGHT);
+        let board_size = board_size_for_window(self.window);
+        let eval = eval_bar(score_red, board_size.height);
         let board_el = self.board_view(&pos);
         let panel = self.panel_view(lesson, &pos, shared);
 
         container(
             column![
                 header,
-                row![eval, board_el, panel]
-                    .spacing(12)
-                    .align_y(iced::Alignment::Start),
+                header_divider(),
+                container(
+                    row![row![eval, board_el].spacing(SPACE_16), panel,]
+                        .spacing(SPACE_24)
+                        .align_y(iced::Alignment::Start),
+                )
+                .padding(iced::Padding {
+                    top: SPACE_16,
+                    right: SPACE_24,
+                    bottom: SPACE_16,
+                    left: SPACE_24,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
             ]
-            .spacing(8),
+            .spacing(0),
         )
-        .padding(12)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -1365,15 +1471,16 @@ impl State {
             pulse: self.pulse(),
             flipped: self.flipped,
         };
+        let board_size = board_size_for_window(self.window);
         container(BoardProgram::canvas(render).map(Msg::Board))
-            .width(Length::Fixed(theme::BOARD_WIDTH))
-            .height(Length::Fixed(theme::BOARD_HEIGHT))
+            .width(Length::Fixed(board_size.width))
+            .height(Length::Fixed(board_size.height))
             .into()
     }
 
     /// The fixed-width side panel (6 sections, as in the egui app).
     fn panel_view(&self, lesson: &Lesson, pos: &Position, shared: &Shared) -> Element<'_, Msg> {
-        let mut col = column![].spacing(8);
+        let mut col = column![].spacing(SPACE_16);
 
         // Lesson-complete / off-book dialogs (cards at the top).
         if self.show_complete_dialog {
@@ -1383,6 +1490,56 @@ impl State {
         } else if self.off_book_pending {
             col = col.push(self.off_book_card(shared));
         }
+
+        // Opponent + player cards (mockup pages 4/5: 44 px piece disc,
+        // Semibold 16 name, 13 px Medium subtitle, status chip; gold
+        // border on the side to move).
+        let learner = self.learner_color().unwrap_or(SideColor::Red);
+        let (opp_glyph, opp_glyph_color) = match learner {
+            SideColor::Red => ("將", BLACK_PIECE),
+            SideColor::Black => ("帥", RED_PIECE),
+        };
+        let (player_glyph, player_glyph_color) = match learner {
+            SideColor::Red => ("帥", RED_PIECE),
+            SideColor::Black => ("將", BLACK_PIECE),
+        };
+        let learner_turn = self.can_input() && self.complete.is_none();
+        col = col.push(side_card(
+            opp_glyph,
+            opp_glyph_color,
+            "Pikafish",
+            difficulty_name(shared.settings.difficulty).to_string(),
+            status_chip(
+                if learner_turn {
+                    i18n::t(Key::PlayWaitingForYou).to_string()
+                } else {
+                    i18n::t(Key::Thinking).to_string()
+                },
+                None,
+                TEXT_DIM,
+            ),
+            false,
+        ));
+        let side_text = match learner {
+            SideColor::Black => i18n::t(Key::LearnSecond),
+            _ => i18n::t(Key::LearnFirst),
+        };
+        col = col.push(side_card(
+            player_glyph,
+            player_glyph_color,
+            i18n::t(Key::PlayerYou),
+            side_text.to_string(),
+            status_chip(
+                if learner_turn {
+                    i18n::t(Key::PlayYourTurn).to_string()
+                } else {
+                    i18n::t(Key::Thinking).to_string()
+                },
+                if learner_turn { Some(GOLD) } else { None },
+                if learner_turn { GOLD } else { TEXT_DIM },
+            ),
+            learner_turn,
+        ));
 
         // Section 1 — lesson + progress + Undo.
         let remaining = self.main_branch_remaining();
@@ -1395,9 +1552,9 @@ impl State {
         .size(FONT_BODY);
         let can_undo = self.started && self.complete.is_none() && !self.game.moves.is_empty();
         let undo_btn: Element<'_, Msg> = if can_undo {
-            secondary_button(i18n::t(Key::Undo), Msg::Undo).into()
+            secondary_button_with_icon(i18n::t(Key::Undo), Icon::Undo, Msg::Undo).into()
         } else {
-            disabled_button(i18n::t(Key::Undo)).into()
+            disabled_button_with_icon(i18n::t(Key::Undo), Icon::Undo).into()
         };
         col = col.push(text(lesson.name_vi.clone()).size(FONT_SCREEN_TITLE));
         col = col.push(
@@ -1459,9 +1616,12 @@ impl State {
                 for (i, hint) in follow.iter().take(4).enumerate() {
                     col = col.push(
                         row![
-                            text(format!("{}.", i + 1)).size(FONT_SCREEN_TITLE),
+                            text(format!("{}.", i + 1))
+                                .size(FONT_BODY)
+                                .font(theme::inter_font_medium()),
                             text(render_move(&after, hint.mv, shared.settings.notation))
-                                .size(FONT_SCREEN_TITLE)
+                                .size(FONT_BODY)
+                                .font(theme::inter_font_medium())
                                 .width(Length::Fill),
                             advantage_chip(hint.score),
                         ]
@@ -1488,9 +1648,12 @@ impl State {
             let choices = self.opponent_choices();
             for (rank, (idx, mv, score, _, note)) in choices.iter().take(4).enumerate() {
                 let mut row_col = column![row![
-                    text(format!("{}.", rank + 1)).size(FONT_SCREEN_TITLE),
+                    text(format!("{}.", rank + 1))
+                        .size(FONT_BODY)
+                        .font(theme::inter_font_medium()),
                     text(render_move(pos, *mv, shared.settings.notation))
-                        .size(FONT_SCREEN_TITLE)
+                        .size(FONT_BODY)
+                        .font(theme::inter_font_medium())
                         .width(Length::Fill),
                     // The chip shows the advantage from the
                     // LEARNER's side, so the opponent's stored
@@ -1532,9 +1695,12 @@ impl State {
                 let hovered = self.hint_hover == Some(i);
                 let row_col = column![
                     row![
-                        text(format!("{}.", i + 1)).size(FONT_SCREEN_TITLE),
+                        text(format!("{}.", i + 1))
+                            .size(FONT_BODY)
+                            .font(theme::inter_font_medium()),
                         text(render_move(&hint_pos, hint.mv, shared.settings.notation))
-                            .size(FONT_SCREEN_TITLE)
+                            .size(FONT_BODY)
+                            .font(theme::inter_font_medium())
                             .width(Length::Fill),
                         advantage_chip(hint.score),
                     ]
@@ -1556,48 +1722,101 @@ impl State {
             }
         }
 
-        // Section 6 — compact move list (owned strings: the list
-        // borrows nothing, so it can live in this `view`).
+        // Section 6 — compact move list, in a card with the gold
+        // progress bar from mockup page 4 ("Bước n / [N]" + bar).
         let moves = move_strings(&self.game, shared.settings.notation);
-        let mut moves_col = column![].spacing(4);
+        let mut moves_col = column![].spacing(SPACE_4);
         let mut i = 0;
         while i < moves.len() {
             let no = i / 2 + 1;
             let mut r = row![text(format!("{no}."))
                 .size(FONT_BODY)
+                .font(theme::inter_font_medium())
+                .style(|_: &Theme| iced::widget::text::Style {
+                    color: Some(TEXT_DIM),
+                })
                 .width(Length::Fixed(32.0))]
             .spacing(10);
             for mv in moves.iter().skip(i).take(2) {
-                r = r.push(text(mv.clone()).size(FONT_BODY).width(Length::Fill));
+                r = r.push(
+                    text(mv.clone())
+                        .size(FONT_BODY)
+                        .font(theme::inter_font_medium())
+                        .width(Length::Fill),
+                );
             }
             moves_col = moves_col.push(r);
             i += 2;
         }
-        col = col.push(
+        let total_est = self.game.moves.len() + self.main_branch_remaining();
+        let progress = if total_est == 0 {
+            0.0
+        } else {
+            self.game.moves.len() as f32 / total_est as f32
+        };
+        let moves_card = column![
+            row![
+                section_title(i18n::t(Key::MovesTitle)),
+                Space::new().width(Length::Fill),
+                text(
+                    i18n::t(Key::ProgressMoves)
+                        .replace("{n}", &self.game.moves.len().to_string())
+                        .replace("{m}", &total_est.to_string()),
+                )
+                .size(FONT_CAPTION)
+                .font(theme::inter_font_medium())
+                .style(|_: &Theme| iced::widget::text::Style {
+                    color: Some(TEXT_DIM),
+                }),
+            ]
+            .spacing(SPACE_8)
+            .align_y(iced::Alignment::Center),
+            progress_bar(progress),
             scrollable(moves_col)
                 .height(Length::Fixed(200.0))
                 .width(Length::Fill),
+        ]
+        .spacing(SPACE_8);
+        col = col.push(
+            container(moves_card)
+                .padding(SPACE_16)
+                .width(Length::Fill)
+                .style(card_style),
         );
 
-        // Buttons: restart ("Đi lại"), change lesson, flip the
-        // board, stop + summary, back to menu.
+        // Buttons (mockup pages 4/5: 2-column grid, 40 px, then the
+        // full-width gold "Dừng và tóm tắt"). "Đặt lại" and
+        // "Đổi khai cuộc" carry the Undo / BookOpen icons;
+        // "Dừng và tóm tắt" and "Lật bàn" have none in the mockup.
         col = col.push(
             row![
-                secondary_button(i18n::t(Key::RetryMove), Msg::Restart),
-                secondary_button(
+                grid_button(secondary_button_with_icon(
+                    i18n::t(Key::RetryMove),
+                    Icon::Undo,
+                    Msg::Restart
+                )),
+                grid_button(secondary_button_with_icon(
                     i18n::t(Key::OtherLesson),
+                    Icon::BookOpen,
                     Msg::Navigate(Screen::LearnSelect)
-                ),
-                secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard),
+                )),
             ]
-            .spacing(8),
+            .spacing(SPACE_8),
         );
         col = col.push(
             row![
-                primary_button(i18n::t(Key::StopAndSummary), Msg::StopAndSummary),
-                secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
+                grid_button(secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard)),
+                grid_button(secondary_button(
+                    i18n::t(Key::BackToMenu),
+                    Msg::Navigate(Screen::Home)
+                )),
             ]
-            .spacing(8),
+            .spacing(SPACE_8),
+        );
+        col = col.push(
+            primary_button(i18n::t(Key::StopAndSummary), Msg::StopAndSummary)
+                .width(Length::Fill)
+                .height(Length::Fixed(44.0)),
         );
 
         scrollable(col)
@@ -1644,15 +1863,19 @@ impl State {
         col = col.push(
             row![
                 primary_button(i18n::t(Key::StopAndSummary), Msg::StopAndSummary),
-                secondary_button(i18n::t(Key::ContinueWithAi), Msg::ContinueWithAi),
+                secondary_button_with_icon(
+                    i18n::t(Key::ContinueWithAi),
+                    Icon::Maximize,
+                    Msg::ContinueWithAi
+                ),
                 secondary_button(i18n::t(Key::Close), Msg::HideComplete),
             ]
             .spacing(8),
         );
         container(col)
-            .padding(12)
+            .padding(SPACE_16)
             .width(Length::Fill)
-            .style(theme::card_container_style)
+            .style(card_style)
             .into()
     }
 
@@ -1676,15 +1899,15 @@ impl State {
         }
         col = col.push(
             row![
-                primary_button(i18n::t(Key::RetryMove), Msg::Retry),
+                primary_button_with_icon(i18n::t(Key::RetryMove), Icon::Undo, Msg::Retry),
                 secondary_button(i18n::t(Key::ContinueMove), Msg::ContinueOffBook),
             ]
             .spacing(8),
         );
         container(col)
-            .padding(12)
+            .padding(SPACE_16)
             .width(Length::Fill)
-            .style(theme::card_container_style)
+            .style(card_style)
             .into()
     }
 
@@ -1695,6 +1918,7 @@ impl State {
         let mut subs = vec![
             self.chessdb.subscription().map(map_chessdb_msg),
             crate::bridge::from_mpsc("ai-learn", Arc::clone(&self.ai_rx)).map(map_ai_response),
+            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
         if self.needs_tick() {
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
