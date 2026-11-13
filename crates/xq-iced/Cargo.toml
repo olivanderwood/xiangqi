@@ -1,0 +1,32 @@
+[package]
+name = "xq-iced"
+version = "0.1.0"
+edition = "2021"
+description = "Xiangqi AI game — desktop GUI (Iced 0.14)"
+license = "MIT"
+
+[[bin]]
+name = "xiangqi-iced"
+path = "src/main.rs"
+
+[dependencies]
+xq-core = { path = "../xq-core" }
+xq-book = { path = "../xq-book" }
+xq-engine = { path = "../xq-engine" }
+xq-pikafish = { path = "../xq-pikafish" }
+xq-chessdb = { path = "../xq-chessdb" }
+# Iced 0.14, pinned (see docs/SPIKE-iced.md §5: 0.14 is the last
+# release before 1.0, which will break the API once). `tokio` is
+# needed for `time::every`; `canvas` draws the board.
+iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image"] }
+# Sound effects (same as xq-app): tones synthesized in code.
+rodio = "0.21"
+# Native file dialog for the practice screen's board-photo upload.
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Settings live in a JSON file under the user's config dir.
+dirs = "6"
+# Needed by `engine_manager.rs` (copied from xq-app): total RAM
+# decides the default Pikafish hash size.
+sysinfo = "0.33"
