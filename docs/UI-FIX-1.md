@@ -279,3 +279,82 @@ không tái hiện — nên đợt này chạy đủ với `--no-fail-fast` ngay
 - Cổng đợt đổi tên: fmt OK, clippy sạch (`-D warnings`, release),
   `cargo test -p xq-iced` **86/0**, binary release
   65.194.752 byte = 62,2 MB < 90 MB.
+
+## §9. UI-FIX-2 — responsive lại + menu căn giữa + Tiên/Hậu rõ (Hieu 2026-11-13 16:28, feedback sau khi chạy bản 2e1e9a8)
+
+Ba việc, làm cả ba. Không đổi tính năng, logic game, engine, sách, egui.
+
+### 1. Responsive lại cho màn hình chơi game, cả 3 mode
+- **Vấn đề cũ:** 3 màn dùng `Length::Fixed(PANEL_WIDTH)` (380 px) cho
+  side panel và `board_size_for_window` trừ cố định 380 px; content row
+  không Fill nên trên cửa sổ rộng bàn bị giới hạn bởi chiều cao và thừa
+  khoảng trống lớn bên tay phải.
+- **Cách sửa:** bàn giữ tỉ lệ 592:656, scale theo cửa sổ (công thức
+  `board_size_for_window` không đổi — phần trừ 380 px chính là thứ bảo
+  đảm panel Fill luôn ≥ 380 px); content row `width(Length::Fill)`;
+  side panel `Length::Fill` ở cả 3 màn (play/learn/practice), nội dung
+  panel giãn/căn giữa theo panel (nút action Practice nay giãn đều như
+  lưới 2 cột ở Play/Learn). Thêm helper `panel_width_for_window`
+  (chỉ dùng trong test) + test mới
+  `fill_panel_is_at_least_380_and_leaves_no_gap`: ở 1100×720 / 1280×800 /
+  1920×1080 panel ≥ 380 px và bàn + chrome + panel = đúng chiều rộng
+  cửa sổ (panel ~436 / ~544 / ~931 px).
+- **Không regress bug drop sai ô (UI-FIX-1):** mọi chỗ đổi điểm drop
+  thành ô vẫn dùng đúng `board_size_for_window(self.window)`
+  (play.rs:1282, learn.rs:1148, practice.rs:941).
+- **Lưu ý:** ở 1920×1080 panel rộng tới ~931 px — hệ quả đúng theo yêu
+  cầu "fill hết chiều ngang còn lại", nhưng nhìn có thể thấy quá giãn
+  (nhất là danh sách nước đi). Nếu Hieu thấy quá rộng thì quyết sau:
+  có đặt trần (max-width) cho panel hay không — hiện KHÔNG làm.
+
+### 2. Menu Tự luyện tập + setting mới vào trận (Đấu với AI) ra giữa, style giống Học khai cuộc
+- **Play `start_dialog_overlay`:** card 340 px → **640 px**, style
+  `card_style` giống Learn-select (surface, bo góc 14, padding 24);
+  2 section "Bên chơi" (Đỏ / Đen / Ngẫu nhiên / 2 người) và "Độ khó"
+  (5 mức 0–4) nằm **2 cột cạnh nhau**; mọi nút cao 48 px, chữ 15 px
+  Semibold; message giữ nguyên (`StartDialogSide`,
+  `StartDialogDifficulty`, `StartGame`, `CancelStart`).
+- **Practice `view_setup`:** cột full-width căn trái → **card căn giữa
+  880 px** (surface, bo góc 14, padding 24), bọc trong `scrollable`
+  (nguồn "Từ ảnh" kèm board editor 400×440 sẽ cuộn thay vì tràn);
+  nút Bắt đầu / Quay lại menu full-width, cao 48 px. Giữ nguyên 5 radio
+  độ khó + slider Elo tùy chỉnh (mức 4), 3 nguồn Start / FEN / ảnh
+  (`view_setup_fen`, `view_setup_image`, `view_editor` không động vào).
+
+### 3. Hai nút Đi tiên / Đi hậu rõ ràng hơn (Học khai cuộc)
+- Bỏ pill segmented 320 px cũ (nút 40 px, chữ 14 px). Thay bằng nhãn
+  "Bạn chơi bên" (key i18n mới `LearnSideLabel`: VI "Bạn chơi bên" /
+  EN "You play as", 16 px Semibold) + **2 nút lớn cạnh nhau, cao 60 px,
+  chữ 18 px Semibold + glyph quân 24 px** (帥 Đỏ / 將 Đen), lấp đầy
+  chiều rộng card, cách nhau 12 px, bo góc 10.
+- Mã màu rõ ngay khi chưa chọn: Đỏ = chữ/viền đỏ `#EA6A5F` trên
+  surface-2; Đen = nền tối hơn + chữ sáng + viền xám. Đã chọn: **gold
+  fill `#D4A24C` + chữ tối** (hover `#E0B25C`, pressed `#B88A3A`).
+  Giữ nguyên `Msg::SelectSide` và hành vi. Hàm `segment_button_style`
+  trong `widgets.rs` thành dead code nên đã xóa.
+
+### Cổng (chạy đủ sau lần sửa cuối — xem báo cáo cuối đợt)
+- `cargo fmt --all` + check, `cargo clippy -p xq-iced --all-targets
+  --release -- -D warnings`, `cargo test --workspace --no-fail-fast`,
+  `cargo build --release -p xq-iced` (binary < 90 MB).
+
+### Cần Hieu kiểm bằng mắt (Windows)
+1. **Responsive, cả 3 màn, cả 3 cỡ 1100×720 / 1280×800 / 1920×1080:**
+   không còn khoảng trống bên phải (mép panel sát mép cửa sổ, chỉ còn
+   padding 24 px); panel ≥ 380 px, nội dung không bị bóp ở 1100×720.
+   Ở 1920×1080: panel ~931 px có quá giãn không (có muốn đặt trần
+   max-width không)?
+2. **Kéo-thả vẫn đúng ô** ở mỗi cỡ cửa sổ (đặc biệt góc bàn khi thu nhỏ
+   1100×720).
+3. **Đấu với AI → menu mới vào trận:** card căn giữa, "Bên chơi" và
+   "Độ khó" 2 cột cạnh nhau, nút cao đều 48 px, chữ rõ; card có vừa
+   ở 1100×720 không?
+4. **Tự luyện tập → menu setup:** card 880 px căn giữa, không lệch trái
+   như trước; nguồn "Từ ảnh" cuộn dọc mượt, không cắt nội dung ở cửa sổ
+   cao 720 px; 3 radio nguồn + slider Elo nằm gọn trong card.
+5. **Học khai cuộc:** nhãn "Bạn chơi bên" rõ; 2 nút 60 px (帥 Đi tiên /
+   將 Đi hậu) phân biệt được ngay khi chưa chọn; bấm chọn thì nút đó
+   nền vàng gold + chữ tối, không nhầm với chưa chọn; đổi sang EN thì
+   nhãn/nút dịch đúng, glyph vẫn hiện.
+6. Bo góc/padding 2 menu mới có đồng bộ với màn Học khai cuộc không;
+   mọi lựa chọn cũ (4 bên, 5 độ khó, 3 nguồn) còn đủ và bấm được không?

@@ -7,9 +7,13 @@
 //! button sizes). All helpers are generic over the screen's `Message`
 //! type so any screen can use them.
 //!
-//! Layout rule carried over from egui: every side panel is exactly
-//! [`PANEL_WIDTH`] (380 px) wide, so the board never flexes when a
-//! panel's content changes.
+//! Layout rule carried over from egui: every side panel is at
+//! least [`PANEL_WIDTH`] (380 px) wide and fills whatever width
+//! the window leaves after the board and the chrome — see
+//! [`board_size_for_window`] and [`panel_width_for_window`]. The
+//! board never flexes when a panel's content changes, because the
+//! board size is computed by reserving that 380 px minimum, not
+//! by measuring the panel.
 //!
 //! Look (DESIGN-iced.md §1 + the mockup pages): Inter for all UI
 //! text (the app default font is Inter Regular, set in `main.rs`;
@@ -33,7 +37,10 @@ use crate::theme::{BOARD_HEIGHT, BOARD_WIDTH};
 use iced::widget::{button, column, container, row, text, Button, Row};
 use iced::{Alignment, Color, Element, Length, Size, Theme};
 
-/// The one fixed width of every side panel (egui `SIDE_PANEL_WIDTH`).
+/// The minimum width of every side panel (egui
+/// `SIDE_PANEL_WIDTH`). Screens lay the panel out with
+/// `Length::Fill`, so on a wide window it grows past this; it
+/// never shrinks below it — see [`panel_width_for_window`].
 pub const PANEL_WIDTH: f32 = 380.0;
 
 /// Height of the screen header bar (mockup pages 2/4/5/6: 64 px,
@@ -48,8 +55,12 @@ pub const EVAL_BAR_WIDTH: f32 = 14.0;
 /// §1): the board takes whatever the window leaves after the
 /// 64 px header, 1 px divider and 16 px content padding (vertical),
 /// and after the 24 px content padding, 14 px eval bar, 16 px gap,
-/// 24 px gap and 380 px panel (horizontal). The returned size keeps
-/// the design 592 × 656 aspect ratio, so [`Geom`](crate::board::Geom)
+/// 24 px gap and the 380 px panel minimum (horizontal). The
+/// horizontal budget reserves [`PANEL_WIDTH`] even though the
+/// panel itself is `Length::Fill` — that reservation is what
+/// guarantees the Fill panel is never narrower than 380 px (see
+/// [`panel_width_for_window`]). The returned size keeps the design
+/// 592 × 656 aspect ratio, so [`Geom`](crate::board::Geom)
 /// draws it with no letterboxing inside its own bounds. Screens
 /// size their board container with this AND convert drop points
 /// with the same size, so clicks keep mapping to the right square
@@ -62,6 +73,26 @@ pub fn board_size_for_window(window: Size) -> Size {
     let avail_h = (window.height - HEADER_HEIGHT - 1.0 - SPACE_16 * 2.0).max(1.0);
     let scale = (avail_w / BOARD_WIDTH).min(avail_h / BOARD_HEIGHT);
     Size::new(BOARD_WIDTH * scale, BOARD_HEIGHT * scale)
+}
+
+/// The width a `Length::Fill` side panel gets in a window of this
+/// size: the window width minus the 24 px content padding on each
+/// side, the 14 px eval bar, the 16 px gap after it, the 24 px gap
+/// before the panel, and the board from
+/// [`board_size_for_window`]. Because that function already
+/// reserves [`PANEL_WIDTH`] in the board's horizontal budget, this
+/// is at least [`PANEL_WIDTH`] for any window at or above the
+/// 1100 × 720 minimum — the board is height-bound there, so the
+/// panel is wider than the minimum (about 436 px at 1100 × 720,
+/// about 544 px at 1280 × 800, about 931 px at 1920 × 1080).
+/// Practice omits the eval bar when there is no score yet; then
+/// the panel is wider still, so the minimum still holds.
+#[allow(dead_code)] // used by tests; documents the Fill panel's layout width
+#[must_use]
+pub fn panel_width_for_window(window: Size) -> f32 {
+    let board = board_size_for_window(window);
+    (window.width - SPACE_24 * 2.0 - EVAL_BAR_WIDTH - SPACE_16 - SPACE_24 - board.width)
+        .max(PANEL_WIDTH)
 }
 
 /// Button content: icon first, then the label (mockup: icon + text,
@@ -204,26 +235,6 @@ where
     Button::new(labeled_icon(icn, TEXT_DIM, label))
         .style(theme::secondary_button_style)
         .padding(SPACE_12)
-}
-
-/// Segmented-control button style (Learn-select side picker, mockup
-/// page 3: selected = gold fill + dark text, unselected =
-/// transparent + light text, radius 8).
-pub fn segment_button_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_: &Theme, _status: button::Status| button::Style {
-        background: Some(iced::Background::Color(if selected {
-            theme::GOLD
-        } else {
-            Color::TRANSPARENT
-        })),
-        text_color: if selected { BG } else { TEXT },
-        border: iced::Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 8.0.into(),
-        },
-        ..Default::default()
-    }
 }
 
 // The menu's big call-to-action: a primary button filling its card,
@@ -557,8 +568,39 @@ mod tests {
         assert!(
             size.width + EVAL_BAR_WIDTH + SPACE_16 + SPACE_24 + PANEL_WIDTH + SPACE_24 * 2.0
                 <= 1100.0,
-            "board + eval bar + gaps + panel fits the window width: {size:?}"
+            "board + eval bar + gaps + minimum panel fits the window width: {size:?}"
         );
+    }
+
+    #[test]
+    fn fill_panel_is_at_least_380_and_leaves_no_gap() {
+        // The Fill panel takes exactly the width left after the
+        // chrome and the board, so board + chrome + panel == the
+        // window width (no dead space on the right) and the panel
+        // is never below the 380 px minimum — at the sizes below
+        // the board is height-bound, so the panel is wider still.
+        for (w, h, expected_panel) in [
+            (1100.0, 720.0, 435.7),
+            (1280.0, 800.0, 543.6),
+            (1920.0, 1080.0, 930.8),
+        ] {
+            let window = Size::new(w, h);
+            let board = board_size_for_window(window);
+            let panel = panel_width_for_window(window);
+            assert!(
+                panel >= PANEL_WIDTH,
+                "panel {panel} < minimum {PANEL_WIDTH} at {w}x{h}"
+            );
+            assert!(
+                (panel - expected_panel).abs() < 1.0,
+                "panel {panel} at {w}x{h}, expected ~{expected_panel}"
+            );
+            let total = SPACE_24 * 2.0 + EVAL_BAR_WIDTH + SPACE_16 + SPACE_24 + board.width + panel;
+            assert!(
+                (total - w).abs() < 0.01,
+                "board + chrome + panel {total} != window width {w} at {w}x{h}"
+            );
+        }
     }
 
     #[test]

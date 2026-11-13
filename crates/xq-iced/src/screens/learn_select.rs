@@ -1,12 +1,12 @@
 //! Lesson picker screen: choose side + opening (DESIGN-iced.md
 //! §2.3, `xq-app/src/screens/learn_select.rs`, mockup page 3).
 //!
-//! A centred 880 px card: title + subtitle, a segmented Tiên/Hậu
-//! control, the lesson list for the chosen side (name + level stars
-//! and a green Check icon when completed, from the shared embedded
-//! book), an intro panel with a mini board after the first 3
-//! main-branch plies, and "Bắt đầu học" bottom-right (only enabled
-//! once a lesson is picked).
+//! A centred 880 px card: title + subtitle, a "Bạn chơi bên"
+//! label over two large Tiên/Hậu buttons, the lesson list for the
+//! chosen side (name + level stars and a green Check icon when
+//! completed, from the shared embedded book), an intro panel with a
+//! mini board after the first 3 main-branch plies, and "Bắt đầu học"
+//! bottom-right (only enabled once a lesson is picked).
 //!
 //! # Lesson handover (integration)
 //!
@@ -25,12 +25,11 @@ use crate::i18n::{self, Key};
 use crate::icons::{icon_tinted, Icon, ICON_SIZE_SMALL};
 use crate::screens::learn::LessonChoice;
 use crate::theme::{
-    self, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GREEN, SPACE_12, SPACE_16, SPACE_24,
-    SPACE_32, SPACE_4, SPACE_8, TEXT_DIM,
+    self, BG, BORDER, FONT_BODY, FONT_CAPTION, FONT_CARD_TITLE, FONT_SCREEN_TITLE, GOLD, GREEN,
+    RADIUS_10, RED, SPACE_12, SPACE_16, SPACE_24, SPACE_32, SPACE_8, SURFACE2, TEXT, TEXT_DIM,
 };
 use crate::widgets::{
-    card_style, ghost_button_with_icon, header_divider, primary_button_with_icon,
-    segment_button_style, HEADER_HEIGHT,
+    card_style, ghost_button_with_icon, header_divider, primary_button_with_icon, HEADER_HEIGHT,
 };
 use xq_book::Lesson;
 use xq_core::board::Position;
@@ -169,39 +168,107 @@ impl State {
         .into()
     }
 
-    /// The Tiên/Hậu segmented control (mockup page 3: 320 px pill,
-    /// dark background, 40 px buttons, gold = selected). The mockup
-    /// labels it "Bạn chơi bên", but there is no i18n key for that
-    /// label (and `i18n.rs` is out of scope here), so the control
-    /// stands alone — the two side buttons name the sides.
+    /// The Tiên/Hậu picker (mockup page 3, UI-FIX-2 part 3): a
+    /// "Bạn chơi bên" label over two large side-by-side buttons,
+    /// each 60 px tall with a 24 px piece glyph (帥 red / 將
+    /// black) and an 18 px label. The old 320 px segmented pill
+    /// (40 px buttons, 14 px text) was too easy to miss, so the
+    /// pill is gone — the two buttons now fill the card width.
+    /// Selected = gold fill + dark text, as in the sample;
+    /// unselected Red = red text + red border on surface-2,
+    /// unselected Black = darker fill + light text + grey border,
+    /// so the sides read clearly even before either is picked.
+    /// Behaviour is unchanged: each button sends
+    /// [`Msg::SelectSide`].
     fn side_control(&self) -> Element<'_, Msg> {
-        let side_button = |label: &'static str, side: Color| -> Element<'_, Msg> {
+        let side_button = |label: &'static str,
+                           glyph: &'static str,
+                           side: Color|
+         -> Element<'_, Msg> {
             let selected = self.side == Some(side);
-            Button::new(text(label).size(14.0).font(theme::inter_font_semibold()))
+            let is_red = side == Color::Red;
+            // One text colour for the whole button (glyph +
+            // label): dark on gold when selected, bright red
+            // for unselected Red, light for unselected Black.
+            let ink = if selected {
+                BG
+            } else if is_red {
+                RED
+            } else {
+                TEXT
+            };
+            let content = row![
+                text(glyph)
+                    .size(24.0)
+                    .font(theme::cjk_font())
+                    .style(move |_: &iced::Theme| iced::widget::text::Style { color: Some(ink) }),
+                text(label)
+                    .size(18.0)
+                    .font(theme::inter_font_semibold())
+                    .style(move |_: &iced::Theme| iced::widget::text::Style { color: Some(ink) }),
+            ]
+            .spacing(SPACE_8)
+            .align_y(iced::Alignment::Center);
+            Button::new(content)
                 .on_press(Msg::SelectSide(side))
-                .style(segment_button_style(selected))
-                .height(Length::Fixed(40.0))
+                .style(
+                    move |_: &iced::Theme, status: iced::widget::button::Status| {
+                        let fill = if selected {
+                            match status {
+                                iced::widget::button::Status::Hovered => {
+                                    iced::Color::from_rgb8(0xE0, 0xB2, 0x5C)
+                                }
+                                iced::widget::button::Status::Pressed => {
+                                    iced::Color::from_rgb8(0xB8, 0x8A, 0x3A)
+                                }
+                                _ => GOLD,
+                            }
+                        } else {
+                            match status {
+                                iced::widget::button::Status::Hovered => SURFACE2,
+                                iced::widget::button::Status::Pressed => BORDER,
+                                _ => {
+                                    if is_red {
+                                        SURFACE2
+                                    } else {
+                                        BG
+                                    }
+                                }
+                            }
+                        };
+                        iced::widget::button::Style {
+                            background: Some(iced::Background::Color(fill)),
+                            text_color: ink,
+                            border: iced::Border {
+                                color: if selected {
+                                    GOLD
+                                } else if is_red {
+                                    RED
+                                } else {
+                                    BORDER
+                                },
+                                width: 1.0,
+                                radius: RADIUS_10.into(),
+                            },
+                            ..Default::default()
+                        }
+                    },
+                )
+                .height(Length::Fixed(60.0))
                 .width(Length::Fill)
                 .into()
         };
-        container(
+        column![
+            text(i18n::t(Key::LearnSideLabel))
+                .size(FONT_CARD_TITLE)
+                .font(theme::inter_font_semibold()),
             row![
-                side_button(i18n::t(Key::LearnFirst), Color::Red),
-                side_button(i18n::t(Key::LearnSecond), Color::Black),
+                side_button(i18n::t(Key::LearnFirst), "帥", Color::Red),
+                side_button(i18n::t(Key::LearnSecond), "將", Color::Black),
             ]
-            .spacing(SPACE_4),
-        )
-        .padding(SPACE_4)
-        .width(Length::Fixed(320.0))
-        .style(|_: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(theme::BG)),
-            border: iced::Border {
-                color: theme::BORDER,
-                width: 1.0,
-                radius: 12.0.into(),
-            },
-            ..Default::default()
-        })
+            .spacing(SPACE_12),
+        ]
+        .spacing(SPACE_8)
         .into()
     }
 

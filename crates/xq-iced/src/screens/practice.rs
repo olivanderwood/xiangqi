@@ -95,7 +95,7 @@ use crate::theme::{
 use crate::widgets::{
     advantage_chip, board_size_for_window, card_style, eval_bar, ghost_button_with_icon,
     header_divider, primary_button, primary_button_with_icon, secondary_button,
-    secondary_button_with_icon, section_title, HEADER_HEIGHT, PANEL_WIDTH,
+    secondary_button_with_icon, section_title, HEADER_HEIGHT,
 };
 
 /// How long an engine suggestion / grade may take before the screen
@@ -1121,6 +1121,15 @@ impl State {
 
 impl State {
     /// Setup phase: difficulty + where the position comes from.
+    ///
+    /// Centred card in the Learn-select style (UI-FIX-2 part 2):
+    /// surface card, radius 14, padding 24, 880 px wide, scrolling
+    /// vertically when the content (notably the image-source board
+    /// editor) is taller than the window. Behaviour is unchanged:
+    /// the same difficulty radios + custom-Elo slider, the same
+    /// three sources (Start / FEN / image), and the same Start /
+    /// Back buttons — the two buttons built here are full-width and
+    /// 48 px tall, like the Learn-select start button.
     fn view_setup(&self) -> Element<'_, Msg> {
         let mut diff_col = Column::new().spacing(4);
         for d in 0..=4u8 {
@@ -1132,7 +1141,9 @@ impl State {
             ));
         }
         let mut col = column![
-            text(i18n::t(Key::PracticeTitle)).size(FONT_SCREEN_TITLE),
+            text(i18n::t(Key::PracticeTitle))
+                .size(FONT_SCREEN_TITLE)
+                .font(theme::inter_font_semibold()),
             section_title(i18n::t(Key::PracticeDifficulty)),
             diff_col,
         ]
@@ -1177,21 +1188,32 @@ impl State {
                 i18n::t(Key::Start),
                 Icon::Plus,
                 Msg::StartFromStart
-            ),]
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(48.0)),]
             .spacing(SPACE_8)
             .into(),
             PracticeSource::Fen => self.view_setup_fen(),
             PracticeSource::Image => self.view_setup_image(),
         });
-        col = col.push(secondary_button(
-            i18n::t(Key::BackToMenu),
-            Msg::Navigate(Screen::Home),
-        ));
-        container(scrollable(col.spacing(SPACE_12).width(Length::Fill)).width(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(SPACE_16)
-            .into()
+        col = col.push(
+            secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home))
+                .width(Length::Fill)
+                .height(Length::Fixed(48.0)),
+        );
+        let card = container(col.spacing(SPACE_12).width(Length::Fill))
+            .padding(SPACE_24)
+            .width(Length::Fixed(880.0))
+            .style(card_style);
+        container(
+            scrollable(container(card).width(Length::Fill).center_x(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(SPACE_24)
+        .into()
     }
 
     /// Setup (FEN source): paste a FEN and load it.
@@ -1396,6 +1418,7 @@ impl State {
         board_col = board_col.push(board_el);
         let content = row![board_col, self.view_panel(shared, &pos, lines_current)]
             .spacing(SPACE_24)
+            .width(Length::Fill)
             .align_y(iced::Alignment::Start);
         // Header (same 64 px surface bar as Play / Learn): "Quay
         // lại" goes back to the setup phase here, not the menu.
@@ -1452,9 +1475,16 @@ impl State {
 
     /// The right panel (playing phase): status, advantage,
     /// suggestions, last move grade, move list, and the action
-    /// buttons. Fixed 380 px wide so the board never flexes.
+    /// buttons. `Length::Fill`, so it takes all the width the
+    /// window leaves after the eval bar and the board — at least
+    /// 380 px, because [`board_size_for_window`] reserves that
+    /// minimum in the board's horizontal budget (see
+    /// [`panel_width_for_window`](crate::widgets::panel_width_for_window)).
+    /// Its column is Fill too, and the action buttons are Fill,
+    /// so the panel content stretches with the panel instead of
+    /// staying 380 px wide in a wide window.
     fn view_panel(&self, shared: &Shared, pos: &Position, lines_current: bool) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(SPACE_12);
+        let mut col = Column::new().spacing(SPACE_12).width(Length::Fill);
         // Status: result, check, or whose turn it is.
         let status = if let Some(result) = self.result_text() {
             result
@@ -1588,23 +1618,29 @@ impl State {
                 .width(Length::Fill),
         );
         // Actions: reset (keeps the difficulty), undo, flip, change position.
+        // Each button is Fill, like the Play / Learn button grids,
+        // so the row stretches across a wide panel.
         col = col.push(
             row![
-                primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::Reset),
-                secondary_button_with_icon(i18n::t(Key::Undo), Icon::Undo, Msg::Undo),
-                secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard),
+                primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::Reset)
+                    .width(Length::Fill),
+                secondary_button_with_icon(i18n::t(Key::Undo), Icon::Undo, Msg::Undo)
+                    .width(Length::Fill),
+                secondary_button(i18n::t(Key::FlipBoard), Msg::FlipBoard).width(Length::Fill),
             ]
             .spacing(SPACE_12),
         );
         col = col.push(
             row![
-                secondary_button(i18n::t(Key::PracticeBackToSetup), Msg::BackToSetup),
-                secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home)),
+                secondary_button(i18n::t(Key::PracticeBackToSetup), Msg::BackToSetup)
+                    .width(Length::Fill),
+                secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home))
+                    .width(Length::Fill),
             ]
             .spacing(SPACE_12),
         );
         container(scrollable(col.width(Length::Fill)).width(Length::Fill))
-            .width(Length::Fixed(PANEL_WIDTH))
+            .width(Length::Fill)
             .height(Length::Fill)
             .padding(SPACE_16)
             .style(card_style)

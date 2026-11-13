@@ -74,7 +74,6 @@ use crate::widgets::{
     advantage_chip, board_size_for_window, card, danger_button_with_icon, eval_bar,
     ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
     secondary_button, secondary_button_with_icon, side_card, status_chip, HEADER_HEIGHT,
-    PANEL_WIDTH,
 };
 
 /// Fresh per-game seed from the clock (same as the egui app).
@@ -1373,6 +1372,7 @@ impl State {
                     self.panel(shared, &display_pos),
                 ]
                 .spacing(SPACE_24)
+                .width(Length::Fill)
                 .height(Length::Fill),
             )
             .padding(iced::Padding {
@@ -1491,10 +1491,19 @@ impl State {
         }
     }
 
-    /// Side panel (fixed 380 px, scrollable so long content never
-    /// flexes the board — the egui layout rule).
+    /// Side panel: `Length::Fill`, so it takes all the width the
+    /// window leaves after the eval bar and the board — at least
+    /// 380 px, because [`board_size_for_window`] reserves that
+    /// minimum in the board's horizontal budget (see
+    /// [`panel_width_for_window`](crate::widgets::panel_width_for_window)).
+    /// Its column is Fill too, so cards and buttons stretch with
+    /// the panel instead of staying 380 px wide in a wide window.
+    /// Scrollable, so long content never flexes the board — the
+    /// egui layout rule.
     fn panel<'a>(&'a self, shared: &'a Shared, display_pos: &Position) -> Element<'a, Msg> {
-        let mut col = column![text(self.status_text()).size(FONT_BODY)].spacing(SPACE_16);
+        let mut col = column![text(self.status_text()).size(FONT_BODY)]
+            .spacing(SPACE_16)
+            .width(Length::Fill);
 
         // Opponent + player cards (mockup page 2: 44 px piece disc,
         // Semibold 16 name, 13 px Medium subtitle, status chip;
@@ -1694,7 +1703,7 @@ impl State {
         );
 
         scrollable(col)
-            .width(Length::Fixed(PANEL_WIDTH))
+            .width(Length::Fill)
             .height(Length::Fill)
             .into()
     }
@@ -1789,47 +1798,86 @@ impl State {
     }
 
     /// Start dialog overlay: side + difficulty, then Start / Cancel.
+    ///
+    /// Centred card in the Learn-select style (UI-FIX-2 part 2):
+    /// surface card, radius 14, padding 24, 640 px wide — wide
+    /// enough for the two sections ("Bên chơi" and "Độ khó") to sit
+    /// side by side instead of stacking in a 340 px column. Every
+    /// option button is 48 px tall with 15 px Semibold text (the
+    /// shared `primary_button` / `secondary_button` label size).
+    /// Behaviour is unchanged: the same four sides, five difficulty
+    /// levels, and Start / Cancel messages.
     fn start_dialog_overlay(&self) -> Element<'_, Msg> {
-        let mut side_col = column![text(i18n::t(Key::Side)).size(FONT_SCREEN_TITLE)].spacing(8);
-        for (side, label) in [
-            (StartSide::Red, Key::SideRed),
-            (StartSide::Black, Key::SideBlack),
-            (StartSide::Random, Key::SideRandom),
-            (StartSide::TwoPlayer, Key::TwoPlayers),
-        ] {
-            let btn = if self.start_side == side {
-                primary_button(i18n::t(label), Msg::StartDialogSide(side))
+        // One option button: gold when selected, surface-2 otherwise,
+        // full width of its column, 48 px tall.
+        let option = |label: &'static str, selected: bool, msg: Msg| {
+            let btn = if selected {
+                primary_button(label, msg)
             } else {
-                secondary_button(i18n::t(label), Msg::StartDialogSide(side))
+                secondary_button(label, msg)
             };
-            side_col = side_col.push(btn.width(Length::Fixed(280.0)));
-        }
-        let mut diff_col =
-            column![text(i18n::t(Key::Difficulty)).size(FONT_SCREEN_TITLE)].spacing(8);
+            btn.width(Length::Fill).height(Length::Fixed(48.0))
+        };
+        let side_col = column![
+            text(i18n::t(Key::Side))
+                .size(crate::theme::FONT_CARD_TITLE)
+                .font(theme::inter_font_semibold()),
+            option(
+                i18n::t(Key::SideRed),
+                self.start_side == StartSide::Red,
+                Msg::StartDialogSide(StartSide::Red),
+            ),
+            option(
+                i18n::t(Key::SideBlack),
+                self.start_side == StartSide::Black,
+                Msg::StartDialogSide(StartSide::Black),
+            ),
+            option(
+                i18n::t(Key::SideRandom),
+                self.start_side == StartSide::Random,
+                Msg::StartDialogSide(StartSide::Random),
+            ),
+            option(
+                i18n::t(Key::TwoPlayers),
+                self.start_side == StartSide::TwoPlayer,
+                Msg::StartDialogSide(StartSide::TwoPlayer),
+            ),
+        ]
+        .spacing(crate::theme::SPACE_8)
+        .width(Length::Fill);
+        let mut diff_col = column![text(i18n::t(Key::Difficulty))
+            .size(crate::theme::FONT_CARD_TITLE)
+            .font(theme::inter_font_semibold()),]
+        .spacing(crate::theme::SPACE_8)
+        .width(Length::Fill);
         for d in 0..=4u8 {
-            let btn = if self.start_difficulty == d {
-                primary_button(difficulty_name(d), Msg::StartDialogDifficulty(d))
-            } else {
-                secondary_button(difficulty_name(d), Msg::StartDialogDifficulty(d))
-            };
-            diff_col = diff_col.push(btn.width(Length::Fixed(280.0)));
+            diff_col = diff_col.push(option(
+                difficulty_name(d),
+                self.start_difficulty == d,
+                Msg::StartDialogDifficulty(d),
+            ));
         }
         let card_el = container(
             column![
-                text(i18n::t(Key::StartGameTitle)).size(FONT_SCREEN_TITLE),
-                side_col,
-                diff_col,
+                text(i18n::t(Key::StartGameTitle))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold()),
+                row![side_col, diff_col].spacing(crate::theme::SPACE_16),
                 row![
-                    primary_button_with_icon(i18n::t(Key::Start), Icon::Plus, Msg::StartGame),
-                    secondary_button(i18n::t(Key::Cancel), Msg::CancelStart),
+                    primary_button_with_icon(i18n::t(Key::Start), Icon::Plus, Msg::StartGame)
+                        .width(Length::Fill)
+                        .height(Length::Fixed(48.0)),
+                    secondary_button(i18n::t(Key::Cancel), Msg::CancelStart)
+                        .width(Length::Fill)
+                        .height(Length::Fixed(48.0)),
                 ]
-                .spacing(12),
+                .spacing(crate::theme::SPACE_12),
             ]
-            .spacing(12),
+            .spacing(crate::theme::SPACE_16),
         )
-        .padding(16)
-        .width(Length::Fixed(340.0))
-        .style(crate::theme::card_container_style);
+        .padding(crate::theme::SPACE_24)
+        .width(Length::Fixed(640.0))
+        .style(crate::widgets::card_style);
         container(card_el)
             .width(Length::Fill)
             .height(Length::Fill)

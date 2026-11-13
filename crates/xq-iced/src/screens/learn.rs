@@ -74,7 +74,7 @@ use crate::widgets::{
     advantage_chip, board_size_for_window, card_style, disabled_button_with_icon, eval_bar,
     ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
     secondary_button, secondary_button_with_icon, section_title, side_card, status_chip,
-    HEADER_HEIGHT, PANEL_WIDTH,
+    HEADER_HEIGHT,
 };
 
 /// How long the opponent waits before playing its book move
@@ -1407,6 +1407,7 @@ impl State {
                 container(
                     row![row![eval, board_el].spacing(SPACE_16), panel,]
                         .spacing(SPACE_24)
+                        .width(Length::Fill)
                         .align_y(iced::Alignment::Start),
                 )
                 .padding(iced::Padding {
@@ -1478,9 +1479,16 @@ impl State {
             .into()
     }
 
-    /// The fixed-width side panel (6 sections, as in the egui app).
+    /// The side panel (6 sections, as in the egui app):
+    /// `Length::Fill`, so it takes all the width the window leaves
+    /// after the eval bar and the board — at least 380 px, because
+    /// [`board_size_for_window`] reserves that minimum in the
+    /// board's horizontal budget (see
+    /// [`panel_width_for_window`](crate::widgets::panel_width_for_window)).
+    /// Its column is Fill too, so cards and buttons stretch with
+    /// the panel instead of staying 380 px wide in a wide window.
     fn panel_view(&self, lesson: &Lesson, pos: &Position, shared: &Shared) -> Element<'_, Msg> {
-        let mut col = column![].spacing(SPACE_16);
+        let mut col = column![].spacing(SPACE_16).width(Length::Fill);
 
         // Lesson-complete / off-book dialogs (cards at the top).
         if self.show_complete_dialog {
@@ -1821,7 +1829,7 @@ impl State {
 
         scrollable(col)
             .height(Length::Fill)
-            .width(Length::Fixed(PANEL_WIDTH))
+            .width(Length::Fill)
             .into()
     }
 
