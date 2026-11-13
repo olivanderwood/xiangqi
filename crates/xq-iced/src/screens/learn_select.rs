@@ -4,8 +4,8 @@
 //! A centred 880 px card: title + subtitle, a "Bạn chơi bên"
 //! label over two large Tiên/Hậu buttons, the lesson list for the
 //! chosen side (name + level stars and a green Check icon when
-//! completed, from the shared embedded book), an intro panel with a
-//! mini board after the first 3 main-branch plies, and "Bắt đầu học"
+//! completed, from the shared embedded book), an intro panel (name,
+//! level, summary — no board preview), and "Bắt đầu học"
 //! bottom-right (only enabled once a lesson is picked).
 //!
 //! # Lesson handover (integration)
@@ -20,7 +20,6 @@ use iced::widget::{column, container, row, scrollable, text, Button, Space};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::app::{Screen, Shared};
-use crate::board::{BoardProgram, BoardRender};
 use crate::i18n::{self, Key};
 use crate::icons::{icon_tinted, Icon, ICON_SIZE_SMALL};
 use crate::screens::learn::LessonChoice;
@@ -32,32 +31,7 @@ use crate::widgets::{
     card_style, ghost_button_with_icon, header_divider, primary_button_with_icon, HEADER_HEIGHT,
 };
 use xq_book::Lesson;
-use xq_core::board::Position;
-use xq_core::notation;
 use xq_core::types::Color;
-
-/// Position after the first `n` plies of the lesson's main branch
-/// (following `main` children, else the first child).
-#[must_use]
-pub fn main_branch_position(lesson: &Lesson, plies: usize) -> Position {
-    let mut pos = lesson
-        .start_fen
-        .as_deref()
-        .and_then(|f| Position::from_fen(f).ok())
-        .unwrap_or_else(Position::startpos);
-    let mut level = lesson.tree.as_slice();
-    for _ in 0..plies {
-        let Some(node) = level.iter().find(|n| n.main).or_else(|| level.first()) else {
-            break;
-        };
-        let Ok(mv) = notation::parse_cn(&pos, &node.mv) else {
-            break;
-        };
-        pos.make_move(mv);
-        level = node.next.as_slice();
-    }
-    pos
-}
 
 /// Learn-select screen state.
 #[derive(Default)]
@@ -358,12 +332,9 @@ impl State {
                 let mut body = row![list_el].spacing(SPACE_16);
                 if let Some(id) = &self.selected {
                     if let Some(lesson) = lessons.iter().find(|l| &l.id == id) {
-                        let pos = main_branch_position(lesson, 3);
-                        let preview = container(
-                            BoardProgram::canvas(BoardRender::new(pos)).map(|_| Msg::Ignored),
-                        )
-                        .width(Length::Fixed(300.0))
-                        .height(Length::Fixed(330.0));
+                        // Intro panel: name, level, summary — no board
+                        // preview (Hieu 2026-11-13: the board image
+                        // in the opening intro is unnecessary).
                         let intro = column![
                             text(lesson.name_vi.clone())
                                 .size(FONT_SCREEN_TITLE)
@@ -374,7 +345,6 @@ impl State {
                             .size(FONT_BODY),
                             text(i18n::t(Key::IntroTitle)).size(FONT_BODY),
                             text(lesson.summary_vi.clone()).size(FONT_BODY),
-                            preview,
                         ]
                         .spacing(SPACE_8)
                         .width(Length::Fill);
@@ -425,11 +395,10 @@ impl State {
             .padding(SPACE_32)
             .width(Length::Fixed(880.0))
             .style(card_style);
-        // The card is ~770 px tall with a lesson picked (intro panel
-        // + 330 px preview), taller than a 720 px window even before
-        // the 64 px header — so it scrolls vertically instead of
-        // clipping; at 800 px it still needs the scroll when the
-        // intro is shown.
+        // The card is ~440 px tall with a lesson picked (intro panel
+        // without the board preview), so it fits a 720 px window
+        // under the 64 px header; it still scrolls vertically if the
+        // window is shorter or the lesson list is long.
         column![
             Self::header(),
             header_divider(),
@@ -458,16 +427,6 @@ impl State {
 mod tests {
     use super::*;
     use crate::app::Shared;
-
-    #[test]
-    fn main_branch_position_advances_three_plies() {
-        let shared = Shared::new();
-        let lesson = shared.book.lessons.first().expect("a lesson");
-        let pos = main_branch_position(lesson, 3);
-        assert_ne!(pos, Position::startpos());
-        let pos0 = main_branch_position(lesson, 0);
-        assert_eq!(pos0, Position::startpos());
-    }
 
     #[test]
     fn start_lesson_stores_choice_for_learn() {

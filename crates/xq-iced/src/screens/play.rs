@@ -71,9 +71,9 @@ use crate::theme::{
     RED, RED_PIECE, SPACE_16, SPACE_24, SPACE_4, SPACE_8, SURFACE2, TEXT_DIM,
 };
 use crate::widgets::{
-    advantage_chip, board_size_for_window, card, danger_button_with_icon, eval_bar,
-    ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
-    secondary_button, secondary_button_with_icon, side_card, status_chip, HEADER_HEIGHT,
+    advantage_chip, board_size_for_window, card, danger_button_with_icon, ghost_button_with_icon,
+    header_divider, primary_button, primary_button_with_icon, secondary_button,
+    secondary_button_with_icon, side_card, status_chip, HEADER_HEIGHT,
 };
 
 /// Fresh per-game seed from the clock (same as the egui app).
@@ -83,6 +83,11 @@ fn new_seed() -> u64 {
         .map(|d| (u64::from(d.subsec_nanos()) << 32) | u64::from(d.as_secs() as u32))
         .unwrap_or(0x9E37_79B9_7F4A_7C15)
 }
+
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 150 ms slide
+/// redraws about 9 times instead of 3 — the 50 ms tick made the
+/// slide visibly choppy. Same interval as Practice.
+const TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The engine score from Red's perspective (§6.4): `eval` is
 /// side-to-move's, so flip it when Black is to move.
@@ -647,7 +652,7 @@ impl State {
             iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
         if self.board.is_animating() || self.check_flash_active() {
-            subs.push(iced::time::every(Duration::from_millis(50)).map(Msg::Tick));
+            subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
     }
@@ -1351,24 +1356,22 @@ impl State {
 
     fn view_base<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let display_pos = self.display_pos();
-        let score = score_red(&display_pos);
         let board_size = board_size_for_window(self.window);
         // Header (64) + divider (1) + content (16 px vertical
         // padding + the board height) add up to exactly the window
         // height — the board never overflows at the 1100 × 720
         // minimum, it shrinks to `board_size` instead.
+        // (No eval bar: Hieu 2026-11-13 asked to remove the colour
+        // bar at the far left; the advantage chip in the panel still
+        // shows the score.)
         column![
             self.header(shared),
             header_divider(),
             container(
                 row![
-                    row![
-                        eval_bar(score, board_size.height),
-                        container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
-                            .width(Length::Fixed(board_size.width))
-                            .height(Length::Fixed(board_size.height)),
-                    ]
-                    .spacing(SPACE_16),
+                    container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
+                        .width(Length::Fixed(board_size.width))
+                        .height(Length::Fixed(board_size.height)),
                     self.panel(shared, &display_pos),
                 ]
                 .spacing(SPACE_24)

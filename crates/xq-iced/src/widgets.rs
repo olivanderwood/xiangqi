@@ -47,15 +47,14 @@ pub const PANEL_WIDTH: f32 = 380.0;
 /// surface background, 1 px divider underneath).
 pub const HEADER_HEIGHT: f32 = 64.0;
 
-/// Width of the vertical eval bar (mockup pages 2/4/5: 14 px).
-pub const EVAL_BAR_WIDTH: f32 = 14.0;
-
 /// The board's display size for a window, from the mockup's
 /// responsive rule (`scale = min(w / 592, h / 656)`, DESIGN-iced.md
 /// §1): the board takes whatever the window leaves after the
 /// 64 px header, 1 px divider and 16 px content padding (vertical),
-/// and after the 24 px content padding, 14 px eval bar, 16 px gap,
-/// 24 px gap and the 380 px panel minimum (horizontal). The
+/// and after the 24 px content padding, 24 px gap and the 380 px
+/// panel minimum (horizontal). (The 14 px eval bar used to sit
+/// between the padding and the board; Hieu 2026-11-13 asked to
+/// remove it, so the board gets that width back.) The
 /// horizontal budget reserves [`PANEL_WIDTH`] even though the
 /// panel itself is `Length::Fill` — that reservation is what
 /// guarantees the Fill panel is never narrower than 380 px (see
@@ -67,9 +66,7 @@ pub const EVAL_BAR_WIDTH: f32 = 14.0;
 /// at any window size (see the play / learn / practice screens).
 #[must_use]
 pub fn board_size_for_window(window: Size) -> Size {
-    let avail_w =
-        (window.width - SPACE_24 * 2.0 - EVAL_BAR_WIDTH - SPACE_16 - SPACE_24 - PANEL_WIDTH)
-            .max(1.0);
+    let avail_w = (window.width - SPACE_24 * 2.0 - SPACE_24 - PANEL_WIDTH).max(1.0);
     let avail_h = (window.height - HEADER_HEIGHT - 1.0 - SPACE_16 * 2.0).max(1.0);
     let scale = (avail_w / BOARD_WIDTH).min(avail_h / BOARD_HEIGHT);
     Size::new(BOARD_WIDTH * scale, BOARD_HEIGHT * scale)
@@ -77,22 +74,18 @@ pub fn board_size_for_window(window: Size) -> Size {
 
 /// The width a `Length::Fill` side panel gets in a window of this
 /// size: the window width minus the 24 px content padding on each
-/// side, the 14 px eval bar, the 16 px gap after it, the 24 px gap
-/// before the panel, and the board from
+/// side, the 24 px gap before the panel, and the board from
 /// [`board_size_for_window`]. Because that function already
 /// reserves [`PANEL_WIDTH`] in the board's horizontal budget, this
 /// is at least [`PANEL_WIDTH`] for any window at or above the
 /// 1100 × 720 minimum — the board is height-bound there, so the
-/// panel is wider than the minimum (about 436 px at 1100 × 720,
-/// about 544 px at 1280 × 800, about 931 px at 1920 × 1080).
-/// Practice omits the eval bar when there is no score yet; then
-/// the panel is wider still, so the minimum still holds.
+/// panel is wider than the minimum (about 466 px at 1100 × 720,
+/// about 574 px at 1280 × 800, about 961 px at 1920 × 1080).
 #[allow(dead_code)] // used by tests; documents the Fill panel's layout width
 #[must_use]
 pub fn panel_width_for_window(window: Size) -> f32 {
     let board = board_size_for_window(window);
-    (window.width - SPACE_24 * 2.0 - EVAL_BAR_WIDTH - SPACE_16 - SPACE_24 - board.width)
-        .max(PANEL_WIDTH)
+    (window.width - SPACE_24 * 2.0 - SPACE_24 - board.width).max(PANEL_WIDTH)
 }
 
 /// Button content: icon first, then the label (mockup: icon + text,
@@ -477,55 +470,6 @@ pub fn advantage_chip<'a, Message: 'a>(cp: i32) -> Element<'a, Message> {
     .into()
 }
 
-/// Red's share of the vertical eval bar (0..1), from a score in Red's
-/// perspective (§6.4): `tanh(score / 400)` mapped to 0..1.
-/// Ported from `xq-app/src/board_view.rs::eval_bar_fraction`.
-#[must_use]
-pub fn eval_bar_fraction(score_red: i32) -> f32 {
-    0.5 * (1.0 + (f64::from(score_red) / 400.0).tanh() as f32)
-}
-
-/// Vertical eval bar (egui `eval_bar_ui`): red share from below,
-/// black from above. `score_red` is the engine score from Red's
-/// perspective; `height` is passed in explicitly because the caller
-/// knows the panel height. 14 px wide, as in the mockup (pages 2/4/5).
-pub fn eval_bar<'a, Message: 'a>(score_red: i32, height: f32) -> Element<'a, Message> {
-    let frac = eval_bar_fraction(score_red);
-    let red_h = (height * frac).max(0.0);
-    let black_h = (height - red_h).max(0.0);
-    let black = container(text(""))
-        .width(Length::Fixed(EVAL_BAR_WIDTH))
-        .height(Length::Fixed(black_h))
-        .style(|_: &Theme| container::Style {
-            background: Some(iced::Background::Color(Color::BLACK)),
-            ..Default::default()
-        });
-    let red = container(text(""))
-        .width(Length::Fixed(EVAL_BAR_WIDTH))
-        .height(Length::Fixed(red_h))
-        .style(|_: &Theme| container::Style {
-            background: Some(iced::Background::Color(Color::from_rgb8(0xC0, 0x39, 0x2B))),
-            ..Default::default()
-        });
-    container(
-        column![black, red]
-            .spacing(0)
-            .width(Length::Fixed(EVAL_BAR_WIDTH))
-            .height(Length::Fixed(height)),
-    )
-    .width(Length::Fixed(EVAL_BAR_WIDTH))
-    .height(Length::Fixed(height))
-    .style(|_: &Theme| container::Style {
-        border: iced::Border {
-            color: TEXT_DIM,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    })
-    .into()
-}
-
 // (The move list itself is built per-screen — Play/Learn/Summary
 // each need review-click rows — so there is no shared `move_list`
 // widget here.)
@@ -566,9 +510,8 @@ mod tests {
             "board + header + padding fits the window height: {size:?}"
         );
         assert!(
-            size.width + EVAL_BAR_WIDTH + SPACE_16 + SPACE_24 + PANEL_WIDTH + SPACE_24 * 2.0
-                <= 1100.0,
-            "board + eval bar + gaps + minimum panel fits the window width: {size:?}"
+            size.width + SPACE_24 + PANEL_WIDTH + SPACE_24 * 2.0 <= 1100.0,
+            "board + gap + minimum panel fits the window width: {size:?}"
         );
     }
 
@@ -579,10 +522,12 @@ mod tests {
         // window width (no dead space on the right) and the panel
         // is never below the 380 px minimum — at the sizes below
         // the board is height-bound, so the panel is wider still.
+        // (The values grew by 30 px vs. UI-FIX-2: the removed eval
+        // bar freed 14 px + its 16 px gap.)
         for (w, h, expected_panel) in [
-            (1100.0, 720.0, 435.7),
-            (1280.0, 800.0, 543.6),
-            (1920.0, 1080.0, 930.8),
+            (1100.0, 720.0, 465.8),
+            (1280.0, 800.0, 573.6),
+            (1920.0, 1080.0, 960.9),
         ] {
             let window = Size::new(w, h);
             let board = board_size_for_window(window);
@@ -595,17 +540,11 @@ mod tests {
                 (panel - expected_panel).abs() < 1.0,
                 "panel {panel} at {w}x{h}, expected ~{expected_panel}"
             );
-            let total = SPACE_24 * 2.0 + EVAL_BAR_WIDTH + SPACE_16 + SPACE_24 + board.width + panel;
+            let total = SPACE_24 * 2.0 + SPACE_24 + board.width + panel;
             assert!(
                 (total - w).abs() < 0.01,
                 "board + chrome + panel {total} != window width {w} at {w}x{h}"
             );
         }
-    }
-
-    #[test]
-    fn eval_bar_fraction_is_symmetric() {
-        assert!((eval_bar_fraction(0) - 0.5).abs() < 1e-6);
-        assert!((eval_bar_fraction(400) + eval_bar_fraction(-400) - 1.0).abs() < 1e-6);
     }
 }

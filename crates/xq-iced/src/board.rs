@@ -60,8 +60,10 @@ pub type Square = u8;
 pub const ANIM_DURATION: Duration = Duration::from_millis(150);
 
 /// Default arrow opacity; the hovered arrow is drawn at full opacity
-/// (DESIGN-iced.md §1).
-pub const ARROW_ALPHA_DEFAULT: f32 = 0.38;
+/// (DESIGN-iced.md §1). Hieu (2026-11-13) found the design's 38%
+/// too faint — arrows must be thick and clear, so the default is
+/// 65% now.
+pub const ARROW_ALPHA_DEFAULT: f32 = 0.65;
 /// Opacity of the hovered (highlighted) arrow.
 pub const ARROW_ALPHA_HIGHLIGHTED: f32 = 1.0;
 
@@ -196,10 +198,14 @@ impl Anim {
         }
     }
 
-    /// Slide progress 0..1 at `now` (1 once the duration elapsed).
+    /// Slide progress 0..1 at `now` (1 once the duration elapsed),
+    /// eased out (quadratic) so the piece decelerates into its
+    /// square instead of stopping abruptly at constant speed.
     #[must_use]
     pub fn progress(&self, now: Instant) -> f32 {
-        (now.duration_since(self.started).as_secs_f32() / ANIM_DURATION.as_secs_f32()).min(1.0)
+        let p =
+            (now.duration_since(self.started).as_secs_f32() / ANIM_DURATION.as_secs_f32()).min(1.0);
+        1.0 - (1.0 - p) * (1.0 - p)
     }
 
     /// Whether the slide has finished at `now`.
@@ -545,7 +551,8 @@ fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow, is_horse: bo
         a: alpha,
         ..arrow.color.color()
     };
-    let width = 3.0 * g.scale;
+    // Thick and clear (Hieu 2026-11-13): 5 px at 1x, up from 3 px.
+    let width = 5.0 * g.scale;
     let dash_segments = [10.0 * g.scale, 6.0 * g.scale];
     let mut stroke = Stroke::default().with_color(col).with_width(width);
     if arrow.dashed {
@@ -571,7 +578,8 @@ fn draw_arrow(frame: &mut Frame<Renderer>, g: &Geom, arrow: &Arrow, is_horse: bo
         return;
     }
     let (ux, uy) = (dx / len, dy / len);
-    let head = 12.0 * g.scale;
+    // Bigger head to match the thicker shaft (16 px at 1x, was 12).
+    let head = 16.0 * g.scale;
     let (px, py) = (-uy, ux);
     let b1 = Point::new(
         end.x - ux * head + px * head * 0.55,
@@ -623,6 +631,18 @@ pub struct DragState {
     press_pos: Option<Point>,
     dragged: bool,
     last_hover: Option<Square>,
+}
+
+impl DragState {
+    /// Whether the dragged piece is lifted off its square and drawn
+    /// at the cursor. True only once the press has moved past the
+    /// drag threshold (`dragged`); a plain press without movement
+    /// (a click) leaves the piece on its square — otherwise the
+    /// piece looks lifted off its position before the mouse is
+    /// released, even though the user never dragged.
+    fn lifted(&self) -> bool {
+        self.dragged && self.drag_sq.is_some() && self.drag_pos.is_some()
+    }
 }
 
 impl BoardProgram {
@@ -778,10 +798,13 @@ impl Program<BoardMsg> for BoardProgram {
         }
 
         // Pieces (skip the dragged one and the sliding one — they are
-        // drawn separately below).
+        // drawn separately below). The dragged piece is only skipped
+        // once it is actually lifted (the press moved past the drag
+        // threshold); a plain press without movement leaves it on
+        // its square.
         let anim_to = render.anim.map(|a| a.to);
         for sq in 0..90u8 {
-            if Some(sq) == state.drag_sq || Some(sq) == anim_to {
+            if (state.lifted() && Some(sq) == state.drag_sq) || Some(sq) == anim_to {
                 continue;
             }
             if let Some(piece) = render.position.piece_at(sq) {
@@ -798,14 +821,18 @@ impl Program<BoardMsg> for BoardProgram {
                 draw_piece(&mut frame, pos, scale, piece);
             }
         }
-        // Dragged piece follows the cursor, on top.
-        if let (Some(sq), Some(pos)) = (state.drag_sq, state.drag_pos) {
-            if let Some(piece) = render.position.piece_at(sq) {
-                draw_piece(&mut frame, pos, scale, piece);
-                frame.stroke(
-                    &Path::circle(pos, 30.0 * scale),
-                    Stroke::default().with_color(BLUE).with_width(3.0 * scale),
-                );
+        // Dragged piece follows the cursor, on top — only once the
+        // press has turned into a real drag. Before that (plain
+        // click, no movement) the piece stays on its square.
+        if state.lifted() {
+            if let (Some(sq), Some(pos)) = (state.drag_sq, state.drag_pos) {
+                if let Some(piece) = render.position.piece_at(sq) {
+                    draw_piece(&mut frame, pos, scale, piece);
+                    frame.stroke(
+                        &Path::circle(pos, 30.0 * scale),
+                        Stroke::default().with_color(BLUE).with_width(3.0 * scale),
+                    );
+                }
             }
         }
 
@@ -1115,5 +1142,62 @@ mod tests {
         assert!(render.arrows.is_empty());
         assert!(render.check_square.is_none());
         assert!(render.anim.is_none());
+    }
+
+    #[test]
+    fn press_without_movement_does_not_lift_piece() {
+        // Press on the Red chariot (square 0, centre (40, 616) at 1x)
+        // and release without moving: the piece must stay on its
+        // square — it is only lifted once the pointer actually
+        // moves past the drag threshold.
+        let program = BoardProgram::new(BoardRender::new(Position::startpos()));
+        let mut state = DragState::default();
+        let bounds = bounds_1x();
+        let press = Point::new(40.0, 616.0);
+
+        let action = program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            bounds,
+            Cursor::Available(press),
+        );
+        assert!(action.is_some());
+        assert_eq!(state.drag_sq, Some(0));
+        assert!(!state.dragged);
+        assert!(!state.lifted());
+
+        // A 1 px wiggle stays below the 4 px threshold: still not lifted.
+        program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(41.0, 616.0),
+            }),
+            bounds,
+            Cursor::Available(Point::new(41.0, 616.0)),
+        );
+        assert!(!state.dragged);
+        assert!(!state.lifted());
+
+        // Moving past the threshold turns the press into a drag: lifted.
+        program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(50.0, 616.0),
+            }),
+            bounds,
+            Cursor::Available(Point::new(50.0, 616.0)),
+        );
+        assert!(state.dragged);
+        assert!(state.lifted());
+
+        // Release clears the drag.
+        program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+            bounds,
+            Cursor::Available(Point::new(50.0, 616.0)),
+        );
+        assert_eq!(state.drag_sq, None);
+        assert!(!state.lifted());
     }
 }

@@ -58,8 +58,9 @@ bản viết lại UI bằng Iced.
 - Màn Chơi và Học dùng chung bố cục và widget bàn cờ.
 - Học khai cuộc thêm 3–4 gợi ý: mũi tên xanh dương, số 1–4 trùng với danh
   sách bên phải. Lượt đối phương: mũi tên tím nét đứt.
-- Mặc định các mũi tên mờ 38%; rê vào một mục gợi ý thì mũi tên của mục đó
-  đậm 100%.
+- Mặc định các mũi tên mờ 65% (mẫu ghi 38% nhưng Hieu chốt 2026-11-13:
+  mũi tên phải dày và rõ — nét 5 px, đầu 16 px, mờ 65%); rê vào một
+  mục gợi ý thì mũi tên của mục đó đậm 100%.
 
 ### Ánh xạ sang Iced (theo bản thiết kế)
 - Dùng **iced 0.14, bật feature canvas**.

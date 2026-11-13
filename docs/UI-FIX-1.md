@@ -358,3 +358,43 @@ Ba việc, làm cả ba. Không đổi tính năng, logic game, engine, sách, e
    nhãn/nút dịch đúng, glyph vẫn hiện.
 6. Bo góc/padding 2 menu mới có đồng bộ với màn Học khai cuộc không;
    mọi lựa chọn cũ (4 bên, 5 độ khó, 3 nguồn) còn đủ và bấm được không?
+
+## §10. UI-FIX-3: drag không nhấc quân khi bấm, animation mượt, bỏ thanh eval, mũi tên dày, bỏ hình bàn cờ giới thiệu (Hieu 2026-11-13 17:13–17:17, sau bản `ff1236a`)
+
+1. **Bấm quân không di chuột thì quân không nhấc lệch khỏi ô** (bug):
+   nguyên nhân — `draw()` trong `board.rs` bỏ qua quân ở ô bị kéo và vẽ
+   nó theo con trỏ ngay khi `ButtonPressed`, không chờ `dragged`
+   (ngưỡng 4 px đã có trong `update()` nhưng render không dùng tới).
+   Sửa: thêm `DragState::lifted()` (chỉ true khi đã kéo qua ngưỡng),
+   vòng vẽ quân và chỗ vẽ quân kéo đều dùng `lifted()`; bấm thường
+   (không di chuột) quân vẫn nằm yên trên ô, chỉ chọn quân. Test mới
+   `press_without_movement_does_not_lift_piece` mô phỏng
+   press → wiggle 1 px → kéo 10 px → release qua `Program::update`.
+2. **Animation trượt mượt hơn:** nguyên nhân — tick ở Play và Learn là
+   50 ms nên slide 150 ms chỉ vẽ lại ~3 khung hình (giật); Practice
+   đã dùng 16 ms. Sửa: Play và Learn đều tick 16 ms (~60 fps, ~9 khung
+   hình/slide); `Anim::progress()` thêm ease-out bậc 2 để quân giảm
+   tốc khi hạ xuống ô. Thời gian 150 ms giữ nguyên (như egui).
+3. **Bỏ thanh màu ở sát trái (thanh eval dọc 14 px):** xóa `eval_bar`
+   khỏi cả 3 màn chơi; `board_size_for_window` và
+   `panel_width_for_window` không trừ 14 px + 16 px gap nữa (bàn và
+   panel rộng thêm 30 px: panel ~466/~574/~961 px ở
+   1100×720/1280×800/1920×1080); xóa `eval_bar`, `eval_bar_fraction`,
+   `EVAL_BAR_WIDTH` và test của chúng. Điểm lợi thế vẫn hiện ở chip
+   trong panel (`advantage_chip`), không mất thông tin.
+4. **Mũi tên dày và rõ hơn:** nét 3 px → 5 px (theo scale), đầu mũi
+   tên 12 px → 16 px, mờ mặc định 38% → 65% (hover vẫn 100%);
+   `DESIGN-iced.md` đã ghi chú ngoại lệ theo quyết định của Hieu.
+5. **Giới thiệu khai cuộc bỏ hình bàn cờ:** xóa preview board 300×330
+   khỏi panel intro ở màn chọn bài (chỉ còn tên bài, số sao, tiêu đề
+   giới thiệu, tóm tắt); xóa `main_branch_position` + test của nó và
+   các import không còn dùng; card chọn bài ngắn lại (~440 px) nên vừa
+   cửa sổ 720 px không cần cuộn nhiều.
+- Cổng: fmt OK, clippy sạch, `cargo test -p xq-iced` **86/0** (265 − 1
+  test eval + 1 test drag − 1 test preview = 264 toàn workspace, kiểm
+  độc lập 17:36 xác nhận **264/0**), binary release **62,2 MB < 90 MB**
+  (65.184.128 byte).
+- Hieu kiểm bằng mắt: bấm quân rồi thả không di chuột (quân không
+  nhấc); kéo quân rồi thả (quân trượt mượt tới ô đích); 3 màn không
+  còn thanh màu trái; mũi tên gợi ý dày/rõ hơn; màn chọn bài không
+  còn hình bàn cờ.

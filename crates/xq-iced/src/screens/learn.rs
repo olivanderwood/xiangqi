@@ -71,7 +71,7 @@ use crate::theme::{
     SPACE_24, SPACE_4, SPACE_8, TEXT_DIM,
 };
 use crate::widgets::{
-    advantage_chip, board_size_for_window, card_style, disabled_button_with_icon, eval_bar,
+    advantage_chip, board_size_for_window, card_style, disabled_button_with_icon,
     ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
     secondary_button, secondary_button_with_icon, section_title, side_card, status_chip,
     HEADER_HEIGHT,
@@ -84,7 +84,10 @@ const OPPONENT_DELAY: Duration = Duration::from_millis(600);
 /// UI thread on the engine lock — defer to the next tick instead).
 const ENGINE_BUSY_RETRY: Duration = Duration::from_millis(100);
 /// How often the animation / opponent timer ticks.
-const TICK_INTERVAL: Duration = Duration::from_millis(50);
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 150 ms slide
+/// redraws about 9 times instead of 3 — the 50 ms tick made the
+/// slide visibly choppy. Same interval as Practice.
+const TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The lesson the learner picked in [`super::learn_select`], handed
 /// to [`State::start`] by the integration step (see the module docs).
@@ -1388,15 +1391,9 @@ impl State {
             ..Default::default()
         });
 
-        // Board: eval bar + canvas + side panel.
-        let score = eval::eval(&pos);
-        let score_red = if pos.side() == SideColor::Red {
-            score
-        } else {
-            -score
-        };
-        let board_size = board_size_for_window(self.window);
-        let eval = eval_bar(score_red, board_size.height);
+        // Board: canvas + side panel. (No eval bar: Hieu 2026-11-13
+        // asked to remove the colour bar at the far left; the
+        // advantage chip in the panel still shows the score.)
         let board_el = self.board_view(&pos);
         let panel = self.panel_view(lesson, &pos, shared);
 
@@ -1405,7 +1402,7 @@ impl State {
                 header,
                 header_divider(),
                 container(
-                    row![row![eval, board_el].spacing(SPACE_16), panel,]
+                    row![board_el, panel,]
                         .spacing(SPACE_24)
                         .width(Length::Fill)
                         .align_y(iced::Alignment::Start),

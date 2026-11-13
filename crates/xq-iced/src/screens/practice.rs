@@ -93,9 +93,9 @@ use crate::theme::{
     SPACE_16, SPACE_24, SPACE_8, WOOD,
 };
 use crate::widgets::{
-    advantage_chip, board_size_for_window, card_style, eval_bar, ghost_button_with_icon,
-    header_divider, primary_button, primary_button_with_icon, secondary_button,
-    secondary_button_with_icon, section_title, HEADER_HEIGHT,
+    advantage_chip, board_size_for_window, card_style, ghost_button_with_icon, header_divider,
+    primary_button, primary_button_with_icon, secondary_button, secondary_button_with_icon,
+    section_title, HEADER_HEIGHT,
 };
 
 /// How long an engine suggestion / grade may take before the screen
@@ -1408,15 +1408,10 @@ impl State {
         let board_el = container(BoardProgram::canvas(render).map(Msg::Board))
             .width(Length::Fixed(board_size.width))
             .height(Length::Fixed(board_size.height));
-        // Eval bar on the LEFT of the board (egui position; the
-        // right-side placement was a workaround for the pre-fix
-        // `Geom` origin bug — see the module docs).
-        let mut board_col = row![].spacing(SPACE_16).align_y(iced::Alignment::Start);
-        if let Some(score) = self.score_red() {
-            board_col = board_col.push(eval_bar(score, board_size.height));
-        }
-        board_col = board_col.push(board_el);
-        let content = row![board_col, self.view_panel(shared, &pos, lines_current)]
+        // (No eval bar: Hieu 2026-11-13 asked to remove the colour
+        // bar at the far left; the advantage chip in the panel still
+        // shows the score.)
+        let content = row![board_el, self.view_panel(shared, &pos, lines_current)]
             .spacing(SPACE_24)
             .width(Length::Fill)
             .align_y(iced::Alignment::Start);
