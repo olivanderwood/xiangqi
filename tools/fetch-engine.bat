@@ -2,9 +2,11 @@
 REM Tải Pikafish 2026-09-06 (binary Windows + pikafish.nnue) vào engine\
 REM Bản Command Prompt của tools\fetch-engine.sh — chạy trên Command
 REM Prompt, từ bất kỳ đâu (script tự tìm thư mục repo). Cần: curl (có
-REM sẵn trên Windows 10/11) và 7-Zip (7z.exe trong PATH hoặc ở
-REM C:\Program Files\7-Zip) hoặc Python có py7zr. Các giá trị ghim
-REM theo engine\PIKAFISH_VERSION.toml (bản 2026-09-06, commit 4c17cee).
+REM sẵn trên Windows 10/11) và một trình giải nén 7z — thử theo thứ tự:
+REM 7-Zip (7z.exe trong PATH hoặc ở C:\Program Files\7-Zip), rồi tar
+REM có sẵn trên Windows 10/11 (bsdtar, đọc được .7z), rồi Python có
+REM py7zr. Các giá trị ghim theo engine\PIKAFISH_VERSION.toml (bản
+REM 2026-09-06, commit 4c17cee).
 setlocal
 
 set "ROOT=%~dp0.."
@@ -40,14 +42,20 @@ if not defined SEVENZIP if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVENZIP=%Pr
 if not defined SEVENZIP if exist "%ProgramFiles(x86)%\7-Zip\7z.exe" set "SEVENZIP=%ProgramFiles(x86)%\7-Zip\7z.exe"
 
 if defined SEVENZIP goto :extract_7z
+where tar >nul 2>&1 && goto :extract_tar
 python -c "import py7zr" >nul 2>&1 && goto :extract_py
-echo Can 7-Zip [cai 7-Zip hoac them 7z.exe vao PATH] hoac Python co py7zr de giai nen.
+echo Can 7-Zip [cai 7-Zip hoac them 7z.exe vao PATH], tar co san tren Windows 10/11, hoac Python co py7zr de giai nen.
 popd
 exit /b 1
 
 :extract_7z
 echo Giai nen bang 7z ...
 "%SEVENZIP%" x -y -o"%TMPDIR%" "%ARCHIVE%" >nul || (echo Giai nen that bai & popd & exit /b 1)
+goto :extracted
+
+:extract_tar
+echo Giai nen bang tar co san cua Windows ...
+tar -xf "%ARCHIVE%" -C "%TMPDIR%" >nul || (echo Giai nen that bai & popd & exit /b 1)
 goto :extracted
 
 :extract_py

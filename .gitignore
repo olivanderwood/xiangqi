@@ -1,6 +1,10 @@
 target/
 .DS_Store
 *.rs.bk
+# Pikafish release archive downloaded by tools/fetch-engine.* (deleted
+# after a successful fetch, but ignored so a failed run doesn't pollute
+# git status).
+*.7z
 .github/workflows/
 # Pikafish engine binaries + NNUE weights (downloaded, never committed).
 # PIKAFISH_VERSION.toml is the pin and IS committed.
