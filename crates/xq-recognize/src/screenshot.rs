@@ -109,6 +109,9 @@ pub struct ScreenshotRecognizer {
     detector_output: String,
     classifier_input: String,
     classifier_output: String,
+    /// OCR voter (PP-OCRv6-tiny). `None` when the model file is
+    /// absent — the classifier alone decides then.
+    ocr: Option<crate::ocr::OcrVoter>,
 }
 
 impl ScreenshotRecognizer {
@@ -143,6 +146,9 @@ impl ScreenshotRecognizer {
             .first()
             .map(|o| o.name().to_string())
             .unwrap_or_else(|| "output0".to_string());
+        // The OCR voter is optional: if its model file is missing
+        // (e.g. an older recognize/ dir), recognition still works.
+        let ocr = crate::ocr::OcrVoter::load(&paths.ocr, lib_path).ok();
         Ok(Self {
             detector,
             classifier,
@@ -150,6 +156,7 @@ impl ScreenshotRecognizer {
             detector_output,
             classifier_input,
             classifier_output,
+            ocr,
         })
     }
 
@@ -281,7 +288,20 @@ impl ScreenshotRecognizer {
             return Ok(None);
         };
         let color = determine_color(&resized);
-        Ok(Some((Piece::new(color, kind), best_score)))
+        let mut piece = Piece::new(color, kind);
+        // OCR vote: the 64x64 classifier confuses look-alike glyphs
+        // (Horse vs Elephant, General vs Advisor). OCR reads the
+        // actual character, so when it is confident (>= 0.9) and
+        // disagrees, its kind wins. Colour still comes from the
+        // HSV check above, never from OCR.
+        if let Some(ocr) = self.ocr.as_mut() {
+            if let Some((ocr_kind, ocr_conf)) = ocr.recognize_crop(&crop) {
+                if ocr_conf >= crate::ocr::VOTE_THRESHOLD && ocr_kind != kind {
+                    piece = Piece::new(color, ocr_kind);
+                }
+            }
+        }
+        Ok(Some((piece, best_score)))
     }
 
     /// Recognise a board from a screenshot: detect + classify +

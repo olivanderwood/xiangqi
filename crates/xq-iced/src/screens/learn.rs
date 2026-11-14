@@ -417,7 +417,7 @@ impl State {
             last_move: None,
             flipped: false,
             started: false,
-            chessdb: ChessDbPanel::new(false),
+            chessdb: ChessDbPanel::new(false, "chessdb-learn"),
             ai_tx: tx,
             ai_rx: Arc::new(Mutex::new(rx)),
             ai_stop: stop,

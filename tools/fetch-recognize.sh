@@ -24,6 +24,8 @@ ORT_VERSION="$(toml version)"
 PHYSICAL="$(toml physical)"
 DETECTOR="$(toml detector)"
 CLASSIFIER="$(toml classifier)"
+OCR="$(toml ocr)"
+OCR_REPO="$(toml ocr_repo)"
 
 OS="$(uname -s)"
 case "$OS" in
@@ -54,6 +56,14 @@ for model in "$PHYSICAL" "$DETECTOR" "$CLASSIFIER"; do
         curl -fSL --retry 3 -o "$model" "https://raw.githubusercontent.com/${REPO}/master/${model}"
     fi
 done
+
+# --- The OCR voter model (PP-OCRv6-tiny rec, Apache-2.0, PaddlePaddle) ---
+if [ -f "$OCR" ]; then
+    echo "Already have $OCR, skipping."
+else
+    echo "Downloading $OCR ..."
+    curl -fSL --retry 3 -o "$OCR" "https://huggingface.co/${OCR_REPO}/resolve/main/inference.onnx"
+fi
 
 # --- The ONNX Runtime library (official release) ---
 if [ -f "$ORT_OUT" ]; then

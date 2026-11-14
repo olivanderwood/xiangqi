@@ -23,6 +23,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod board;
+pub mod ocr;
 pub mod preprocess;
 pub mod screenshot;
 pub mod yolo;
@@ -40,16 +41,20 @@ pub struct ModelPaths {
     pub detector: PathBuf,
     /// Screenshot piece-kind classifier.
     pub classifier: PathBuf,
+    /// OCR voter (PP-OCRv6-tiny rec). May be absent — the voter is
+    /// skipped then and YOLO alone decides.
+    pub ocr: PathBuf,
 }
 
 impl ModelPaths {
-    /// The three model files inside `dir`.
+    /// The model files inside `dir`.
     pub fn in_dir(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref();
         Self {
             physical: dir.join("Entity_chess_recognition_model.onnx"),
             detector: dir.join("online_xiangqi_piece_detector.onnx"),
             classifier: dir.join("online_xiangqi_classifier.onnx"),
+            ocr: dir.join("PP-OCRv6_tiny_rec.onnx"),
         }
     }
 }
@@ -181,6 +186,9 @@ pub struct Recognizer {
     session: ort::session::Session,
     input_name: String,
     output_name: String,
+    /// OCR voter (PP-OCRv6-tiny). `None` when the model file is
+    /// absent — YOLO alone decides then.
+    ocr: Option<ocr::OcrVoter>,
 }
 
 impl Recognizer {
@@ -200,10 +208,12 @@ impl Recognizer {
             .first()
             .map(|o| o.name().to_string())
             .unwrap_or_else(|| "output0".to_string());
+        let ocr = ocr::OcrVoter::load(&paths.ocr, lib_path).ok();
         Ok(Self {
             session,
             input_name,
             output_name,
+            ocr,
         })
     }
 
@@ -275,7 +285,38 @@ impl Recognizer {
             orig_h: input.orig_h as f32,
         };
         let result = yolo::parse_yolo_output(data, &dims, board::PHYSICAL_CLASSES, &frame);
-        Ok((result.detections, result.max_confidence))
+        let mut detections = result.detections;
+        // OCR vote: YOLO reads the whole board at 640 px, so each
+        // glyph is ~30 px and look-alikes (Horse vs Elephant,
+        // General vs Advisor) get confused — on Hieu's two photos
+        // OCR corrected 6 such errors the rule repair could not
+        // catch. When OCR is confident (>= 0.9) and disagrees, its
+        // kind wins; the colour stays YOLO's.
+        if let Some(ocr) = self.ocr.as_mut() {
+            if let Ok(img) = image::load_from_memory(bytes).map(|i| i.to_rgb8()) {
+                let (w, h) = img.dimensions();
+                for det in &mut detections {
+                    let Some(piece) = board::physical_class_to_piece(det.class) else {
+                        continue;
+                    };
+                    let x1 = ((det.cx - det.w / 2.0).max(0.0) as u32).min(w);
+                    let y1 = ((det.cy - det.h / 2.0).max(0.0) as u32).min(h);
+                    let x2 = ((det.cx + det.w / 2.0).max(0.0) as u32).min(w);
+                    let y2 = ((det.cy + det.h / 2.0).max(0.0) as u32).min(h);
+                    if x2 <= x1 || y2 <= y1 {
+                        continue;
+                    }
+                    let crop = image::imageops::crop_imm(&img, x1, y1, x2 - x1, y2 - y1).to_image();
+                    if let Some((ocr_kind, ocr_conf)) = ocr.recognize_crop(&crop) {
+                        if ocr_conf >= ocr::VOTE_THRESHOLD && ocr_kind != piece.kind {
+                            let corrected = xq_core::types::Piece::new(piece.color, ocr_kind);
+                            det.class = board::piece_to_physical_class(corrected);
+                        }
+                    }
+                }
+            }
+        }
+        Ok((detections, result.max_confidence))
     }
 }
 

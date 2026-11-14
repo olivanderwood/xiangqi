@@ -461,18 +461,22 @@ pub fn horse_leg(from: Square, to: Square) -> Option<Square> {
 }
 
 /// Screen points of an arrow's polyline, ready to stroke.
+/// The arrowhead points at the TARGET square's centre — the
+/// intersection of the two grid lines — never at the edge of the
+/// piece there (Hieu, 2026-11-14). When a piece sits on the target
+/// square the arrow is drawn on top of it (the board draws arrows
+/// after the pieces), so the tip lands on the piece's face.
 ///
-/// * Non-horse arrow: two points, `[start, end]` — the straight line
-///   from `from` to `to`, shortened at BOTH ends by
-///   `PIECE_RADIUS + 4` (× scale) so it does not sit under either
-///   piece, exactly as before.
+/// * Non-horse arrow: two points, `[start, end]` — `start` is the
+///   source square's centre moved out by `PIECE_RADIUS + 4` (×
+///   scale) so the line emerges from the source piece's edge
+///   instead of crossing its face; `end` is the target square's
+///   centre, unshortened.
 /// * Horse arrow (`is_horse` and `horse_leg(from, to)` is `Some`):
-///   three points, `[from, leg, end]` — the polyline bends through
-///   the horse leg, like the egui app. Only the LAST segment is
-///   shortened (by `PIECE_RADIUS + 4` along its own direction, to
-///   leave room for the arrowhead); the first segment starts at the
-///   source square's centre, under the piece, which the board draws
-///   on top of the arrow afterwards.
+///   three points, `[start, leg, end]` — the polyline bends through
+///   the horse leg, like the egui app. `start` is the source
+///   centre moved toward the leg by `PIECE_RADIUS + 4`; `end` is
+///   the target square's centre, unshortened.
 ///
 /// Returns an empty vec when `from == to` (nothing to draw).
 #[must_use]
@@ -483,14 +487,14 @@ pub fn arrow_points(g: &Geom, from: Square, to: Square, is_horse: bool) -> Vec<P
     if is_horse {
         if let Some(leg) = horse_leg(from, to) {
             let leg_pt = g.square_point(leg);
-            let dx = b.x - leg_pt.x;
-            let dy = b.y - leg_pt.y;
+            let dx = leg_pt.x - a.x;
+            let dy = leg_pt.y - a.y;
             let len = (dx * dx + dy * dy).sqrt();
             if len < 1.0 {
                 return Vec::new();
             }
-            let end = Point::new(b.x - dx / len * inset, b.y - dy / len * inset);
-            return vec![a, leg_pt, end];
+            let start = Point::new(a.x + dx / len * inset, a.y + dy / len * inset);
+            return vec![start, leg_pt, b];
         }
     }
     let dx = b.x - a.x;
@@ -500,10 +504,7 @@ pub fn arrow_points(g: &Geom, from: Square, to: Square, is_horse: bool) -> Vec<P
         return Vec::new();
     }
     let (ux, uy) = (dx / len, dy / len);
-    vec![
-        Point::new(a.x + ux * inset, a.y + uy * inset),
-        Point::new(b.x - ux * inset, b.y - uy * inset),
-    ]
+    vec![Point::new(a.x + ux * inset, a.y + uy * inset), b]
 }
 
 /// The point `fraction` (0..1) of the way along a polyline, measured
@@ -706,12 +707,16 @@ impl Program<BoardMsg> for BoardProgram {
             frame.stroke(&Path::line(g.point(0, rank), g.point(8, rank)), line);
         }
         for file in 0..9 {
-            if file == 4 {
-                // Middle file is split by the river.
-                frame.stroke(&Path::line(g.point(4, 0), g.point(4, 4)), line);
-                frame.stroke(&Path::line(g.point(4, 5), g.point(4, 9)), line);
-            } else {
+            if file == 0 || file == 8 {
+                // Edge files are the board border: continuous across
+                // the river (the border rectangle covers them too).
                 frame.stroke(&Path::line(g.point(file, 0), g.point(file, 9)), line);
+            } else {
+                // No vertical line across the river (sở hà hán giới):
+                // every inner file stops at the river banks (rank 4
+                // and rank 5) instead of drawing squares over it.
+                frame.stroke(&Path::line(g.point(file, 0), g.point(file, 4)), line);
+                frame.stroke(&Path::line(g.point(file, 5), g.point(file, 9)), line);
             }
         }
         // Palace diagonals.
@@ -794,17 +799,6 @@ impl Program<BoardMsg> for BoardProgram {
             );
         }
 
-        // Suggestion / opponent arrows. A horse arrow bends through
-        // its leg; the moving piece is read from the position, so
-        // `Arrow` needs no `horse` flag and no screen changes.
-        for arrow in &render.arrows {
-            let is_horse = render
-                .position
-                .piece_at(arrow.from)
-                .is_some_and(|p| p.kind == PieceKind::Horse);
-            draw_arrow(&mut frame, &g, arrow, is_horse);
-        }
-
         // Pieces (skip the dragged one and the sliding one — they are
         // drawn separately below). The dragged piece is only skipped
         // once it is actually lifted (the press moved past the drag
@@ -818,6 +812,19 @@ impl Program<BoardMsg> for BoardProgram {
             if let Some(piece) = render.position.piece_at(sq) {
                 draw_piece(&mut frame, g.square_point(sq), scale, piece);
             }
+        }
+        // Suggestion / opponent arrows, drawn ON TOP of the pieces:
+        // the tip points at the target square's centre, so when a
+        // piece sits there the arrow overlays its face (Hieu,
+        // 2026-11-14). A horse arrow bends through its leg; the
+        // moving piece is read from the position, so `Arrow` needs
+        // no `horse` flag and no screen changes.
+        for arrow in &render.arrows {
+            let is_horse = render
+                .position
+                .piece_at(arrow.from)
+                .is_some_and(|p| p.kind == PieceKind::Horse);
+            draw_arrow(&mut frame, &g, arrow, is_horse);
         }
         // Sliding piece, interpolated.
         if let Some(anim) = render.anim {
@@ -1092,16 +1099,21 @@ mod tests {
         // Red horse on b0 (sq 1) -> c2 (sq 20), leg b1 (sq 10).
         let pts = arrow_points(&g, 1, 20, true);
         assert_eq!(pts.len(), 3, "bent arrow has 3 points, got {pts:?}");
-        assert_eq!(pts[0], g.square_point(1));
-        assert_eq!(pts[1], g.square_point(10), "middle point is the leg");
-        // Only the last segment is shortened: its end sits
-        // PIECE_RADIUS + 4 px short of the destination along the
-        // leg -> destination direction.
-        let dest = g.square_point(20);
-        let d = ((dest.x - pts[2].x).powi(2) + (dest.y - pts[2].y).powi(2)).sqrt();
-        assert!((d - (PIECE_RADIUS + 4.0)).abs() < 1e-4, "end inset {d}");
-        // The end still lies on the leg -> destination line.
-        assert!(dist_to_segment(pts[2], pts[1], dest) < 1e-4);
+        // The start is the source centre moved toward the leg by
+        // PIECE_RADIUS + 4, so the line emerges from the source
+        // piece's edge instead of crossing its face.
+        let src = g.square_point(1);
+        let leg = g.square_point(10);
+        let start_d = ((pts[0].x - src.x).powi(2) + (pts[0].y - src.y).powi(2)).sqrt();
+        assert!(
+            (start_d - (PIECE_RADIUS + 4.0)).abs() < 1e-4,
+            "start inset {start_d}"
+        );
+        assert!(dist_to_segment(pts[0], src, leg) < 1e-4);
+        assert_eq!(pts[1], leg, "middle point is the leg");
+        // The tip points at the destination square's centre
+        // (unshortened) — it overlays a piece sitting there.
+        assert_eq!(pts[2], g.square_point(20), "tip is the target centre");
     }
 
     #[test]
@@ -1110,16 +1122,17 @@ mod tests {
         // Same squares, but the moving piece is not a horse.
         let pts = arrow_points(&g, 1, 20, false);
         assert_eq!(pts.len(), 2, "straight arrow has 2 points");
-        // Both ends shortened by PIECE_RADIUS + 4, as before.
+        // The start is shortened by PIECE_RADIUS + 4, as before;
+        // the tip is the target square's centre, unshortened.
         let a = g.square_point(1);
         let b = g.square_point(20);
         let start_d = ((pts[0].x - a.x).powi(2) + (pts[0].y - a.y).powi(2)).sqrt();
-        let end_d = ((pts[1].x - b.x).powi(2) + (pts[1].y - b.y).powi(2)).sqrt();
         assert!((start_d - (PIECE_RADIUS + 4.0)).abs() < 1e-4);
-        assert!((end_d - (PIECE_RADIUS + 4.0)).abs() < 1e-4);
+        assert_eq!(pts[1], b, "tip is the target centre");
         // A horse piece making a non-horse-shaped move stays straight.
         let pts = arrow_points(&g, 16, 13, true);
         assert_eq!(pts.len(), 2);
+        assert_eq!(pts[1], g.square_point(13), "tip is the target centre");
         // A zero-length arrow has no points.
         assert!(arrow_points(&g, 5, 5, false).is_empty());
         assert!(arrow_points(&g, 5, 5, true).is_empty());
@@ -1134,10 +1147,10 @@ mod tests {
             dist_to_polyline(badge, &pts) < 1e-4,
             "badge {badge:?} off the bent polyline {pts:?}"
         );
-        // Halfway along the drawn polyline (first segment 64 px of
-        // ~123.5 px total) falls just before the leg, i.e. on the
-        // from -> leg segment.
-        assert!(dist_to_segment(badge, pts[0], pts[1]) < 1e-4);
+        // Halfway along the drawn polyline (first segment 33 px of
+        // ~123.5 px total — the 31 px inset moved from the tip to
+        // the tail) falls on the leg -> destination segment.
+        assert!(dist_to_segment(badge, pts[1], pts[2]) < 1e-4);
         // A straight arrow's badge is still its midpoint.
         let straight = arrow_points(&g, 1, 20, false);
         let mid = point_at_fraction(&straight, 0.5);

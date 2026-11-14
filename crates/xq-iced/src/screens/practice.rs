@@ -785,7 +785,7 @@ impl State {
             grade_requested_at: None,
             last_engine_best: None,
             move_grades: Vec::new(),
-            chessdb: ChessDbPanel::new(true),
+            chessdb: ChessDbPanel::new(true, "chessdb-practice"),
             worker,
             ai_rx: Arc::new(Mutex::new(real_rx)),
             pending_grade: None,

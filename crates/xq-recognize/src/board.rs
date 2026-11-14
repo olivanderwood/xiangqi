@@ -59,6 +59,30 @@ pub fn physical_class_to_piece(class: usize) -> Option<Piece> {
     Some(Piece::new(color, kind))
 }
 
+/// The inverse of `physical_class_to_piece`: the class index a
+/// `Piece` would have in the physical model's 14-class table.
+/// Used when a second opinion (OCR) changes a detection's kind
+/// but keeps its colour.
+pub fn piece_to_physical_class(piece: Piece) -> usize {
+    use xq_core::types::{Color, PieceKind};
+    match (piece.color, piece.kind) {
+        (Color::Red, PieceKind::King) => 0,
+        (Color::Red, PieceKind::Advisor) => 1,
+        (Color::Red, PieceKind::Elephant) => 2,
+        (Color::Red, PieceKind::Horse) => 3,
+        (Color::Red, PieceKind::Cannon) => 4,
+        (Color::Red, PieceKind::Rook) => 5,
+        (Color::Red, PieceKind::Pawn) => 6,
+        (Color::Black, PieceKind::King) => 7,
+        (Color::Black, PieceKind::Advisor) => 8,
+        (Color::Black, PieceKind::Elephant) => 9,
+        (Color::Black, PieceKind::Horse) => 10,
+        (Color::Black, PieceKind::Rook) => 11,
+        (Color::Black, PieceKind::Cannon) => 12,
+        (Color::Black, PieceKind::Pawn) => 13,
+    }
+}
+
 /// Map detections to a 10x9 grid (row 0 = image top, col 0 = image
 /// left), each cell holding the detected piece (or `None`). When
 /// two detections land on one square the higher-confidence one
@@ -132,7 +156,86 @@ pub fn detections_to_grid(
         }
     }
     repair_confused_pieces(&mut grid);
+    solve_missing_generals(&mut grid);
     grid
+}
+
+/// Recover a missing general from the pieces already in the palace,
+/// using only the rules of the game — never a guess. Called after
+/// `repair_confused_pieces`, so the kinds here are already the
+/// repaired ones.
+///
+/// Two rules, both certain:
+/// 1. **A general in the opponent's palace is a colour error.**
+///    A general can never leave its own palace, so a Red general
+///    sitting in Black's palace (rows 0-2) must be the Black general
+///    whose colour the detector got wrong, and vice versa. Flip it.
+///    (This is the common failure on a real photo: the dark disc of
+///    a black general reads as red.)
+/// 2. **An Elephant on an odd file inside the palace cannot be an
+///    elephant** (elephants only stand on even files), so it is an
+///    Advisor or a General. When both Advisors of that colour are
+///    already found on valid advisor squares elsewhere, it cannot
+///    be a third Advisor — it must be the General. Relabel it.
+///
+/// When the palace holds no such candidate, the general stays
+/// missing and `grid_to_position` reports it — the solver never
+/// invents a square for a general it cannot see.
+fn solve_missing_generals(grid: &mut Grid) {
+    for color in [Color::Red, Color::Black] {
+        if has_general(grid, color) {
+            continue;
+        }
+        let (palace_rows, opp) = match color {
+            Color::Red => (7..10, Color::Black),
+            Color::Black => (0..3, Color::Red),
+        };
+        // Rule 1: a general of the opposite colour in this palace.
+        let mut flipped = false;
+        for r in palace_rows.clone() {
+            for slot in grid[r][3..6].iter_mut() {
+                if let Some(p) = *slot {
+                    if p.color == opp && p.kind == PieceKind::King {
+                        *slot = Some(Piece::new(color, PieceKind::King));
+                        flipped = true;
+                    }
+                }
+            }
+        }
+        if flipped {
+            continue;
+        }
+        // Rule 2: an Elephant on an odd file in this palace, when
+        // both Advisors are already accounted for.
+        if count_kind(grid, color, PieceKind::Advisor) >= 2 {
+            for r in palace_rows {
+                for c in [3, 5] {
+                    if let Some(p) = grid[r][c] {
+                        if p.color == color && p.kind == PieceKind::Elephant {
+                            grid[r][c] = Some(Piece::new(color, PieceKind::King));
+                            break;
+                        }
+                    }
+                }
+                if has_general(grid, color) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn has_general(grid: &Grid, color: Color) -> bool {
+    grid.iter()
+        .flatten()
+        .any(|p| p.is_some_and(|p| p.color == color && p.kind == PieceKind::King))
+}
+
+fn count_kind(grid: &Grid, color: Color, kind: PieceKind) -> usize {
+    grid.iter()
+        .flatten()
+        .filter(|p| p.is_some_and(|p| p.color == color && p.kind == kind))
+        .count()
 }
 
 /// Whether a piece kind may sit on `file`/`rank` (0-based file,
@@ -252,6 +355,32 @@ pub fn grid_to_position(grid: &Grid) -> Result<Position, RecognizeError> {
     }
     // FEN: row 0 of the FEN is the top (rank 9), row 9 the bottom
     // (rank 0). The grid row 0 is already the top.
+    //
+    // Piece counts: a real position never has more than 1 king, 2
+    // advisors, 2 elephants, 2 horses, 2 rooks, 2 cannons or 5
+    // pawns per side. The repair + palace solver can over-convert
+    // to Horse on a blurry photo (Hieu's image 1 read 5 red
+    // horses); a grid that breaks the counts is wrong somewhere,
+    // so reject it rather than hand the user a "valid" FEN that
+    // does not match the board.
+    for color in [Color::Red, Color::Black] {
+        for (kind, max) in [
+            (PieceKind::King, 1),
+            (PieceKind::Advisor, 2),
+            (PieceKind::Elephant, 2),
+            (PieceKind::Horse, 2),
+            (PieceKind::Rook, 2),
+            (PieceKind::Cannon, 2),
+            (PieceKind::Pawn, 5),
+        ] {
+            let n = count_kind(&grid, color, kind);
+            if n > max {
+                return Err(RecognizeError::NoPosition(format!(
+                    "too many {kind:?} for {color:?} ({n}, max {max})"
+                )));
+            }
+        }
+    }
     let mut fen = String::new();
     let mut pieces = 0;
     for (r, row) in grid.iter().enumerate() {
@@ -433,5 +562,72 @@ mod tests {
         grid[5][0] = Some(Piece::new(Color::Red, PieceKind::King));
         repair_confused_pieces(&mut grid);
         assert_eq!(grid[5][0], Some(Piece::new(Color::Red, PieceKind::King)));
+    }
+
+    #[test]
+    fn palace_flips_miscoloured_general() {
+        // Hieu's photo (image 1): the black general reads as Red
+        // (dark disc), so the grid has two Red kings and no Black
+        // one. A Red general in Black's palace must be Black.
+        let mut grid = [[None; 9]; 10];
+        grid[0][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        grid[9][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        solve_missing_generals(&mut grid);
+        assert_eq!(grid[0][4], Some(Piece::new(Color::Black, PieceKind::King)));
+        assert_eq!(grid[9][4], Some(Piece::new(Color::Red, PieceKind::King)));
+    }
+
+    #[test]
+    fn palace_elephant_becomes_general_when_advisors_found() {
+        // An Elephant on an odd file inside the palace cannot be
+        // an Elephant; with both Advisors already found it cannot
+        // be a third Advisor either, so it is the General.
+        let mut grid = [[None; 9]; 10];
+        grid[9][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        grid[0][3] = Some(Piece::new(Color::Black, PieceKind::Elephant));
+        grid[0][5] = Some(Piece::new(Color::Black, PieceKind::Advisor));
+        grid[1][4] = Some(Piece::new(Color::Black, PieceKind::Advisor));
+        solve_missing_generals(&mut grid);
+        assert_eq!(grid[0][3], Some(Piece::new(Color::Black, PieceKind::King)));
+    }
+
+    #[test]
+    fn palace_elephant_stays_when_advisors_missing() {
+        // With only one Advisor found, the palace Elephant could
+        // be the second Advisor — do not promote it to General.
+        let mut grid = [[None; 9]; 10];
+        grid[9][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        grid[0][3] = Some(Piece::new(Color::Black, PieceKind::Elephant));
+        grid[0][5] = Some(Piece::new(Color::Black, PieceKind::Advisor));
+        solve_missing_generals(&mut grid);
+        assert_eq!(
+            grid[0][3],
+            Some(Piece::new(Color::Black, PieceKind::Elephant))
+        );
+    }
+
+    #[test]
+    fn palace_empty_stays_missing() {
+        // No box in the palace at all: never invent a square for
+        // the general — the position stays rejected.
+        let mut grid = [[None; 9]; 10];
+        grid[9][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        solve_missing_generals(&mut grid);
+        assert!(grid_to_position(&grid).is_err());
+    }
+
+    #[test]
+    fn too_many_horses_is_rejected() {
+        // The repair can over-convert to Horse on a blurry photo
+        // (5 red horses); a grid that breaks the piece counts is
+        // wrong somewhere, so it must not become a "valid" FEN.
+        let mut grid = [[None; 9]; 10];
+        grid[9][4] = Some(Piece::new(Color::Red, PieceKind::King));
+        grid[0][4] = Some(Piece::new(Color::Black, PieceKind::King));
+        grid[0][0] = Some(Piece::new(Color::Red, PieceKind::Horse));
+        grid[0][1] = Some(Piece::new(Color::Red, PieceKind::Horse));
+        grid[0][2] = Some(Piece::new(Color::Red, PieceKind::Horse));
+        let err = grid_to_position(&grid).unwrap_err().to_string();
+        assert!(err.contains("too many Horse"), "{err}");
     }
 }

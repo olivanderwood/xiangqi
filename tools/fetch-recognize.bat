@@ -15,6 +15,8 @@ set "ORT_VERSION=1.31.0"
 set "PHYSICAL=Entity_chess_recognition_model.onnx"
 set "DETECTOR=online_xiangqi_piece_detector.onnx"
 set "CLASSIFIER=online_xiangqi_classifier.onnx"
+set "OCR=PP-OCRv6_tiny_rec.onnx"
+set "OCR_REPO=PaddlePaddle/PP-OCRv6_tiny_rec_onnx"
 set "ORT_ARCHIVE=onnxruntime-win-x64-%ORT_VERSION%.zip"
 set "ORT_LIB=onnxruntime-win-x64-%ORT_VERSION%\lib\onnxruntime.dll"
 set "ORT_OUT=onnxruntime.dll"
@@ -32,6 +34,13 @@ for %%M in (%PHYSICAL% %DETECTOR% %CLASSIFIER%) do (
     echo Dang tai %%M ...
     curl -fSL --retry 3 -o "%%M" "https://raw.githubusercontent.com/%REPO%/master/%%M" || (echo Tai %%M that bai & popd & popd & exit /b 1)
   )
+)
+
+if exist "%OCR%" (
+  echo Da co %OCR%, bo qua.
+) else (
+  echo Dang tai %OCR% ...
+  curl -fSL --retry 3 -o "%OCR%" "https://huggingface.co/%OCR_REPO%/resolve/main/inference.onnx" || (echo Tai %OCR% that bai & popd & popd & exit /b 1)
 )
 
 if exist "%ORT_OUT%" (

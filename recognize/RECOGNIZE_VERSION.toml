@@ -14,6 +14,14 @@ commit = "master"
 physical = "Entity_chess_recognition_model.onnx"
 detector = "online_xiangqi_piece_detector.onnx"
 classifier = "online_xiangqi_classifier.onnx"
+# OCR voter: PP-OCRv6-tiny recognition-only (Apache-2.0, PaddlePaddle),
+# 4.3 MB ONNX from Hugging Face. Reads the glyph on a piece crop as
+# a second opinion when YOLO is unsure or the label is rule-impossible.
+# Dict (6,904 entries) holds 11 of the 14 Xiangqi glyphs; the 3 missing
+# red/black variants (傌, 砲, 俥) read as their standard forms
+# (馬, 炮, 車), which map to the same kind.
+ocr = "PP-OCRv6_tiny_rec.onnx"
+ocr_repo = "PaddlePaddle/PP-OCRv6_tiny_rec_onnx"
 
 [onnxruntime]
 # Official ONNX Runtime release (https://github.com/microsoft/onnxruntime).

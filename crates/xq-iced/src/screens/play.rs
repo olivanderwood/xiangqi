@@ -471,7 +471,7 @@ impl State {
             ai_rx,
             ai_stop,
             next_req_id,
-            chessdb: ChessDbPanel::new(true),
+            chessdb: ChessDbPanel::new(true, "chessdb-play"),
             window: Size::new(1280.0, 800.0),
         }
     }
