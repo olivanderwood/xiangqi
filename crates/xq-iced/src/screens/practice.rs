@@ -152,27 +152,138 @@ pub enum PracticeSource {
 /// is added (a CV model or an on-device ML model), implement it
 /// here: decode the image, find the board grid, classify the piece
 /// on each square, and build the `Position` from the resulting
-/// board. [`State::editor_from_position`] is ready to pour the
-/// recognised position into the editor for the user to check.
+/// board. [`State::editor_from_grid`] is ready to pour the
+/// recognised grid into the editor for the user to check.
+/// Rotate image `bytes` by `degrees` (0, 90, 180 or 270) and
+/// re-encode as PNG. The board in a photo is often sideways —
+/// trying the four orientations is what lets a rotated photo
+/// recognise at all.
+fn rotate_image(bytes: &[u8], degrees: u32) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rotated = match degrees {
+        90 => image::DynamicImage::ImageRgb8(image::imageops::rotate90(&img.to_rgb8())),
+        180 => image::DynamicImage::ImageRgb8(image::imageops::rotate180(&img.to_rgb8())),
+        270 => image::DynamicImage::ImageRgb8(image::imageops::rotate270(&img.to_rgb8())),
+        _ => return Some(bytes.to_vec()),
+    };
+    let mut out = Vec::new();
+    rotated
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
+}
+
+/// Recognise one orientation of the photo with both pipelines and
+/// return the better grid (the one that is a valid position, else
+/// the fuller one), or `None` when neither pipeline found a piece.
+/// `cal` is the board calibration (4 corners + centre pawn) when
+/// the user tapped it; without it the board is estimated from the
+/// detections (best-effort).
+fn recognise_orientation(
+    bytes: &[u8],
+    paths: &xq_recognize::ModelPaths,
+    lib: Option<&std::path::Path>,
+    cal: Option<xq_recognize::BoardCalibration>,
+) -> Option<xq_recognize::Grid> {
+    // Physical pipeline (photos of a real board).
+    let physical: Option<xq_recognize::Grid> = (|| {
+        let mut r = xq_recognize::Recognizer::load(paths, lib).ok()?;
+        r.recognize_grid(bytes, cal.as_ref()).ok()
+    })();
+    // Screenshot pipeline (a digital board).
+    let screenshot: Option<xq_recognize::Grid> = (|| {
+        let mut r = xq_recognize::screenshot::ScreenshotRecognizer::load(paths, lib).ok()?;
+        r.recognize_grid(bytes, cal.as_ref()).ok()
+    })();
+    // Prefer a grid that is a valid position (both generals, every
+    // piece on a legal square); otherwise the fuller partial grid,
+    // physical first (a real photo is the default — the screenshot
+    // pipeline is the fallback for when the physical model sees
+    // nothing, e.g. a digital board).
+    let grids = [physical, screenshot];
+    let valid = grids
+        .iter()
+        .flatten()
+        .find(|g| xq_recognize::board::grid_to_position(g).is_ok());
+    if let Some(grid) = valid {
+        return Some(*grid);
+    }
+    grids
+        .into_iter()
+        .flatten()
+        .max_by_key(xq_recognize::board::grid_piece_count)
+}
+
 /// Recognise a board from photo `bytes`, in the background (this
-/// loads the ONNX model + runs inference — seconds, never on the
+/// loads the ONNX models + runs inference — seconds, never on the
 /// UI thread). The models + ONNX Runtime library live in
 /// `recognize/` (see `tools/fetch-recognize.sh`); when they are
 /// absent the photo is reported as not recognised and the user
-/// sets the position up by hand in the editor. No calibration is
-/// passed yet, so the board is estimated from the detections
-/// (best-effort); the editor is the safety net.
-async fn recognize_board_image(bytes: Arc<[u8]>) -> Result<Position, String> {
+/// sets the position up by hand in the editor. Without a
+/// calibration the photo is tried at 0°, 90°, 180° and 270° (a
+/// sideways photo is common), each with both pipelines (physical
+/// for a real board, screenshot for a digital board), and the best
+/// grid wins. With a calibration (4 corners + centre pawn, tapped
+/// by the user) only the original orientation runs — the corners
+/// already define the board — and the grid is mapped exactly.
+/// No calibration is passed yet, so the board is estimated from
+/// the detections (best-effort); the editor is the safety net. The
+/// grid may be partial (a general missing or a piece on a wrong
+/// square): the editor holds it as-is and the user fixes it.
+async fn recognize_board_image(
+    bytes: Arc<[u8]>,
+    cal: Option<xq_recognize::BoardCalibration>,
+) -> Result<xq_recognize::Grid, String> {
     let Some(dir) = xq_recognize::find_models_dir() else {
         return Err(i18n::t(Key::PracticeImageNotRecognized).to_string());
     };
     let paths = xq_recognize::ModelPaths::in_dir(&dir);
     let lib = xq_recognize::lib_path_for(&dir);
     let lib = lib.exists().then_some(lib.as_path());
-    let mut recognizer = xq_recognize::Recognizer::load(&paths, lib).map_err(|e| e.to_string())?;
-    recognizer
-        .recognize(&bytes, None)
-        .map_err(|e| e.to_string())
+    // With a calibration the corners define the board, so only the
+    // original orientation runs. Without one, try the four
+    // orientations; keep the best grid. A valid position beats a
+    // partial one, and a partial one beats nothing —
+    // `recognise_orientation` already applies that order within
+    // one orientation.
+    let degrees: &[u32] = if cal.is_some() {
+        &[0]
+    } else {
+        &[0, 90, 180, 270]
+    };
+    let mut best: Option<xq_recognize::Grid> = None;
+    let mut best_valid = false;
+    for degrees in degrees {
+        let rotated = match rotate_image(&bytes, *degrees) {
+            Some(b) => b,
+            None => continue,
+        };
+        let Some(grid) = recognise_orientation(&rotated, &paths, lib, cal) else {
+            continue;
+        };
+        let valid = xq_recognize::board::grid_to_position(&grid).is_ok();
+        let better = match &best {
+            None => true,
+            Some(b) => {
+                // A valid position always beats a partial grid;
+                // between two of the same kind, more pieces wins.
+                (valid && !best_valid)
+                    || (valid == best_valid
+                        && xq_recognize::board::grid_piece_count(&grid)
+                            > xq_recognize::board::grid_piece_count(b))
+            }
+        };
+        if better {
+            best_valid = valid;
+            best = Some(grid);
+        }
+        // A valid position at full strength is the best possible
+        // result; no need to try the remaining orientations.
+        if valid && xq_recognize::board::grid_piece_count(&grid) >= 20 {
+            break;
+        }
+    }
+    best.ok_or_else(|| i18n::t(Key::PracticeImageNotRecognized).to_string())
 }
 
 /// Where the current suggestions came from.
@@ -243,6 +354,17 @@ pub struct State {
     /// A board photo is being recognised in the background
     /// (the UI stays responsive; see `ImageRecognized`).
     recognizing: bool,
+    /// Board calibration is open: the user taps the photo's 4 board
+    /// corners + the centre pawn so the grid is mapped exactly
+    /// instead of estimated from the detections.
+    calibrating: bool,
+    /// Tapped calibration points, in original image pixel
+    /// coordinates, in order: top-left, top-right, bottom-right,
+    /// bottom-left corner, then the centre pawn.
+    cal_points: Vec<(f32, f32)>,
+    /// The calibration applied to the last recognition (kept so a
+    /// re-run after editing points reuses it).
+    cal_applied: Option<xq_recognize::BoardCalibration>,
     /// A file is being dragged over the window (setup, image
     /// source): the drop zone highlights until it is dropped or
     /// leaves.
@@ -437,7 +559,23 @@ pub enum Msg {
     /// The background board recognition finished: `Ok(position)` when
     /// a position was read from the photo, `Err(message)` when it
     /// could not be (no model, no pieces, invalid position).
-    ImageRecognized(Result<Position, String>),
+    ImageRecognized(Result<xq_recognize::Grid, String>),
+    /// Enter board calibration: the user taps the photo's 4 board
+    /// corners (top-left, top-right, bottom-right, bottom-left) and
+    /// the centre pawn, so the grid is mapped exactly instead of
+    /// estimated from the detections.
+    Calibrate,
+    /// A calibration point was tapped on the photo (original image
+    /// pixel coordinates). The 5th point (centre pawn) enables
+    /// `CalibrationApply`.
+    CalibrationPoint(f32, f32),
+    /// Clear the tapped calibration points and start over.
+    CalibrationClear,
+    /// Leave calibration without applying.
+    CalibrationCancel,
+    /// Re-run recognition with the tapped calibration (4 corners +
+    /// centre pawn) and fill the editor with the remapped grid.
+    CalibrationApply,
     /// The user picked a palette piece (`None` = the eraser).
     EditorPaletteSelected(Option<Piece>),
     /// The user picked the side to move of the editor position.
@@ -487,6 +625,113 @@ pub enum Msg {
     Noop,
 }
 
+/// Canvas program for board calibration: draws the photo
+/// (letterboxed to fit the canvas) and the tapped points, and
+/// reports each tap as an original-image pixel coordinate. The user
+/// taps the 4 board corners (top-left, top-right, bottom-right,
+/// bottom-left) then the centre pawn; the 5 points define the board
+/// exactly, so the grid is mapped instead of estimated from the
+/// detections (the estimate is what puts a piece on a wrong square
+/// when the pieces do not span the full board).
+struct CalibrationProgram {
+    /// The photo, as an iced image handle.
+    handle: iced::widget::image::Handle,
+    /// Original image size in pixels (for the canvas → image map).
+    img_size: (u32, u32),
+    /// Tapped points, in original image pixel coordinates.
+    points: Vec<(f32, f32)>,
+}
+
+impl CalibrationProgram {
+    /// The letterbox transform for `bounds`: the image is scaled to
+    /// fit (keeping aspect ratio) and centred. Returns
+    /// `(scale, offset_x, offset_y)` in canvas space.
+    fn transform(&self, bounds: Rectangle) -> (f32, f32, f32) {
+        let (iw, ih) = (self.img_size.0 as f32, self.img_size.1 as f32);
+        let scale = (bounds.width / iw).min(bounds.height / ih);
+        let offset_x = (bounds.width - iw * scale) / 2.0;
+        let offset_y = (bounds.height - ih * scale) / 2.0;
+        (scale, offset_x, offset_y)
+    }
+
+    /// Canvas position → original image pixel coordinate, or `None`
+    /// when the tap is outside the photo.
+    fn to_image(&self, bounds: Rectangle, pos: Point) -> Option<(f32, f32)> {
+        let (scale, ox, oy) = self.transform(bounds);
+        let x = (pos.x - ox) / scale;
+        let y = (pos.y - oy) / scale;
+        if !(0.0..=self.img_size.0 as f32).contains(&x)
+            || !(0.0..=self.img_size.1 as f32).contains(&y)
+        {
+            None
+        } else {
+            Some((x, y))
+        }
+    }
+}
+
+impl Program<Msg> for CalibrationProgram {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), theme::BG);
+        let (scale, ox, oy) = self.transform(bounds);
+        let img_rect = Rectangle::new(
+            Point::new(ox, oy),
+            Size::new(
+                self.img_size.0 as f32 * scale,
+                self.img_size.1 as f32 * scale,
+            ),
+        );
+        frame.draw_image(
+            img_rect,
+            iced::widget::canvas::Image::new(self.handle.clone()),
+        );
+        // The tapped points: numbered gold dots.
+        for (i, &(px, py)) in self.points.iter().enumerate() {
+            let cx = ox + px * scale;
+            let cy = oy + py * scale;
+            frame.fill(&Path::circle(Point::new(cx, cy), 11.0), theme::GOLD);
+            frame.fill_text(CanvasText {
+                content: format!("{}", i + 1),
+                position: Point::new(cx, cy),
+                color: theme::BG,
+                size: Pixels(13.0),
+                font: iced::Font::default(),
+                align_x: TextAlignment::Center,
+                align_y: Vertical::Center,
+                ..Default::default()
+            });
+        }
+        vec![frame.into_geometry()]
+    }
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Msg>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let pos = cursor.position_in(bounds)?;
+                let pt = self.to_image(bounds, pos)?;
+                Some(Action::publish(Msg::CalibrationPoint(pt.0, pt.1)))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl State {
     /// Fresh screen, in the setup phase. The difficulty defaults
     /// come from the app settings; the setup screen lets the user
@@ -517,6 +762,9 @@ impl State {
             image_error: None,
             recognized: false,
             recognizing: false,
+            calibrating: false,
+            cal_points: Vec::new(),
+            cal_applied: None,
             drop_hover: false,
             editor_board: [None; 90],
             editor_selected: None,
@@ -685,10 +933,10 @@ impl State {
             Msg::ImageRecognized(result) => {
                 self.recognizing = false;
                 match result {
-                    Ok(pos) => {
+                    Ok(grid) => {
                         self.image_error = None;
                         self.recognized = true;
-                        self.editor_from_position(&pos);
+                        self.editor_from_grid(&grid);
                     }
                     Err(msg) => {
                         self.recognized = false;
@@ -696,6 +944,57 @@ impl State {
                     }
                 }
                 Task::none()
+            }
+            Msg::Calibrate => {
+                // Only when a photo is loaded.
+                if self.image_bytes.is_some() {
+                    self.calibrating = true;
+                    self.cal_points.clear();
+                }
+                Task::none()
+            }
+            Msg::CalibrationPoint(x, y) => {
+                // Up to 5 points: 4 corners, then the centre pawn.
+                // A tap past the 5th replaces the last point.
+                if self.cal_points.len() < 5 {
+                    self.cal_points.push((x, y));
+                } else {
+                    self.cal_points[4] = (x, y);
+                }
+                Task::none()
+            }
+            Msg::CalibrationClear => {
+                self.cal_points.clear();
+                Task::none()
+            }
+            Msg::CalibrationCancel => {
+                self.calibrating = false;
+                self.cal_points.clear();
+                Task::none()
+            }
+            Msg::CalibrationApply => {
+                let Some(bytes) = self.image_bytes.clone() else {
+                    return Task::none();
+                };
+                if self.cal_points.len() < 5 {
+                    return Task::none();
+                }
+                let cal = xq_recognize::BoardCalibration {
+                    corners: [
+                        self.cal_points[0],
+                        self.cal_points[1],
+                        self.cal_points[2],
+                        self.cal_points[3],
+                    ],
+                    pawn: self.cal_points[4],
+                };
+                self.cal_applied = Some(cal);
+                self.calibrating = false;
+                self.recognizing = true;
+                Task::perform(
+                    recognize_board_image(bytes, Some(cal)),
+                    Msg::ImageRecognized,
+                )
             }
             Msg::ImageFileDropped(path) => {
                 // Only the setup screen (image source) accepts a
@@ -1217,9 +1516,6 @@ impl State {
         }
     }
 
-    /// Fill the manual board editor from a recognised position (used
-    /// when `recognize_board_image` succeeds, so the user can check
-    /// and fix the pieces before playing).
     /// Load a board photo (picked, dropped, or pasted) and start
     /// recognising it in the background. The photo is kept for the
     /// preview; the result arrives as `Msg::ImageRecognized`.
@@ -1231,14 +1527,25 @@ impl State {
         self.image_error = None;
         self.recognized = false;
         self.recognizing = true;
-        Task::perform(recognize_board_image(bytes), Msg::ImageRecognized)
+        Task::perform(recognize_board_image(bytes, None), Msg::ImageRecognized)
     }
 
-    fn editor_from_position(&mut self, pos: &Position) {
-        for sq in 0..90u8 {
-            self.editor_board[sq as usize] = pos.piece_at(sq);
+    /// Pour a recognised grid into the editor (grid row 0 is the
+    /// image top = rank 9, so the square is `(col, 9 - row)`). The
+    /// grid may be partial (a general missing, a piece on a wrong
+    /// square): the editor holds it as-is and the user fixes it
+    /// before starting the game. The side to move defaults to Red
+    /// — the user picks it in the recognised step.
+    fn editor_from_grid(&mut self, grid: &xq_recognize::Grid) {
+        self.editor_board = [None; 90];
+        for (r, row) in grid.iter().enumerate() {
+            for (c, piece) in row.iter().enumerate() {
+                if let Some(sq) = xq_core::types::sq(c as i32, 9 - r as i32) {
+                    self.editor_board[sq as usize] = *piece;
+                }
+            }
         }
-        self.editor_side = pos.side();
+        self.editor_side = Color::Red;
         self.editor_error = None;
     }
 
@@ -1338,7 +1645,13 @@ impl State {
             .spacing(SPACE_8)
             .into(),
             PracticeSource::Fen => self.view_setup_fen(),
-            PracticeSource::Image => self.view_setup_image(),
+            PracticeSource::Image => {
+                if self.calibrating {
+                    self.view_calibration()
+                } else {
+                    self.view_setup_image()
+                }
+            }
         });
         col = col.push(
             secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home))
@@ -1453,11 +1766,64 @@ impl State {
                     iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.to_vec()))
                         .width(Length::Fixed(300.0)),
                 );
+                // Board calibration: when the automatic read puts a
+                // piece on a wrong square, tapping the 4 board
+                // corners + the centre pawn remaps the grid exactly.
+                col = col.push(secondary_button(
+                    i18n::t(Key::PracticeCalibrate),
+                    Msg::Calibrate,
+                ));
             }
             None => {
                 col = col.push(text(i18n::t(Key::PracticeImageNotFound)).size(FONT_BODY));
             }
         }
+        col = col.push(self.view_editor());
+        col.into()
+    }
+
+    /// The calibration view: the photo in a canvas (tap the 4 board
+    /// corners, then the centre pawn) + the apply / start-over /
+    /// cancel row. Shown instead of the setup image view while
+    /// `calibrating`.
+    fn view_calibration(&self) -> Element<'_, Msg> {
+        let Some(bytes) = &self.image_bytes else {
+            return column![].into();
+        };
+        // Original image size, for the canvas → image map.
+        let img_size = image::load_from_memory(bytes)
+            .map(|img| (img.width(), img.height()))
+            .unwrap_or((1, 1));
+        let program = CalibrationProgram {
+            handle: iced::widget::image::Handle::from_bytes(bytes.to_vec()),
+            img_size,
+            points: self.cal_points.clone(),
+        };
+        let mut col = column![
+            text(i18n::t(Key::PracticeCalibrateHint)).size(FONT_BODY),
+            text(format!("{}/5", self.cal_points.len())).size(FONT_BODY),
+            Canvas::new(program)
+                .width(Length::Fill)
+                .height(Length::Fixed(480.0)),
+            row![
+                if self.cal_points.len() >= 5 {
+                    primary_button(i18n::t(Key::PracticeCalibrateApply), Msg::CalibrationApply)
+                } else {
+                    // Disabled until all 5 points are tapped.
+                    Button::new(text(i18n::t(Key::PracticeCalibrateApply)).size(FONT_BODY))
+                        .padding(6)
+                },
+                secondary_button(i18n::t(Key::PracticeCalibrateClear), Msg::CalibrationClear),
+                secondary_button(
+                    i18n::t(Key::PracticeCalibrateCancel),
+                    Msg::CalibrationCancel
+                ),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8);
+        // Keep the editor visible below so the remapped grid lands
+        // where the user can see it.
         col = col.push(self.view_editor());
         col.into()
     }
@@ -2210,13 +2576,23 @@ mod tests {
         let mut state = State::new(&shared);
         state.recognizing = true;
         let pos = startpos();
-        let _ = state.update(Msg::ImageRecognized(Ok(pos.clone())), &mut shared);
+        // The recognised grid for the start position (grid row 0
+        // is the top = rank 9).
+        let mut grid: xq_recognize::Grid = [[None; 9]; 10];
+        for sq in 0..90u8 {
+            if let Some(piece) = pos.piece_at(sq) {
+                let file = (sq % 9) as usize;
+                let rank = (sq / 9) as usize;
+                grid[9 - rank][file] = Some(piece);
+            }
+        }
+        let _ = state.update(Msg::ImageRecognized(Ok(grid)), &mut shared);
         assert!(!state.recognizing);
         assert!(state.recognized);
         assert!(state.image_error.is_none());
         // The editor holds the recognised position.
         assert_eq!(state.editor_board[0], pos.piece_at(0));
-        assert_eq!(state.editor_side, pos.side());
+        assert_eq!(state.editor_side, Color::Red);
     }
 
     /// Build a `KeyPressed` event for a key + modifiers, to feed
@@ -2374,11 +2750,19 @@ mod tests {
     fn recognized_position_starts_with_chosen_side() {
         let mut shared = Shared::new();
         let mut state = State::new(&shared);
-        // Fill the editor with the start position, mark it
-        // recognised, choose Black to move, and start the game:
-        // the game must start with Black to move.
+        // Fill the editor with the start position (as a grid),
+        // mark it recognised, choose Black to move, and start the
+        // game: the game must start with Black to move.
         let pos = startpos();
-        state.editor_from_position(&pos);
+        let mut grid: xq_recognize::Grid = [[None; 9]; 10];
+        for sq in 0..90u8 {
+            if let Some(piece) = pos.piece_at(sq) {
+                let file = (sq % 9) as usize;
+                let rank = (sq / 9) as usize;
+                grid[9 - rank][file] = Some(piece);
+            }
+        }
+        state.editor_from_grid(&grid);
         state.recognized = true;
         state.editor_side = Color::Black;
         let _ = state.update(Msg::UseEditorPosition, &mut shared);

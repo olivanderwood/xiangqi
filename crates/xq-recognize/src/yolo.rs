@@ -220,6 +220,28 @@ pub fn non_max_suppression(mut detections: Vec<Detection>) -> Vec<Detection> {
     kept
 }
 
+/// Cross-class non-maximum suppression: like [`non_max_suppression`]
+/// but a box is dropped when it overlaps ANY kept box, whatever its
+/// class. The screenshot pipeline needs this — the detector fires
+/// two boxes on one piece (or on an arrow/highlight), the classifier
+/// names them differently, and same-class NMS lets both through.
+/// The higher-confidence box wins.
+pub fn non_max_suppression_cross_class(mut detections: Vec<Detection>) -> Vec<Detection> {
+    detections.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut kept: Vec<Detection> = Vec::new();
+    for det in detections {
+        let overlaps = kept.iter().any(|k| iou(k, &det) > IOU_THRESHOLD);
+        if !overlaps {
+            kept.push(det);
+        }
+    }
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

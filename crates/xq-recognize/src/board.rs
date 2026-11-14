@@ -28,6 +28,10 @@ pub struct BoardCalibration {
     pub pawn: (f32, f32),
 }
 
+/// A 10x9 board grid: row 0 is the image top, col 0 the image
+/// left. Each cell holds the detected piece (or `None`).
+pub type Grid = [[Option<Piece>; 9]; 10];
+
 /// The physical model's 14 classes: 0-6 red, 7-13 black, in the
 /// order king, advisor, elephant, horse, cannon, rook, pawn.
 pub const PHYSICAL_CLASSES: usize = 14;
@@ -62,8 +66,8 @@ pub fn physical_class_to_piece(class: usize) -> Option<Piece> {
 pub fn detections_to_grid(
     detections: &[Detection],
     calibration: Option<&BoardCalibration>,
-) -> [[Option<Piece>; 9]; 10] {
-    let mut grid: [[Option<Piece>; 9]; 10] = [[None; 9]; 10];
+) -> Grid {
+    let mut grid: Grid = [[None; 9]; 10];
     if detections.is_empty() {
         return grid;
     }
@@ -127,7 +131,86 @@ pub fn detections_to_grid(
             grid[row][col] = physical_class_to_piece(det.class);
         }
     }
+    repair_confused_pieces(&mut grid);
     grid
+}
+
+/// Whether a piece kind may sit on `file`/`rank` (0-based file,
+/// 0-based rank from Red's side). Horses, rooks, cannons and pawns
+/// may sit anywhere; kings and advisors must be in the palace, and
+/// elephants must be on their own side on an even file and a rank
+/// of the right parity. Mirrors `Position::from_fen`'s placement
+/// checks (xq-core).
+fn kind_valid_on_square(kind: PieceKind, color: Color, file: i32, rank: i32) -> bool {
+    match kind {
+        PieceKind::King | PieceKind::Advisor => {
+            // Palace: files 3-5, ranks 0-2 (Red) / 7-9 (Black).
+            if !(3..=5).contains(&file) {
+                return false;
+            }
+            let in_palace = match color {
+                Color::Red => (0..=2).contains(&rank),
+                Color::Black => (7..=9).contains(&rank),
+            };
+            if !in_palace {
+                return false;
+            }
+            if kind == PieceKind::King {
+                return true;
+            }
+            // Advisors sit on the palace diagonals only: the
+            // centre + the 4 corners of the 3x3 palace. (A diagonal
+            // move changes file and rank by 1 each, so the square
+            // is a corner of the palace or its centre.)
+            let centre_rank = match color {
+                Color::Red => 1,
+                Color::Black => 8,
+            };
+            (file == 4 && rank == centre_rank)
+                || ((file == 3 || file == 5)
+                    && (rank == centre_rank - 1 || rank == centre_rank + 1))
+        }
+        PieceKind::Elephant => {
+            // Own side, even file, rank of the right parity.
+            if file % 2 != 0 {
+                return false;
+            }
+            match color {
+                Color::Red => (0..=4).contains(&rank) && rank % 2 == 0,
+                Color::Black => (5..=9).contains(&rank) && rank % 2 == 1,
+            }
+        }
+        PieceKind::Horse | PieceKind::Rook | PieceKind::Cannon | PieceKind::Pawn => true,
+    }
+}
+
+/// Repair pieces the classifier confused: the screenshot classifier
+/// (64x64) mixes up Horse and Elephant (both diagonal movers with
+/// similar glyphs) and, less often, Advisor with Horse. When a piece
+/// sits on a square its kind can never occupy, it is almost
+/// certainly that confusion — a Horse may sit anywhere, so the
+/// piece becomes a Horse. This is what turns a grid with one
+/// impossible Elephant into a valid position instead of voiding
+/// the whole recognition.
+fn repair_confused_pieces(grid: &mut Grid) {
+    for (r, row) in grid.iter_mut().enumerate() {
+        for (c, slot) in row.iter_mut().enumerate() {
+            let Some(piece) = *slot else { continue };
+            // Grid row 0 is the image top = rank 9.
+            let rank = 9 - r as i32;
+            let file = c as i32;
+            if kind_valid_on_square(piece.kind, piece.color, file, rank) {
+                continue;
+            }
+            // Elephant or Advisor on an impossible square: it is a
+            // Horse the classifier misnamed. Kings are never
+            // repaired (a wrong general is a bigger problem, and a
+            // Horse cannot be a general).
+            if matches!(piece.kind, PieceKind::Elephant | PieceKind::Advisor) {
+                *slot = Some(Piece::new(piece.color, PieceKind::Horse));
+            }
+        }
+    }
 }
 
 /// Build a `Position` from a grid (row 0 = image top). The side to
@@ -135,7 +218,7 @@ pub fn detections_to_grid(
 /// asks the user after recognition). The grid is flipped when the
 /// Red general is above the Black general, so Red ends up at the
 /// bottom as FEN expects.
-pub fn grid_to_position(grid: &[[Option<Piece>; 9]; 10]) -> Result<Position, RecognizeError> {
+pub fn grid_to_position(grid: &Grid) -> Result<Position, RecognizeError> {
     let mut grid = *grid;
     // Orientation from the generals: Red must be below Black.
     let mut red_row: Option<usize> = None;
@@ -202,6 +285,12 @@ pub fn grid_to_position(grid: &[[Option<Piece>; 9]; 10]) -> Result<Position, Rec
     // after recognition; Red is the default.
     fen.push_str(" w - - 0 1");
     Position::from_fen(&fen).map_err(|e| RecognizeError::NoPosition(e.to_string()))
+}
+
+/// Count the pieces on a grid, for picking the better of two
+/// recognition results (a photo vs. a screenshot pipeline).
+pub fn grid_piece_count(grid: &Grid) -> usize {
+    grid.iter().flatten().filter(|p| p.is_some()).count()
 }
 
 /// The square index (`rank * 9 + file`) for a grid cell. Kept for
@@ -300,5 +389,49 @@ mod tests {
         let mut grid = [[None; 9]; 10];
         grid[0][4] = Some(Piece::new(Color::Red, PieceKind::King));
         assert!(grid_to_position(&grid).is_err());
+    }
+
+    #[test]
+    fn elephant_on_odd_file_is_repaired_to_horse() {
+        // The screenshot classifier mixes up Horse and Elephant.
+        // An Elephant on file 3 (odd) can never be an Elephant,
+        // so it becomes a Horse (which may sit anywhere).
+        let mut grid = [[None; 9]; 10];
+        // Row 4 = rank 5, col 3 = file 3: the misclassified piece
+        // from Hieu's screenshot (image 2).
+        grid[4][3] = Some(Piece::new(Color::Black, PieceKind::Elephant));
+        repair_confused_pieces(&mut grid);
+        assert_eq!(grid[4][3], Some(Piece::new(Color::Black, PieceKind::Horse)));
+    }
+
+    #[test]
+    fn elephant_on_valid_square_is_kept() {
+        let mut grid = [[None; 9]; 10];
+        // Row 2 = rank 7, col 4 = file 4: a valid Black Elephant.
+        grid[2][4] = Some(Piece::new(Color::Black, PieceKind::Elephant));
+        repair_confused_pieces(&mut grid);
+        assert_eq!(
+            grid[2][4],
+            Some(Piece::new(Color::Black, PieceKind::Elephant))
+        );
+    }
+
+    #[test]
+    fn advisor_outside_palace_is_repaired_to_horse() {
+        let mut grid = [[None; 9]; 10];
+        // Row 3 = rank 6, col 5 = file 5: outside the Red palace.
+        grid[3][5] = Some(Piece::new(Color::Red, PieceKind::Advisor));
+        repair_confused_pieces(&mut grid);
+        assert_eq!(grid[3][5], Some(Piece::new(Color::Red, PieceKind::Horse)));
+    }
+
+    #[test]
+    fn king_is_never_repaired() {
+        let mut grid = [[None; 9]; 10];
+        // A King outside the palace is wrong, but a Horse cannot
+        // be a general — leave it for the position check to reject.
+        grid[5][0] = Some(Piece::new(Color::Red, PieceKind::King));
+        repair_confused_pieces(&mut grid);
+        assert_eq!(grid[5][0], Some(Piece::new(Color::Red, PieceKind::King)));
     }
 }

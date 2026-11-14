@@ -24,9 +24,10 @@ use std::path::{Path, PathBuf};
 
 pub mod board;
 pub mod preprocess;
+pub mod screenshot;
 pub mod yolo;
 
-pub use board::BoardCalibration;
+pub use board::{BoardCalibration, Grid};
 use xq_core::board::Position;
 pub use yolo::Detection;
 
@@ -91,7 +92,7 @@ impl From<ort::Error> for RecognizeError {
 /// (`libonnxruntime.so` / `.dylib` / `.dll`); when given, the
 /// library is loaded from there instead of the system search path
 /// (`ORT_DYLIB_PATH` / system library).
-fn environment_with(
+pub(crate) fn environment_with(
     lib_path: Option<&Path>,
 ) -> Result<&'static ort::environment::Environment, RecognizeError> {
     static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> =
@@ -212,11 +213,42 @@ impl Recognizer {
     /// the board from the detections (best-effort). Returns the
     /// position with Red to move — the photo does not say whose
     /// turn it is, so the app asks the user after recognition.
+    /// Fails when too few pieces are found or the generals are
+    /// missing (see `recognize_grid` for the partial result).
     pub fn recognize(
         &mut self,
         bytes: &[u8],
         calibration: Option<&BoardCalibration>,
     ) -> Result<Position, RecognizeError> {
+        let grid = self.recognize_grid(bytes, calibration)?;
+        board::grid_to_position(&grid)
+    }
+
+    /// Recognise a photo into a 10x9 grid (row 0 = image top),
+    /// even when the generals are missing — the caller fills the
+    /// editor from the grid and the user fixes the rest. Returns
+    /// an error only when no piece at all was detected.
+    pub fn recognize_grid(
+        &mut self,
+        bytes: &[u8],
+        calibration: Option<&BoardCalibration>,
+    ) -> Result<Grid, RecognizeError> {
+        let (detections, max_confidence) = self.detect(bytes)?;
+        if detections.is_empty() {
+            return Err(RecognizeError::NoPosition(format!(
+                "no pieces detected (strongest score {:.2}, threshold {:.2})",
+                max_confidence,
+                yolo::CONF_THRESHOLD
+            )));
+        }
+        Ok(board::detections_to_grid(&detections, calibration))
+    }
+
+    /// Detect pieces in `bytes` and return them (original image
+    /// coordinates) plus the strongest class score seen (before
+    /// the threshold), for diagnostics and for callers that want
+    /// the raw detections instead of a finished position.
+    pub fn detect(&mut self, bytes: &[u8]) -> Result<(Vec<Detection>, f32), RecognizeError> {
         let input = preprocess::preprocess(bytes)?;
         let tensor = ort::value::Tensor::from_array((
             [
@@ -243,16 +275,7 @@ impl Recognizer {
             orig_h: input.orig_h as f32,
         };
         let result = yolo::parse_yolo_output(data, &dims, board::PHYSICAL_CLASSES, &frame);
-        let detections = result.detections;
-        if detections.is_empty() {
-            return Err(RecognizeError::NoPosition(format!(
-                "no pieces detected (strongest score {:.2}, threshold {:.2})",
-                result.max_confidence,
-                yolo::CONF_THRESHOLD
-            )));
-        }
-        let grid = board::detections_to_grid(&detections, calibration);
-        board::grid_to_position(&grid)
+        Ok((result.detections, result.max_confidence))
     }
 }
 
