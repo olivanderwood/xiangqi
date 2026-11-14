@@ -33,7 +33,9 @@ case "$OS" in
         ORT_OUT="libonnxruntime.so"
         ;;
     Darwin)
-        ORT_ARCHIVE="onnxruntime-osx-universal2-${ORT_VERSION}.tgz"
+        # 1.31.0 ships macOS arm64 only (no universal2 / no x64 archive
+        # in this release); the .dylib path inside is the same layout.
+        ORT_ARCHIVE="onnxruntime-osx-arm64-${ORT_VERSION}.tgz"
         ORT_LIB="lib/libonnxruntime.${ORT_VERSION}.dylib"
         ORT_OUT="libonnxruntime.dylib"
         ;;
