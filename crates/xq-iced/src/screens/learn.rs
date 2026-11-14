@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (300 ms) must finish BEFORE the grading,
+//! A move's slide animation (400 ms) must finish BEFORE the grading,
 //! hint refresh or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //! `update()` only triggers that work when
@@ -43,7 +43,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text, Space};
+use iced::widget::{column, container, mouse_area, row, scrollable, text, Space, Stack};
 use iced::{Color, Element, Length, Point, Rectangle, Size, Subscription, Task, Theme};
 use xq_book::schema::{BookNode, Lesson};
 use xq_book::tree::node_at;
@@ -84,7 +84,7 @@ const OPPONENT_DELAY: Duration = Duration::from_millis(600);
 /// UI thread on the engine lock — defer to the next tick instead).
 const ENGINE_BUSY_RETRY: Duration = Duration::from_millis(100);
 /// How often the animation / opponent timer ticks.
-/// Animation / check-halo tick: 16 ms (~60 fps) so a 300 ms slide
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 400 ms slide
 /// redraws about 9 times instead of 3 — the 50 ms tick made the
 /// slide visibly choppy. Same interval as Practice.
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -501,6 +501,24 @@ impl State {
     /// navigating away when `needs_save_prompt`).
     pub fn show_save_prompt(&mut self) {
         self.show_save_prompt = true;
+    }
+
+    /// Whether the exit save prompt is open. Test-only: the App
+    /// test verifies the back-to-menu flow opens the prompt instead
+    /// of navigating away mid-lesson.
+    #[cfg(test)]
+    #[must_use]
+    pub fn save_prompt_open(&self) -> bool {
+        self.show_save_prompt
+    }
+
+    /// The current hint list (first entry = the book move to play).
+    /// Test-only: the App test plays the first hint to make the
+    /// lesson unfinished.
+    #[cfg(test)]
+    #[must_use]
+    pub fn hints(&self) -> &[BookHint] {
+        &self.hints
     }
 
     /// Save the current lesson progress into the shared store (and
@@ -1614,7 +1632,7 @@ impl State {
         let board_el = self.board_view(&pos);
         let panel = self.panel_view(lesson, &pos, shared);
 
-        container(
+        let base: Element<'_, Msg> = container(
             column![
                 header,
                 header_divider(),
@@ -1637,15 +1655,27 @@ impl State {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
+        .into();
+        // Exit save prompt: a full-screen overlay, NOT a card inside
+        // the panel — the panel is a scrollable, so a card at its top
+        // is scrolled out of view once the lesson is under way and
+        // the user has scrolled down to the buttons (Hieu, 2026-11-14:
+        // back-to-menu looked dead after the first move). Same
+        // overlay pattern as Play / Practice.
+        if self.show_save_prompt {
+            Stack::with_children([base, self.save_prompt_overlay()]).into()
+        } else {
+            base
+        }
     }
 
     /// Exit save prompt ("Lưu tiến trình học?"): save the lesson
     /// progress and go to the menu, or go without saving. The two
-    /// buttons are intercepted by `App::update`. Rendered as a card
-    /// at the top of the panel (Iced 0.14 has no modal dialog).
-    fn save_prompt_card(&self) -> Element<'_, Msg> {
-        container(
+    /// buttons are intercepted by `App::update`. Rendered as a
+    /// centred modal over a dimmed full-screen background (Iced
+    /// 0.14 has no modal dialog, see `docs/SPIKE-iced.md` §2).
+    fn save_prompt_overlay(&self) -> Element<'_, Msg> {
+        let card_el = container(
             column![
                 text(i18n::t(Key::SaveLessonTitle)).size(FONT_SCREEN_TITLE),
                 text(i18n::t(Key::SaveLessonBody)).size(FONT_BODY),
@@ -1658,9 +1688,15 @@ impl State {
             .spacing(12),
         )
         .padding(16)
-        .width(Length::Fill)
-        .style(crate::theme::card_container_style)
-        .into()
+        .width(Length::Fixed(340.0))
+        .style(crate::theme::card_container_style);
+        container(card_el)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(crate::theme::dim_background)
+            .into()
     }
 
     /// The board canvas: selection ring, legal targets, last move,
@@ -1732,9 +1768,10 @@ impl State {
         let mut col = column![].spacing(SPACE_16).width(Length::Fill);
 
         // Lesson-complete / off-book dialogs (cards at the top).
-        if self.show_save_prompt {
-            col = col.push(self.save_prompt_card());
-        } else if self.show_complete_dialog {
+        // The exit save prompt is NOT here: it is a full-screen
+        // overlay from `view()` — inside this scrollable panel it
+        // would be scrolled out of view (Hieu, 2026-11-14).
+        if self.show_complete_dialog {
             if let Some(summary) = &self.complete {
                 col = col.push(self.complete_card(summary));
             }

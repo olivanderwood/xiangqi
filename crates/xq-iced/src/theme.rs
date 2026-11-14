@@ -40,10 +40,25 @@ pub const BLUE: Color = Color::from_rgb8(0x2F, 0x6F, 0xD0);
 pub const PURPLE: Color = Color::from_rgb8(0x7B, 0x3F, 0xC4);
 /// Board wood.
 pub const WOOD: Color = Color::from_rgb8(0xE2, 0xBC, 0x82);
+/// Board wood: light end of the vertical face gradient (top).
+pub const WOOD_TOP: Color = Color::from_rgb8(0xEE, 0xCC, 0x99);
+/// Board wood: dark end of the vertical face gradient (bottom).
+pub const WOOD_BOTTOM: Color = Color::from_rgb8(0xD8, 0xB0, 0x70);
+/// Board bevel highlight: the lighter inner edge (top/left light).
+pub const WOOD_EDGE_LIGHT: Color = Color::from_rgb8(0xF6, 0xE0, 0xB4);
 /// Board lines.
 pub const BOARD_LINE: Color = Color::from_rgb8(0x4A, 0x33, 0x20);
 /// Piece background.
 pub const PIECE_BG: Color = Color::from_rgb8(0xF6, 0xEA, 0xD0);
+/// Piece face: light end of the top-face gradient (top-left light,
+/// as if lit from above — the 3D disc in the reference board).
+pub const PIECE_FACE_TOP: Color = Color::from_rgb8(0xFF, 0xFA, 0xE9);
+/// Piece face: dark end of the top-face gradient (bottom-right).
+pub const PIECE_FACE_BOTTOM: Color = Color::from_rgb8(0xEA, 0xD2, 0x9C);
+/// Piece rim: the bevelled edge / side wall of the disc, visible as
+/// a ring around the top face — a darker wood tone, so the piece
+/// reads as a solid block, not a flat disc.
+pub const PIECE_RIM: Color = Color::from_rgb8(0xC6, 0x9C, 0x58);
 /// Red pieces.
 pub const RED_PIECE: Color = Color::from_rgb8(0xB3, 0x26, 0x1E);
 /// Black pieces.

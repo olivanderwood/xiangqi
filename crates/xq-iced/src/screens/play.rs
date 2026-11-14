@@ -3,14 +3,14 @@
 //! feature is kept, no feature is added: the start dialog (side +
 //! 5 difficulty levels, level 4 stays "Tùy chỉnh" with the custom
 //! Elo from Settings), Pikafish over UCI with the builtin fallback,
-//! the AI worker, the 300 ms slide, the move list with review, the
+//! the AI worker, the 400 ms slide, the move list with review, the
 //! eval bar + advantage chip, the ChessDB section, Undo / Hint /
 //! Draw / Resign / New game, and the move / capture / check /
 //! checkmate sounds.
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (300 ms) must finish BEFORE the AI,
+//! A move's slide animation (400 ms) must finish BEFORE the AI,
 //! grading, hint or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). Enforced here:
 //!
@@ -85,7 +85,7 @@ fn new_seed() -> u64 {
         .unwrap_or(0x9E37_79B9_7F4A_7C15)
 }
 
-/// Animation / check-halo tick: 16 ms (~60 fps) so a 300 ms slide
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 400 ms slide
 /// redraws about 9 times instead of 3 — the 50 ms tick made the
 /// slide visibly choppy. Same interval as Practice.
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -2460,7 +2460,7 @@ mod tests {
         assert!(state.selected.is_none());
         // The piece is still sliding: no computation may start.
         assert!(state.board.is_animating());
-        // ...until the slide finishes, 300 ms later.
+        // ...until the slide finishes, 400 ms later.
         let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
         assert!(state.board.finish_anim(later));
         assert!(!state.board.is_animating());

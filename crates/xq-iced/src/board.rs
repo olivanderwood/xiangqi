@@ -1,5 +1,5 @@
 //! The Xiangqi board: geometry, piece drawing, suggestion arrows,
-//! drag-and-drop and the 300 ms slide animation.
+//! drag-and-drop and the 400 ms slide animation.
 //!
 //! Ported from the spike (`~/workspace/iced-spike/src/main.rs`:
 //! `Geom` ~648, `draw_piece` ~695, `draw_arrow` ~725,
@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (300 ms) must finish BEFORE the AI,
+//! A move's slide animation (400 ms) must finish BEFORE the AI,
 //! grading, hint or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //!
@@ -40,7 +40,8 @@ use std::time::{Duration, Instant};
 use iced::alignment::Vertical;
 use iced::mouse::{self, Button, Cursor};
 use iced::widget::canvas::{
-    Action, Canvas, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
+    gradient::{Gradient, Linear}, Action, Canvas, Event, Frame, Geometry, LineDash, Path, Program,
+    Stroke, Text as CanvasText,
 };
 use iced::widget::text::Alignment;
 use iced::{Color, Element, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
@@ -48,8 +49,9 @@ use xq_core::board::Position;
 use xq_core::types::{file_of, rank_of, Color as SideColor, Piece, PieceKind};
 
 use crate::theme::{
-    self, BLACK_PIECE, BLUE, BOARD_LINE, GOLD, PIECE_BG, PIECE_INNER_RADIUS, PIECE_RADIUS, PURPLE,
-    RED, RED_PIECE, WOOD,
+    self, BLACK_PIECE, BLUE, BOARD_LINE, GOLD, PIECE_FACE_BOTTOM, PIECE_FACE_TOP,
+    PIECE_INNER_RADIUS, PIECE_RADIUS, PIECE_RIM, PURPLE, RED, RED_PIECE, WOOD_BOTTOM,
+    WOOD_EDGE_LIGHT, WOOD_TOP,
 };
 
 /// A board square: `sq = rank * 9 + file`, rank 0 = Red's back rank
@@ -57,11 +59,20 @@ use crate::theme::{
 pub type Square = u8;
 
 /// How long a piece takes to slide to its destination (egui app
-/// §7.3). 300 ms (Hieu, 2026-11-14): long enough to see the piece travel (150 ms was
-/// a flick the eye barely registered, Hieu 2026-11-14), short
-/// enough that the AI / grading work waiting for the landing never
-/// feels delayed.
-pub const ANIM_DURATION: Duration = Duration::from_millis(300);
+/// §7.3). 400 ms (Hieu, 2026-11-14): the lift-up / travel / set-down
+/// arc needs the extra time to read (300 ms was too quick for the
+/// lift to register), still short enough that the AI / grading work
+/// waiting for the landing never feels delayed.
+pub const ANIM_DURATION: Duration = Duration::from_millis(400);
+
+/// How much bigger a piece looks at the top of its lift arc
+/// (12%: the disc visibly rises off the board without dwarfing its
+/// neighbours).
+pub const LIFT_SCALE: f32 = 0.12;
+
+/// How far (in board px at scale 1) a piece rises off the board at
+/// the top of its lift arc.
+pub const LIFT_RISE: f32 = 5.0;
 
 /// Default arrow opacity; the hovered arrow is drawn at full opacity
 /// (DESIGN-iced.md §1). Hieu (2026-11-13) found the design's 38%
@@ -180,7 +191,7 @@ impl Geom {
 // Animation
 // ---------------------------------------------------------------------------
 
-/// One sliding piece: from → to over [`ANIM_DURATION`] (300 ms).
+/// One sliding piece: from → to over [`ANIM_DURATION`] (400 ms).
 #[derive(Clone, Copy, Debug)]
 pub struct Anim {
     /// Source square.
@@ -189,6 +200,15 @@ pub struct Anim {
     pub to: Square,
     /// When the slide started.
     pub started: Instant,
+}
+
+/// How lifted a piece is at a raw (uneased) progress `p` in 0..1:
+/// 0 at both ends, 1 mid-flight — a smooth arc, so the piece rises
+/// off the board, travels, and settles back down (Hieu, 2026-11-14).
+/// Pure, so tests can check the arc without an [`Anim`].
+#[must_use]
+pub fn lift_at(p: f32) -> f32 {
+    (std::f32::consts::PI * p.clamp(0.0, 1.0)).sin()
 }
 
 impl Anim {
@@ -202,14 +222,26 @@ impl Anim {
         }
     }
 
+    /// Raw slide progress 0..1 at `now` (1 once the duration elapsed).
+    #[must_use]
+    pub fn linear_progress(&self, now: Instant) -> f32 {
+        (now.duration_since(self.started).as_secs_f32() / ANIM_DURATION.as_secs_f32()).min(1.0)
+    }
+
     /// Slide progress 0..1 at `now` (1 once the duration elapsed),
     /// eased out (quadratic) so the piece decelerates into its
     /// square instead of stopping abruptly at constant speed.
     #[must_use]
     pub fn progress(&self, now: Instant) -> f32 {
-        let p =
-            (now.duration_since(self.started).as_secs_f32() / ANIM_DURATION.as_secs_f32()).min(1.0);
+        let p = self.linear_progress(now);
         1.0 - (1.0 - p) * (1.0 - p)
+    }
+
+    /// Lift 0..1 at `now`: how far along the pick-up arc the piece
+    /// is (0 resting on its square, 1 at the top of the arc).
+    #[must_use]
+    pub fn lift(&self, now: Instant) -> f32 {
+        lift_at(self.linear_progress(now))
     }
 
     /// Whether the slide has finished at `now`.
@@ -416,20 +448,98 @@ pub enum BoardMsg {
 
 /// Draw one piece: outer disc r=27, inner ring r=22, Han character
 /// 30 px in the piece colour (DESIGN-iced.md §1).
-fn draw_piece(frame: &mut Frame<Renderer>, center: Point, scale: f32, piece: Piece) {
+/// One piece as a solid 3D block (Hieu, 2026-11-14 — like the
+/// reference board: bevelled rim, face lit from above, soft shadow
+/// on the board). Iced 0.14 has no radial gradient and no blur, so
+/// the depth is layered vector shapes, bottom to top:
+///
+/// * two offset shadow circles (a faint wide one + a darker core),
+///   which separate from the disc and fade as `lift` grows;
+/// * the rim: a full disc in a darker wood tone — the visible ring
+///   around the top face is the bevel / side wall, so the piece
+///   reads as a block, not a flat disc;
+/// * the top face: a diagonal linear gradient, light top-left to
+///   darker bottom-right;
+/// * the inner ring (as before) + a soft white highlight near the
+///   top, inside the face;
+/// * the glyph, with a 1 px dark copy underneath it for an
+///   engraved look.
+///
+/// `lift` is 0 for a resting piece, 1 at the top of the pick-up arc
+/// (the sliding / dragged piece); it grows the disc
+/// (`LIFT_SCALE`), raises it, and thins its shadow.
+fn draw_piece(frame: &mut Frame<Renderer>, center: Point, scale: f32, piece: Piece, lift: f32) {
     let color = match piece.color {
         SideColor::Red => RED_PIECE,
         SideColor::Black => BLACK_PIECE,
     };
-    frame.fill(&Path::circle(center, PIECE_RADIUS * scale), PIECE_BG);
-    frame.stroke(
-        &Path::circle(center, PIECE_RADIUS * scale),
-        Stroke::default().with_color(color).with_width(2.0 * scale),
+    let r = PIECE_RADIUS * scale;
+    let shadow_drop = (3.0 + 5.0 * lift) * scale;
+    // Soft outer shadow, then the darker core shadow.
+    frame.fill(
+        &Path::circle(
+            Point::new(center.x + 1.0 * scale, center.y + 4.0 * scale + shadow_drop),
+            r * (1.0 + 0.05 * lift),
+        ),
+        Color {
+            a: 0.14 * (1.0 - 0.3 * lift),
+            ..Color::BLACK
+        },
+    );
+    frame.fill(
+        &Path::circle(
+            Point::new(center.x + 1.0 * scale, center.y + 2.0 * scale + shadow_drop),
+            r * 0.96,
+        ),
+        Color {
+            a: 0.26 * (1.0 - 0.3 * lift),
+            ..Color::BLACK
+        },
+    );
+    // Bevelled rim (side wall) + gradient top face.
+    frame.fill(&Path::circle(center, r), PIECE_RIM);
+    let face_r = r - 2.5 * scale;
+    frame.fill(
+        &Path::circle(center, face_r),
+        Gradient::Linear(
+            Linear::new(
+                Point::new(center.x - r * 0.5, center.y - r * 0.6),
+                Point::new(center.x + r * 0.5, center.y + r * 0.6),
+            )
+            .add_stop(0.0, PIECE_FACE_TOP)
+            .add_stop(1.0, PIECE_FACE_BOTTOM),
+        ),
     );
     frame.stroke(
         &Path::circle(center, PIECE_INNER_RADIUS * scale),
         Stroke::default().with_color(color).with_width(1.0 * scale),
     );
+    // Soft light catching the top of the face.
+    frame.fill(
+        &Path::circle(
+            Point::new(center.x - r * 0.22, center.y - r * 0.42),
+            r * 0.32,
+        ),
+        Color {
+            a: 0.28,
+            ..Color::WHITE
+        },
+    );
+    // Engraved glyph: a dark copy 1 px below, then the glyph itself.
+    let glyph_pos = Point::new(center.x, center.y + 1.2 * scale);
+    frame.fill_text(CanvasText {
+        content: piece.han_char().to_string(),
+        position: glyph_pos,
+        size: Pixels(theme::FONT_PIECE * scale),
+        color: Color {
+            a: 0.22,
+            ..Color::BLACK
+        },
+        font: theme::cjk_font(),
+        align_x: Alignment::Center,
+        align_y: Vertical::Center,
+        ..Default::default()
+    });
     frame.fill_text(CanvasText {
         content: piece.han_char().to_string(),
         position: center,
@@ -692,16 +802,78 @@ impl Program<BoardMsg> for BoardProgram {
         let render = &self.render;
 
         // Background + wooden board (592×656, DESIGN-iced.md §1).
+        // The board is a raised slab, like the reference: layered
+        // soft shadows under it, a vertical wood gradient on its
+        // face, a lighter inner edge (top light) and faint grain
+        // streaks — Iced has no blur, so the shadow is three
+        // expanding rects with falling alpha.
         frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), theme::BG);
         let board_pos = Point::new(g.bx, g.by);
         let board_size = Size::new(theme::BOARD_WIDTH * scale, theme::BOARD_HEIGHT * scale);
-        frame.fill(&Path::rectangle(board_pos, board_size), WOOD);
+        for (expand, alpha) in [(12.0, 0.08), (7.0, 0.12), (3.0, 0.18)] {
+            frame.fill(
+                &Path::rectangle(
+                    Point::new(board_pos.x - expand * scale, board_pos.y - expand * scale),
+                    Size::new(
+                        board_size.width + 2.0 * expand * scale,
+                        board_size.height + 2.0 * expand * scale,
+                    ),
+                ),
+                Color {
+                    a: alpha,
+                    ..Color::BLACK
+                },
+            );
+        }
+        frame.fill(
+            &Path::rectangle(board_pos, board_size),
+            Gradient::Linear(
+                Linear::new(
+                    board_pos,
+                    Point::new(board_pos.x, board_pos.y + board_size.height),
+                )
+                .add_stop(0.0, WOOD_TOP)
+                .add_stop(1.0, WOOD_BOTTOM),
+            ),
+        );
         frame.stroke(
             &Path::rectangle(board_pos, board_size),
             Stroke::default()
                 .with_color(BOARD_LINE)
                 .with_width(2.0 * scale),
         );
+        // Bevel: a lighter line just inside the border (top light).
+        frame.stroke(
+            &Path::rectangle(
+                Point::new(board_pos.x + 2.0 * scale, board_pos.y + 2.0 * scale),
+                Size::new(
+                    board_size.width - 4.0 * scale,
+                    board_size.height - 4.0 * scale,
+                ),
+            ),
+            Stroke::default()
+                .with_color(Color {
+                    a: 0.45,
+                    ..WOOD_EDGE_LIGHT
+                })
+                .with_width(1.5 * scale),
+        );
+        // Faint wood grain: three horizontal streaks across the face.
+        for fy in [0.22, 0.52, 0.78] {
+            let y = board_pos.y + board_size.height * fy;
+            frame.stroke(
+                &Path::line(
+                    Point::new(board_pos.x + 4.0 * scale, y),
+                    Point::new(board_pos.x + board_size.width - 4.0 * scale, y),
+                ),
+                Stroke::default()
+                    .with_color(Color {
+                        a: 0.05,
+                        ..BOARD_LINE
+                    })
+                    .with_width(1.0 * scale),
+            );
+        }
 
         // Grid lines.
         let line = Stroke::default()
@@ -814,7 +986,7 @@ impl Program<BoardMsg> for BoardProgram {
                 continue;
             }
             if let Some(piece) = render.position.piece_at(sq) {
-                draw_piece(&mut frame, g.square_point(sq), scale, piece);
+                draw_piece(&mut frame, g.square_point(sq), scale, piece, 0.0);
             }
         }
         // Suggestion / opponent arrows, drawn ON TOP of the pieces:
@@ -830,23 +1002,37 @@ impl Program<BoardMsg> for BoardProgram {
                 .is_some_and(|p| p.kind == PieceKind::Horse);
             draw_arrow(&mut frame, &g, arrow, is_horse);
         }
-        // Sliding piece, interpolated.
+        // Sliding piece, interpolated — and lifted: it rises off the
+        // board mid-flight (bigger, higher, thinner shadow) and
+        // settles back down onto its square (Hieu, 2026-11-14).
         if let Some(anim) = render.anim {
             if let Some(piece) = render.position.piece_at(anim.to) {
                 let a = g.square_point(anim.from);
                 let b = g.square_point(anim.to);
-                let prog = anim.progress(Instant::now());
-                let pos = Point::new(a.x + (b.x - a.x) * prog, a.y + (b.y - a.y) * prog);
-                draw_piece(&mut frame, pos, scale, piece);
+                let now = Instant::now();
+                let prog = anim.progress(now);
+                let lift = anim.lift(now);
+                let pos = Point::new(
+                    a.x + (b.x - a.x) * prog,
+                    a.y + (b.y - a.y) * prog - LIFT_RISE * scale * lift,
+                );
+                draw_piece(
+                    &mut frame,
+                    pos,
+                    scale * (1.0 + LIFT_SCALE * lift),
+                    piece,
+                    lift,
+                );
             }
         }
         // Dragged piece follows the cursor, on top — only once the
         // press has turned into a real drag. Before that (plain
-        // click, no movement) the piece stays on its square.
+        // click, no movement) the piece stays on its square. While
+        // dragged it is fully lifted, like mid-slide.
         if state.lifted() {
             if let (Some(sq), Some(pos)) = (state.drag_sq, state.drag_pos) {
                 if let Some(piece) = render.position.piece_at(sq) {
-                    draw_piece(&mut frame, pos, scale, piece);
+                    draw_piece(&mut frame, pos, scale * (1.0 + LIFT_SCALE), piece, 1.0);
                     frame.stroke(
                         &Path::circle(pos, 30.0 * scale),
                         Stroke::default().with_color(BLUE).with_width(3.0 * scale),
@@ -962,6 +1148,44 @@ mod tests {
             width: 592.0,
             height: 656.0,
         }
+    }
+
+    #[test]
+    fn lift_arc_is_zero_at_both_ends_and_one_mid_flight() {
+        // The pick-up arc (Hieu, 2026-11-14): the piece rests on its
+        // square at both ends and is highest halfway through.
+        assert!((lift_at(0.0) - 0.0).abs() < 1e-6);
+        assert!((lift_at(1.0) - 0.0).abs() < 1e-6);
+        assert!((lift_at(0.5) - 1.0).abs() < 1e-6);
+        assert!((lift_at(0.25) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+        assert!((lift_at(0.75) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anim_lift_follows_the_arc_and_duration_is_400_ms() {
+        assert_eq!(ANIM_DURATION, Duration::from_millis(400));
+        let anim = Anim {
+            from: 0,
+            to: 1,
+            started: Instant::now() - Duration::from_millis(200),
+        };
+        let now = Instant::now();
+        assert!(
+            (anim.lift(now) - 1.0).abs() < 0.05,
+            "mid-flight, fully lifted"
+        );
+        let fresh = Anim::new(0, 1);
+        assert!(
+            fresh.lift(Instant::now()) < 0.05,
+            "just started, on the board"
+        );
+        let done = Anim {
+            from: 0,
+            to: 1,
+            started: Instant::now() - Duration::from_millis(500),
+        };
+        assert!(done.lift(Instant::now()) < 1e-6, "finished, settled down");
+        assert!(done.is_finished(Instant::now()));
     }
 
     #[test]

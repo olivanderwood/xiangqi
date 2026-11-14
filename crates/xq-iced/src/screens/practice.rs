@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (300 ms) must finish BEFORE the grading,
+//! A move's slide animation (400 ms) must finish BEFORE the grading,
 //! suggestion or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //! `update()` only triggers that work when `board.is_animating() ==
@@ -112,7 +112,7 @@ const ENGINE_TIMEOUT: Duration = Duration::from_secs(30);
 const SUGGEST_TOP_N: usize = 4;
 
 /// How often the animation / check-halo tick fires while one is
-/// active (the 300 ms slide needs several frames to look smooth).
+/// active (the 400 ms slide needs several frames to look smooth).
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The editor board canvas size (the board is drawn centred in it

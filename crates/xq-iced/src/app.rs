@@ -788,4 +788,60 @@ mod tests {
         assert_eq!(app.screen, Screen::Home);
         assert_eq!(app.practice.phase(), practice::PracticePhase::Setup);
     }
+
+    #[test]
+    fn back_to_menu_mid_lesson_opens_prompt_then_leaves() {
+        // Hieu, 2026-11-14: back-to-menu looked dead once the lesson
+        // was under way — the save prompt was a card at the top of
+        // the scrollable panel, scrolled out of view. The prompt is
+        // now a full-screen overlay, and the App flow must open it
+        // instead of navigating, then leave on either answer.
+        use crate::screens::learn;
+        use crate::screens::learn_select;
+        use xq_core::types::Color;
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Goto(Screen::LearnSelect));
+        // Pick the first Red lesson: LearnSelect starts it and
+        // navigates to Learn.
+        let lesson = app
+            .shared
+            .book
+            .by_learner(Color::Red)
+            .into_iter()
+            .next()
+            .expect("a Red lesson")
+            .clone();
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::SelectLesson(
+            lesson.id.clone(),
+        )));
+        // Selecting only records the choice; StartLesson records the
+        // pending choice and navigates, and the App starts the lesson
+        // from it (the real UI flow).
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::StartLesson));
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::Navigate(
+            Screen::Learn,
+        )));
+        assert_eq!(app.screen, Screen::Learn);
+        assert!(!app.learn.save_prompt_open());
+        // Play one learner move: the lesson is now unfinished.
+        app.shared.settings.animate = false;
+        assert!(!app.learn.hints().is_empty(), "hints for the first turn");
+        let mv = app.learn.hints()[0].mv;
+        let _ = app.update(Message::Learn(learn::Msg::Board(
+            crate::board::BoardMsg::SquareClicked(mv.from),
+        )));
+        let _ = app.update(Message::Learn(learn::Msg::Board(
+            crate::board::BoardMsg::SquareClicked(mv.to),
+        )));
+        assert!(app.learn.needs_save_prompt(), "unfinished lesson");
+        // Back to the menu: the prompt opens, the screen stays.
+        let _ = app.update(Message::Learn(learn::Msg::Navigate(Screen::Home)));
+        assert_eq!(app.screen, Screen::Learn);
+        assert!(app.learn.save_prompt_open(), "prompt opened");
+        // Answer "don't save": back at the menu, lesson reset.
+        let _ = app.update(Message::Learn(learn::Msg::SavePromptDiscard));
+        assert_eq!(app.screen, Screen::Home);
+        assert!(!app.learn.save_prompt_open());
+        assert!(!app.learn.needs_save_prompt(), "lesson reset on exit");
+    }
 }
