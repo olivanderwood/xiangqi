@@ -36,6 +36,21 @@ use crate::theme::{
 use crate::theme::{BOARD_HEIGHT, BOARD_WIDTH};
 use iced::widget::{button, column, container, row, text, Button, Row};
 use iced::{Alignment, Color, Element, Length, Size, Theme};
+use xq_core::game::GameResult;
+
+/// Text color for a game result (Hieu, 2026-11-14): the winner's
+/// color. Red wins → bright red; Black wins → light text (true
+/// black is unreadable on the dark theme, so Black's result uses
+/// the light text color); a draw → dim text.
+#[must_use]
+pub fn result_text_color(result: GameResult) -> Color {
+    match result {
+        GameResult::RedWins(_) => RED,
+        GameResult::BlackWins(_) => TEXT,
+        GameResult::Draw(_) => TEXT_DIM,
+        GameResult::Ongoing => TEXT,
+    }
+}
 
 /// The minimum width of every side panel (egui
 /// `SIDE_PANEL_WIDTH`). Screens lay the panel out with

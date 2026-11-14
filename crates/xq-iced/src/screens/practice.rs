@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (150 ms) must finish BEFORE the grading,
+//! A move's slide animation (300 ms) must finish BEFORE the grading,
 //! suggestion or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //! `update()` only triggers that work when `board.is_animating() ==
@@ -112,7 +112,7 @@ const ENGINE_TIMEOUT: Duration = Duration::from_secs(30);
 const SUGGEST_TOP_N: usize = 4;
 
 /// How often the animation / check-halo tick fires while one is
-/// active (the 150 ms slide needs several frames to look smooth).
+/// active (the 300 ms slide needs several frames to look smooth).
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The editor board canvas size (the board is drawn centred in it
@@ -408,6 +408,12 @@ pub struct State {
     /// Grade per played move, parallel to `game.moves` (`None` = the
     /// grade has not arrived yet).
     move_grades: Vec<Option<Grade>>,
+    /// The exit save prompt is open (back to menu with a game in
+    /// progress — Hieu, 2026-11-14).
+    show_save_prompt: bool,
+    /// The current game was already saved, so the save button /
+    /// prompt is not offered again for it.
+    saved_this_game: bool,
     /// The ChessDB section (score + best move) and the source of the
     /// top-4 suggestions. `show_win_rate = true` — see the module
     /// docs for why (the Play value: practice shows win rates).
@@ -478,6 +484,21 @@ fn editor_fen(board: &[Option<Piece>; 90], side: Color) -> String {
         Color::Black => "b",
     });
     out
+}
+
+/// Human-readable editor error for a setup-validation failure
+/// (`xq_core::board::SetupError`): the max-count message names the
+/// piece and its limit, the bad-square message names the piece.
+fn setup_error_message(err: xq_core::board::SetupError) -> String {
+    use xq_core::board::SetupError::*;
+    match err {
+        TooMany { kind, .. } => i18n::t(Key::PracticeEditorTooMany)
+            .replace("{n}", &xq_core::board::max_count(kind).to_string())
+            .replace("{name}", i18n::piece_kind_name(kind)),
+        BadSquare { kind, .. } => {
+            i18n::t(Key::PracticeEditorBadSquare).replace("{name}", i18n::piece_kind_name(kind))
+        }
+    }
 }
 
 /// Do the two generals face each other on one file with nothing
@@ -622,6 +643,18 @@ pub enum Msg {
     HoverSuggest(Option<usize>),
     /// No-op (mapping target for widgets that emit no message, e.g.
     /// the ChessDB panel view).
+    /// Open the saved-games list ("Ván cờ đã lưu", intercepted by
+    /// `App::update`).
+    OpenSavedGames,
+    /// Panel: save the finished game (Hieu, 2026-11-14). One-shot
+    /// per game.
+    SaveFinishedGame,
+    /// Exit save prompt: save the unfinished game, then go to the
+    /// menu (intercepted by `App::update`, which resets Practice).
+    SavePromptSave,
+    /// Exit save prompt: go to the menu without saving (intercepted
+    /// by `App::update`, which resets Practice).
+    SavePromptDiscard,
     Noop,
 }
 
@@ -790,8 +823,18 @@ impl State {
             ai_rx: Arc::new(Mutex::new(real_rx)),
             pending_grade: None,
             hover_suggest: None,
+            show_save_prompt: false,
+            saved_this_game: false,
             window: Size::new(1280.0, 800.0),
         }
+    }
+
+    /// Which phase the screen is in (Setup / Playing). Test-only:
+    /// the App test verifies the back-to-menu reset through it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn phase(&self) -> PracticePhase {
+        self.phase
     }
 
     /// The practice difficulty as an engine `Level` (same scale as
@@ -853,7 +896,25 @@ impl State {
     /// exhaustive.
     pub fn update(&mut self, msg: Msg, shared: &mut Shared) -> Task<Msg> {
         match msg {
-            Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout | Msg::Noop => Task::none(),
+            Msg::Navigate(_)
+            | Msg::ShowSettings
+            | Msg::ShowAbout
+            | Msg::Noop
+            | Msg::OpenSavedGames => Task::none(),
+            // `SavePromptSave` / `SavePromptDiscard` are intercepted
+            // by `App::update` (they save, reset Practice and
+            // navigate), so they never reach here — but a direct
+            // send must not leave the prompt open.
+            Msg::SavePromptSave | Msg::SavePromptDiscard => {
+                self.show_save_prompt = false;
+                Task::none()
+            }
+            Msg::SaveFinishedGame => {
+                if self.game.result().is_over() && !self.saved_this_game {
+                    self.save_current_game(shared, true);
+                }
+                Task::none()
+            }
             Msg::WindowResized(size) => {
                 self.window = size;
                 Task::none()
@@ -881,11 +942,16 @@ impl State {
             }
             Msg::LoadFen => {
                 match Position::from_fen(self.fen_text.trim()) {
-                    Ok(pos) => {
-                        self.fen_error = None;
-                        self.start_from(pos);
-                        self.maybe_suggest(shared, Instant::now());
-                    }
+                    Ok(pos) => match pos.validate_setup() {
+                        Ok(()) => {
+                            self.fen_error = None;
+                            self.start_from(pos);
+                            self.maybe_suggest(shared, Instant::now());
+                        }
+                        Err(e) => {
+                            self.fen_error = Some(setup_error_message(e));
+                        }
+                    },
                     Err(_) => {
                         self.fen_error = Some(i18n::t(Key::PracticeFenInvalid).to_string());
                     }
@@ -1087,10 +1153,12 @@ impl State {
                 Task::none()
             }
             Msg::UseEditorPosition => {
-                let fen = editor_fen(&self.editor_board, self.editor_side);
                 if editor_generals_face(&self.editor_board) {
                     self.editor_error = Some(i18n::t(Key::PracticeEditorInvalid).to_string());
+                } else if let Err(e) = xq_core::board::validate_setup(&self.editor_board) {
+                    self.editor_error = Some(setup_error_message(e));
                 } else {
+                    let fen = editor_fen(&self.editor_board, self.editor_side);
                     match Position::from_fen(&fen) {
                         Ok(pos) => {
                             self.editor_error = None;
@@ -1343,7 +1411,7 @@ impl State {
                 if self.board.is_animating() {
                     return;
                 }
-                self.click_square(sq, shared);
+                self.click_square(sq, shared, false);
             }
             BoardMsg::DragStarted(sq) => {
                 if self.board.is_animating() {
@@ -1356,7 +1424,7 @@ impl State {
                 // clicking an enemy piece to capture did nothing
                 // while drag-and-drop worked, because `DragEnded`
                 // already routed through `click_square`.)
-                self.click_square(sq, shared);
+                self.click_square(sq, shared, false);
             }
             BoardMsg::DragMoved(_) => {}
             BoardMsg::DragEnded(point) => {
@@ -1375,7 +1443,7 @@ impl State {
                     height: size.height,
                 };
                 if let Some(sq) = Geom::from_bounds_flipped(bounds, self.flipped).square_at(point) {
-                    self.click_square(sq, shared);
+                    self.click_square(sq, shared, true);
                 } else {
                     self.selected = None;
                 }
@@ -1386,8 +1454,10 @@ impl State {
 
     /// A click (or a drop) on `sq`: select one of the side-to-move's
     /// pieces, play a legal move from the selected piece, or clear
-    /// the selection.
-    fn click_square(&mut self, sq: Square, shared: &mut Shared) {
+    /// the selection. `from_drag` is true when the square came from
+    /// a drop: the piece already travelled under the cursor, so it
+    /// does not slide again.
+    fn click_square(&mut self, sq: Square, shared: &mut Shared, from_drag: bool) {
         let pos = self.game.pos.clone();
         if let Some(from) = self.selected {
             if from != sq {
@@ -1397,7 +1467,7 @@ impl State {
                     .filter(|m| m.from == from && m.to == sq)
                     .collect();
                 if let Some(&mv) = legal.first() {
-                    self.play_move(mv, shared);
+                    self.play_move(mv, shared, !from_drag);
                     return;
                 }
             }
@@ -1414,7 +1484,10 @@ impl State {
     /// requested once the animation has finished (held in
     /// `pending_grade` — see the invariant at the top of this file).
     /// With animation off, the grade + suggestions start at once.
-    fn play_move(&mut self, mv: Move, shared: &mut Shared) {
+    /// `animate` says whether the piece slides: `false` for a
+    /// drag-and-drop (the piece already travelled under the cursor),
+    /// `true` for a click.
+    fn play_move(&mut self, mv: Move, shared: &mut Shared, animate: bool) {
         if self.phase != PracticePhase::Playing
             || self.game.result() != GameResult::Ongoing
             || self.board.is_animating()
@@ -1437,7 +1510,7 @@ impl State {
         if gives_check {
             self.check_since = Some(Instant::now());
         }
-        if shared.settings.animate {
+        if animate && shared.settings.animate {
             self.board.start_anim(mv.from, mv.to);
         }
         self.selected = None;
@@ -1463,6 +1536,123 @@ impl State {
         self.game = Game::new(pos);
         self.phase = PracticePhase::Playing;
         self.reset_state();
+    }
+
+    /// Load a saved Practice game (Hieu, 2026-11-14): rebuild the
+    /// board by replaying its moves from the saved start FEN and
+    /// enter the Playing phase. A corrupt entry (bad FEN, illegal
+    /// move) is ignored — the setup phase stays.
+    pub fn load_saved(&mut self, saved: &crate::saved_games::SavedGame, shared: &mut Shared) {
+        let Ok(start) = xq_core::board::Position::from_fen(&saved.start_fen) else {
+            return;
+        };
+        let mut game = Game::new(start.clone());
+        for iccs in &saved.moves {
+            let Ok(mv) = xq_core::notation::parse_iccs(iccs) else {
+                return;
+            };
+            if game.play(mv).is_err() {
+                return;
+            }
+        }
+        // Restore a terminal result the position alone does not carry
+        // (resignation / agreed draw).
+        if !game.result().is_over() {
+            match saved.result.as_deref() {
+                Some("red") => game.resign(Color::Black),
+                Some("black") => game.resign(Color::Red),
+                Some("draw") => game.agree_draw(),
+                _ => {}
+            }
+        }
+        self.start_pos = start;
+        self.game = game;
+        self.difficulty = saved.difficulty;
+        self.phase = PracticePhase::Playing;
+        // A finished game loaded from the store is already saved —
+        // don't offer to save it again (that would duplicate the
+        // entry). An unfinished one can be saved again after more
+        // moves.
+        self.saved_this_game = self.game.result().is_over();
+        self.reset_state();
+        self.maybe_suggest(shared, Instant::now());
+    }
+
+    // ------------------------------------------------------------------
+    // Saved games (Hieu, 2026-11-14)
+    // ------------------------------------------------------------------
+
+    /// Whether leaving for the menu should ask to save first: a
+    /// game is in progress (playing phase, moves played, not over)
+    /// and has not been saved already.
+    #[must_use]
+    pub fn needs_save_prompt(&self) -> bool {
+        self.phase == PracticePhase::Playing
+            && !self.game.result().is_over()
+            && !self.game.moves.is_empty()
+            && !self.saved_this_game
+    }
+
+    /// Open the exit save prompt (called by the App instead of
+    /// navigating away when `needs_save_prompt`).
+    pub fn show_save_prompt(&mut self) {
+        self.show_save_prompt = true;
+    }
+
+    /// Build the saved entry for the current game.
+    fn to_saved_game(&self, finished: bool) -> crate::saved_games::SavedGame {
+        let result = if finished {
+            match self.game.result() {
+                GameResult::RedWins(_) => Some("red".to_string()),
+                GameResult::BlackWins(_) => Some("black".to_string()),
+                GameResult::Draw(_) => Some("draw".to_string()),
+                GameResult::Ongoing => None,
+            }
+        } else {
+            None
+        };
+        let moves = self.game.moves.len();
+        let label = match (&result, finished) {
+            (Some(r), true) => format!(
+                "Tự luyện tập — {} — {moves} nước",
+                match r.as_str() {
+                    "red" => "Đỏ thắng",
+                    "black" => "Đen thắng",
+                    _ => "Hòa",
+                }
+            ),
+            _ => format!("Tự luyện tập — đang dở — {moves} nước"),
+        };
+        crate::saved_games::SavedGame {
+            id: crate::saved_games::SavedGame::new_id(crate::saved_games::SavedMode::Practice),
+            mode: crate::saved_games::SavedMode::Practice,
+            label,
+            created_unix: crate::saved_games::SavedGame::now_unix(),
+            finished,
+            start_fen: self.game.start.to_fen(),
+            moves: self
+                .game
+                .moves
+                .iter()
+                .map(|m| xq_core::notation::iccs(*m))
+                .collect(),
+            difficulty: self.difficulty,
+            human_red: None,
+            result,
+            lesson_id: None,
+            node_path: Vec::new(),
+            percent: None,
+        }
+    }
+
+    /// Save the current game into the shared store (and to disk).
+    /// Marks the game saved so the prompt / button is not offered
+    /// again for it.
+    pub fn save_current_game(&mut self, shared: &mut Shared, finished: bool) {
+        let entry = self.to_saved_game(finished);
+        shared.saved_games.add(entry);
+        shared.saved_games.save();
+        self.saved_this_game = true;
     }
 
     /// Reset to the starting position (standard or loaded), keeping
@@ -1546,19 +1736,35 @@ impl State {
             }
         }
         self.editor_side = Color::Red;
-        self.editor_error = None;
+        // The recognised grid is a partial board (the recogniser may
+        // have misread a piece): validate counts + squares so the
+        // editor shows what is wrong instead of silently holding an
+        // illegal board for the user to discover at game start.
+        self.editor_error = match xq_core::board::validate_setup(&self.editor_board) {
+            Ok(()) => None,
+            Err(e) => Some(setup_error_message(e)),
+        };
     }
 
     /// Place the palette piece on a square (or erase it). A general
     /// replaces the same side's other general, so the board can never
-    /// hold two generals of one colour.
+    /// hold two generals of one colour. The placement is checked
+    /// against the setup rules first (max counts + legal squares,
+    /// `xq_core::board::validate_setup`): an illegal placement is
+    /// refused and the editor shows why, so an invalid board can
+    /// never be built by hand.
     fn editor_click(&mut self, sq: u8) {
         let Some(piece) = self.editor_selected else {
             self.editor_board[sq as usize] = None;
+            self.editor_error = match xq_core::board::validate_setup(&self.editor_board) {
+                Ok(()) => None,
+                Err(e) => Some(setup_error_message(e)),
+            };
             return;
         };
+        let mut next = self.editor_board;
         if piece.kind == PieceKind::King {
-            for slot in self.editor_board.iter_mut() {
+            for slot in next.iter_mut() {
                 if let Some(old) = *slot {
                     if old.color == piece.color && old.kind == PieceKind::King {
                         *slot = None;
@@ -1566,21 +1772,33 @@ impl State {
                 }
             }
         }
-        self.editor_board[sq as usize] = Some(piece);
+        next[sq as usize] = Some(piece);
+        match xq_core::board::validate_setup(&next) {
+            Ok(()) => {
+                self.editor_board = next;
+                self.editor_error = None;
+            }
+            Err(e) => self.editor_error = Some(setup_error_message(e)),
+        }
     }
 }
 
 impl State {
     /// Setup phase: difficulty + where the position comes from.
     ///
-    /// Centred card in the Learn-select style (UI-FIX-2 part 2):
-    /// surface card, radius 14, padding 24, 880 px wide, scrolling
-    /// vertically when the content (notably the image-source board
-    /// editor) is taller than the window. Behaviour is unchanged:
-    /// the same difficulty radios + custom-Elo slider, the same
-    /// three sources (Start / FEN / image), and the same Start /
-    /// Back buttons — the two buttons built here are full-width and
-    /// 48 px tall, like the Learn-select start button.
+    /// Header (same 64 px surface bar as Play / Learn) with "Quay
+    /// lại" to the menu — the setup card no longer carries its own
+    /// Back button at the bottom — above a centred card in the
+    /// Learn-select style (UI-FIX-2 part 2): surface card, radius
+    /// 14, padding 24, 880 px wide, scrolling vertically when the
+    /// content (notably the image-source board editor) is taller
+    /// than the window. The card's column is centre-aligned (Hieu,
+    /// 2026-11-14): title, section titles and button rows sit in
+    /// the middle of the card instead of hugging its left edge.
+    /// Behaviour is unchanged: the same difficulty radios +
+    /// custom-Elo slider, the same three sources (Start / FEN /
+    /// image), and the same Start button — full-width and 48 px
+    /// tall, like the Learn-select start button.
     fn view_setup(&self) -> Element<'_, Msg> {
         let mut diff_col = Column::new().spacing(4);
         for d in 0..=4u8 {
@@ -1653,23 +1871,68 @@ impl State {
                 }
             }
         });
+        // Saved games ("Ván cờ đã lưu"): finished and unfinished
+        // Practice games alike (Hieu, 2026-11-14).
         col = col.push(
-            secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home))
+            secondary_button(i18n::t(Key::SavedGamesTitle), Msg::OpenSavedGames)
                 .width(Length::Fill)
                 .height(Length::Fixed(48.0)),
         );
-        let card = container(col.spacing(SPACE_12).width(Length::Fill))
-            .padding(SPACE_24)
-            .width(Length::Fixed(880.0))
-            .style(card_style);
-        container(
-            scrollable(container(card).width(Length::Fill).center_x(Length::Fill))
+        let card = container(
+            col.spacing(SPACE_12)
                 .width(Length::Fill)
-                .height(Length::Fill),
+                .align_x(iced::Alignment::Center),
         )
+        .padding(SPACE_24)
+        .width(Length::Fixed(880.0))
+        .style(card_style);
+        let header = container(
+            row![
+                ghost_button_with_icon(
+                    i18n::t(Key::BackToMenu),
+                    Icon::ArrowLeft,
+                    Msg::Navigate(Screen::Home)
+                ),
+                text(i18n::t(Key::PracticeTitle))
+                    .size(FONT_SCREEN_TITLE)
+                    .font(theme::inter_font_semibold())
+                    .width(Length::Fill),
+                ghost_button_with_icon(
+                    i18n::t(Key::Settings),
+                    Icon::SlidersHorizontal,
+                    Msg::ShowSettings
+                ),
+            ]
+            .spacing(SPACE_16)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: SPACE_24,
+            bottom: 0.0,
+            left: SPACE_24,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(theme::SURFACE)),
+            ..Default::default()
+        });
+        column![
+            header,
+            header_divider(),
+            container(
+                scrollable(container(card).width(Length::Fill).center_x(Length::Fill))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(SPACE_24),
+        ]
+        .spacing(0)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(SPACE_24)
         .into()
     }
 
@@ -2019,13 +2282,15 @@ impl State {
             .width(Length::Fill)
             .align_y(iced::Alignment::Start);
         // Header (same 64 px surface bar as Play / Learn): "Quay
-        // lại" goes back to the setup phase here, not the menu.
+        // lại" goes to the menu, like the other two modes. Going back
+        // to the setup phase lives in the panel (BackToSetup), not
+        // here.
         let header = container(
             row![
                 ghost_button_with_icon(
-                    i18n::t(Key::PracticeBackToSetup),
+                    i18n::t(Key::BackToMenu),
                     Icon::ArrowLeft,
-                    Msg::BackToSetup
+                    Msg::Navigate(Screen::Home)
                 ),
                 text(i18n::t(Key::PracticeTitle))
                     .size(FONT_SCREEN_TITLE)
@@ -2101,7 +2366,19 @@ impl State {
                 Color::Black => i18n::t(Key::BlackToMove).to_string(),
             }
         };
-        col = col.push(text(status).size(FONT_BODY));
+        // Status: result, check, or whose turn it is. A finished
+        // game shows the result in the winner's color (Hieu,
+        // 2026-11-14).
+        let result = self.game.result();
+        let status_el = if result.is_over() {
+            let color = crate::widgets::result_text_color(result);
+            text(status)
+                .size(FONT_BODY)
+                .style(move |_: &Theme| iced::widget::text::Style { color: Some(color) })
+        } else {
+            text(status).size(FONT_BODY)
+        };
+        col = col.push(status_el);
         // Advantage chip (best suggestion / ChessDB score, Red perspective).
         if let Some(score) = self.score_red() {
             col = col.push(
@@ -2229,14 +2506,21 @@ impl State {
             .spacing(SPACE_12),
         );
         col = col.push(
-            row![
-                secondary_button(i18n::t(Key::PracticeBackToSetup), Msg::BackToSetup)
-                    .width(Length::Fill),
-                secondary_button(i18n::t(Key::BackToMenu), Msg::Navigate(Screen::Home))
-                    .width(Length::Fill),
-            ]
-            .spacing(SPACE_12),
+            secondary_button(i18n::t(Key::PracticeBackToSetup), Msg::BackToSetup)
+                .width(Length::Fill),
         );
+        // Save the finished game (Hieu, 2026-11-14): one-shot, the
+        // button is replaced by a "Đã lưu" note once saved.
+        if self.game.result().is_over() {
+            if self.saved_this_game {
+                col = col.push(text(i18n::t(Key::GameSaved)).size(FONT_BODY));
+            } else {
+                col = col.push(
+                    secondary_button(i18n::t(Key::SaveGame), Msg::SaveFinishedGame)
+                        .width(Length::Fill),
+                );
+            }
+        }
         container(scrollable(col.width(Length::Fill)).width(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -2247,10 +2531,48 @@ impl State {
 
     /// Render the active phase.
     pub fn view(&self, shared: &Shared) -> Element<'_, Msg> {
+        if self.show_save_prompt {
+            let base = match self.phase {
+                PracticePhase::Setup => self.view_setup(),
+                PracticePhase::Playing => self.view_playing(shared),
+            };
+            return iced::widget::Stack::with_children([base, self.save_prompt_overlay()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        }
         match self.phase {
             PracticePhase::Setup => self.view_setup(),
             PracticePhase::Playing => self.view_playing(shared),
         }
+    }
+
+    /// Exit save prompt ("Lưu ván đang dở?"): save the unfinished
+    /// game and go to the menu, or go without saving. The two
+    /// buttons are intercepted by `App::update`.
+    fn save_prompt_overlay(&self) -> Element<'_, Msg> {
+        let card_el = container(
+            column![
+                text(i18n::t(Key::SaveUnfinishedTitle)).size(FONT_SCREEN_TITLE),
+                text(i18n::t(Key::SaveUnfinishedBody)).size(FONT_BODY),
+                row![
+                    primary_button(i18n::t(Key::SaveYes), Msg::SavePromptSave),
+                    secondary_button(i18n::t(Key::SaveNo), Msg::SavePromptDiscard),
+                ]
+                .spacing(12),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .width(Length::Fixed(340.0))
+        .style(crate::theme::card_container_style);
+        container(card_el)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(crate::theme::dim_background)
+            .into()
     }
 
     /// Map a runtime event to a Practice message: a file dropped onto
@@ -2543,6 +2865,51 @@ mod tests {
         board[85] = None;
         board[86] = Some(Piece::new(Color::Black, PieceKind::King));
         assert!(!editor_generals_face(&board));
+    }
+
+    #[test]
+    fn editor_click_refuses_third_horse_and_bad_advisor_square() {
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.editor_selected = Some(Piece::new(Color::Red, PieceKind::Horse));
+        // Two Red Horses are fine.
+        state.editor_click(0);
+        state.editor_click(1);
+        assert!(state.editor_error.is_none());
+        assert!(state.editor_board[0].is_some());
+        assert!(state.editor_board[1].is_some());
+        // A third Red Horse is refused: the square stays empty and
+        // the editor explains the max count.
+        state.editor_click(2);
+        assert!(state.editor_board[2].is_none());
+        assert!(state.editor_error.is_some());
+
+        // A Red Advisor on the palace centre's edge (file 4, rank 0)
+        // is not one of the 5 advisor points: refused.
+        state.editor_selected = Some(Piece::new(Color::Red, PieceKind::Advisor));
+        state.editor_click(4);
+        assert!(state.editor_board[4].is_none());
+        assert!(state.editor_error.is_some());
+        // The palace centre (file 4, rank 1, sq 13) is allowed.
+        state.editor_click(13);
+        assert!(state.editor_board[13].is_some());
+        assert!(state.editor_error.is_none());
+    }
+
+    #[test]
+    fn editor_click_refuses_pawn_behind_its_start() {
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        // A Red Pawn may never stand behind its starting rank
+        // (rank 0-2, e.g. sq 1 = file 1, rank 0).
+        state.editor_selected = Some(Piece::new(Color::Red, PieceKind::Pawn));
+        state.editor_click(1);
+        assert!(state.editor_board[1].is_none());
+        assert!(state.editor_error.is_some());
+        // On its starting rank (rank 3, sq 28) it is allowed.
+        state.editor_click(28);
+        assert!(state.editor_board[28].is_some());
+        assert!(state.editor_error.is_none());
     }
 
     #[test]
@@ -2876,5 +3243,56 @@ mod tests {
             assert!(contrast_ratio(piece_color, PIECE_BG) >= 4.5);
         }
         assert!(contrast_ratio(BLACK_PIECE, theme::SURFACE2) < 1.5);
+    }
+
+    #[test]
+    fn save_unfinished_and_load_restores_the_game() {
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        state.start_from(Position::startpos());
+        assert_eq!(state.phase(), PracticePhase::Playing);
+        state.play_move(Move::new(19, 22), &mut shared, false);
+        assert!(state.needs_save_prompt());
+        state.save_current_game(&mut shared, false);
+        assert!(!state.needs_save_prompt());
+        let saved = shared
+            .saved_games
+            .by_mode(crate::saved_games::SavedMode::Practice)
+            .into_iter()
+            .next()
+            .expect("practice game saved")
+            .clone();
+        assert_eq!(saved.moves.len(), 1);
+        assert!(!saved.finished);
+        // A fresh screen loads it: same move, same position.
+        let mut loaded = State::new(&shared);
+        loaded.load_saved(&saved, &mut shared);
+        assert_eq!(loaded.phase(), PracticePhase::Playing);
+        assert_eq!(loaded.game.moves.len(), 1);
+        assert_eq!(loaded.game.pos.to_fen(), state.game.pos.to_fen());
+    }
+
+    #[test]
+    fn load_saved_ignores_a_corrupt_entry() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        let bad = crate::saved_games::SavedGame {
+            id: "practice-bad".to_string(),
+            mode: crate::saved_games::SavedMode::Practice,
+            label: "bad".to_string(),
+            created_unix: 0,
+            finished: false,
+            start_fen: "not a fen".to_string(),
+            moves: vec!["h2e2".to_string()],
+            difficulty: 1,
+            human_red: None,
+            result: None,
+            lesson_id: None,
+            node_path: Vec::new(),
+            percent: None,
+        };
+        state.load_saved(&bad, &mut shared);
+        assert_eq!(state.phase(), PracticePhase::Setup);
     }
 }

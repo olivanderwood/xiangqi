@@ -109,6 +109,11 @@ impl Game {
         self.pos.unmake_move(m, u);
         self.hashes.pop();
         self.checks.pop();
+        // Undo also reverses a resignation / agreed draw: taking a
+        // move back reopens the game (Hieu, 2026-11-14 — a finished
+        // game loaded from the history must still allow undo).
+        self.resigned = None;
+        self.agreed_draw = false;
         Some(m)
     }
 

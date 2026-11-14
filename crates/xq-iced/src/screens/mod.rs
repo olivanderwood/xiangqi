@@ -17,6 +17,7 @@
 //! }
 //! ```
 
+pub mod history;
 pub mod home;
 pub mod learn;
 pub mod learn_select;

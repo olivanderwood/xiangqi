@@ -1,5 +1,5 @@
 //! The Xiangqi board: geometry, piece drawing, suggestion arrows,
-//! drag-and-drop and the 150 ms slide animation.
+//! drag-and-drop and the 300 ms slide animation.
 //!
 //! Ported from the spike (`~/workspace/iced-spike/src/main.rs`:
 //! `Geom` ~648, `draw_piece` ~695, `draw_arrow` ~725,
@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (150 ms) must finish BEFORE the AI,
+//! A move's slide animation (300 ms) must finish BEFORE the AI,
 //! grading, hint or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //!
@@ -56,8 +56,12 @@ use crate::theme::{
 /// (same convention as `xq-core`).
 pub type Square = u8;
 
-/// How long a piece takes to slide to its destination (egui app §7.3).
-pub const ANIM_DURATION: Duration = Duration::from_millis(150);
+/// How long a piece takes to slide to its destination (egui app
+/// §7.3). 300 ms (Hieu, 2026-11-14): long enough to see the piece travel (150 ms was
+/// a flick the eye barely registered, Hieu 2026-11-14), short
+/// enough that the AI / grading work waiting for the landing never
+/// feels delayed.
+pub const ANIM_DURATION: Duration = Duration::from_millis(300);
 
 /// Default arrow opacity; the hovered arrow is drawn at full opacity
 /// (DESIGN-iced.md §1). Hieu (2026-11-13) found the design's 38%
@@ -176,7 +180,7 @@ impl Geom {
 // Animation
 // ---------------------------------------------------------------------------
 
-/// One sliding piece: from → to over [`ANIM_DURATION`] (150 ms).
+/// One sliding piece: from → to over [`ANIM_DURATION`] (300 ms).
 #[derive(Clone, Copy, Debug)]
 pub struct Anim {
     /// Source square.

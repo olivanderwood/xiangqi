@@ -69,6 +69,84 @@ fn advisor_ok(color: Color, s: u8) -> bool {
     }
 }
 
+/// Maximum pieces of one kind a side may have on the board (a legal
+/// Xiangqi position can never hold more).
+#[must_use]
+pub fn max_count(kind: PieceKind) -> u8 {
+    match kind {
+        PieceKind::King => 1,
+        PieceKind::Advisor
+        | PieceKind::Elephant
+        | PieceKind::Horse
+        | PieceKind::Rook
+        | PieceKind::Cannon => 2,
+        PieceKind::Pawn => 5,
+    }
+}
+
+/// Whether a piece of this kind and colour may stand on square `s`,
+/// ignoring the other pieces: a General in the palace, an Advisor
+/// on one of the palace's 5 points (4 corners + centre), an
+/// Elephant on its own half on an even file, a Pawn never behind
+/// its starting rank; Horse, Rook and Cannon may stand anywhere.
+#[must_use]
+pub fn square_ok_for(kind: PieceKind, color: Color, s: u8) -> bool {
+    match kind {
+        PieceKind::King => in_palace(color, s),
+        PieceKind::Advisor => advisor_ok(color, s),
+        PieceKind::Elephant => elephant_ok(color, s),
+        PieceKind::Pawn => match color {
+            Color::Red => rank_of(s) >= 3,
+            Color::Black => rank_of(s) <= 6,
+        },
+        PieceKind::Horse | PieceKind::Rook | PieceKind::Cannon => true,
+    }
+}
+
+/// Why a setup board is not a legal position (editor / recognition).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupError {
+    /// One side holds more than [`max_count`] pieces of this kind.
+    TooMany { kind: PieceKind, color: Color },
+    /// This piece stands on a square its kind may never occupy.
+    BadSquare {
+        kind: PieceKind,
+        color: Color,
+        sq: u8,
+    },
+}
+
+/// Validate a setup board (editor / photo recognition): every piece
+/// on a legal square ([`square_ok_for`]) and no side over the max
+/// count of any kind ([`max_count`]). Unlike [`Position::from_fen`],
+/// a missing General is allowed — the board may be mid-setup — and
+/// the two Generals facing each other is NOT checked here (the
+/// editor checks that separately, since it needs both Generals
+/// present). Returns the first problem found.
+pub fn validate_setup(board: &[Option<Piece>; 90]) -> Result<(), SetupError> {
+    let mut counts = [[0u8; 7]; 2];
+    for (i, slot) in board.iter().enumerate() {
+        let Some(piece) = slot else { continue };
+        if !square_ok_for(piece.kind, piece.color, i as u8) {
+            return Err(SetupError::BadSquare {
+                kind: piece.kind,
+                color: piece.color,
+                sq: i as u8,
+            });
+        }
+        let c = piece.color.index();
+        let k = piece.kind as usize;
+        counts[c][k] += 1;
+        if counts[c][k] > max_count(piece.kind) {
+            return Err(SetupError::TooMany {
+                kind: piece.kind,
+                color: piece.color,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn piece_from_fen_char(c: char) -> Option<Piece> {
     let (color, kind) = match c {
         'K' => (Color::Red, PieceKind::King),
@@ -230,6 +308,16 @@ impl Position {
     #[must_use]
     pub fn piece_at(&self, s: u8) -> Option<Piece> {
         self.board[s as usize]
+    }
+
+    /// Validate this position as a setup (editor / FEN input): every
+    /// piece on a legal square and no side over the max count of any
+    /// kind. [`Position::from_fen`] already guarantees the squares
+    /// and exactly one General per side, so this adds the count
+    /// check that `from_fen` deliberately skips (puzzles can be
+    /// non-standard there — the editor is stricter).
+    pub fn validate_setup(&self) -> Result<(), SetupError> {
+        validate_setup(&self.board)
     }
 
     #[must_use]

@@ -200,3 +200,118 @@ fn pawn_attacks_forward_not_diagonal() {
     let pos = Position::from_fen("4k4/9/9/9/9/4P4/9/9/9/3K5 b - - 0 1").unwrap();
     assert!(!pos.is_attacked(sq(5, 4), xq_core::Color::Red));
 }
+
+#[test]
+fn setup_validation_max_counts() {
+    use xq_core::board::{max_count, validate_setup, SetupError};
+    use xq_core::types::{Color, Piece, PieceKind};
+
+    assert_eq!(max_count(PieceKind::King), 1);
+    assert_eq!(max_count(PieceKind::Advisor), 2);
+    assert_eq!(max_count(PieceKind::Elephant), 2);
+    assert_eq!(max_count(PieceKind::Horse), 2);
+    assert_eq!(max_count(PieceKind::Rook), 2);
+    assert_eq!(max_count(PieceKind::Cannon), 2);
+    assert_eq!(max_count(PieceKind::Pawn), 5);
+
+    // 3 Red Horses is over the max of 2.
+    let mut board: [Option<Piece>; 90] = [None; 90];
+    board[sq(0, 0) as usize] = Some(Piece::new(Color::Red, PieceKind::Horse));
+    board[sq(1, 0) as usize] = Some(Piece::new(Color::Red, PieceKind::Horse));
+    board[sq(2, 0) as usize] = Some(Piece::new(Color::Red, PieceKind::Horse));
+    assert_eq!(
+        validate_setup(&board),
+        Err(SetupError::TooMany {
+            kind: PieceKind::Horse,
+            color: Color::Red
+        })
+    );
+
+    // 2 Horses is fine, and a missing General is allowed mid-setup.
+    board[sq(2, 0) as usize] = None;
+    assert_eq!(validate_setup(&board), Ok(()));
+
+    // 6 Red Pawns is over the max of 5.
+    let mut board: [Option<Piece>; 90] = [None; 90];
+    for f in 0..6 {
+        board[sq(f, 3) as usize] = Some(Piece::new(Color::Red, PieceKind::Pawn));
+    }
+    assert_eq!(
+        validate_setup(&board),
+        Err(SetupError::TooMany {
+            kind: PieceKind::Pawn,
+            color: Color::Red
+        })
+    );
+}
+
+#[test]
+fn setup_validation_piece_squares() {
+    use xq_core::board::{square_ok_for, validate_setup, SetupError};
+    use xq_core::types::{Color, Piece, PieceKind};
+
+    // Advisor: only the 5 palace points (4 corners + centre).
+    assert!(square_ok_for(PieceKind::Advisor, Color::Red, sq(4, 1)));
+    assert!(square_ok_for(PieceKind::Advisor, Color::Red, sq(3, 0)));
+    assert!(!square_ok_for(PieceKind::Advisor, Color::Red, sq(4, 0)));
+    assert!(!square_ok_for(PieceKind::Advisor, Color::Red, sq(3, 3)));
+    assert!(square_ok_for(PieceKind::Advisor, Color::Black, sq(4, 8)));
+    assert!(!square_ok_for(PieceKind::Advisor, Color::Black, sq(4, 9)));
+
+    // Elephant: own half, even file only.
+    assert!(square_ok_for(PieceKind::Elephant, Color::Red, sq(2, 4)));
+    assert!(!square_ok_for(PieceKind::Elephant, Color::Red, sq(3, 4)));
+    assert!(!square_ok_for(PieceKind::Elephant, Color::Red, sq(2, 5)));
+    assert!(square_ok_for(PieceKind::Elephant, Color::Black, sq(6, 9)));
+    assert!(!square_ok_for(PieceKind::Elephant, Color::Black, sq(6, 4)));
+
+    // General: inside the palace only.
+    assert!(square_ok_for(PieceKind::King, Color::Red, sq(4, 2)));
+    assert!(!square_ok_for(PieceKind::King, Color::Red, sq(4, 3)));
+    assert!(!square_ok_for(PieceKind::King, Color::Red, sq(2, 1)));
+    assert!(square_ok_for(PieceKind::King, Color::Black, sq(3, 9)));
+    assert!(!square_ok_for(PieceKind::King, Color::Black, sq(3, 6)));
+
+    // Pawn: never behind its starting rank.
+    assert!(square_ok_for(PieceKind::Pawn, Color::Red, sq(0, 3)));
+    assert!(square_ok_for(PieceKind::Pawn, Color::Red, sq(0, 9)));
+    assert!(!square_ok_for(PieceKind::Pawn, Color::Red, sq(0, 2)));
+    assert!(square_ok_for(PieceKind::Pawn, Color::Black, sq(0, 6)));
+    assert!(square_ok_for(PieceKind::Pawn, Color::Black, sq(0, 0)));
+    assert!(!square_ok_for(PieceKind::Pawn, Color::Black, sq(0, 7)));
+
+    // Horse / Rook / Cannon: any square.
+    assert!(square_ok_for(PieceKind::Horse, Color::Red, sq(0, 0)));
+    assert!(square_ok_for(PieceKind::Rook, Color::Black, sq(8, 9)));
+    assert!(square_ok_for(PieceKind::Cannon, Color::Red, sq(4, 4)));
+
+    // A Red Advisor outside the palace is rejected with its square.
+    let mut board: [Option<Piece>; 90] = [None; 90];
+    board[sq(4, 0) as usize] = Some(Piece::new(Color::Red, PieceKind::Advisor));
+    assert_eq!(
+        validate_setup(&board),
+        Err(SetupError::BadSquare {
+            kind: PieceKind::Advisor,
+            color: Color::Red,
+            sq: sq(4, 0),
+        })
+    );
+}
+
+#[test]
+fn undo_after_resign_reopens_the_game() {
+    // A finished game loaded from the history must still allow undo
+    // (Hieu, 2026-11-14): taking a move back clears the resignation
+    // so the game is ongoing again.
+    use xq_core::game::{Game, GameResult};
+    use xq_core::notation::parse_iccs;
+    use xq_core::types::Color;
+    let mut game = Game::new(Position::startpos());
+    game.play(parse_iccs("h2e2").unwrap()).unwrap();
+    game.play(parse_iccs("h7e7").unwrap()).unwrap();
+    game.resign(Color::Red);
+    assert!(matches!(game.result(), GameResult::BlackWins(_)));
+    assert!(game.undo().is_some());
+    assert_eq!(game.result(), GameResult::Ongoing);
+    assert_eq!(game.moves.len(), 1);
+}

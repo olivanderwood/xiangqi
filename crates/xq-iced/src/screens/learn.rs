@@ -11,7 +11,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (150 ms) must finish BEFORE the grading,
+//! A move's slide animation (300 ms) must finish BEFORE the grading,
 //! hint refresh or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //! `update()` only triggers that work when
@@ -84,7 +84,7 @@ const OPPONENT_DELAY: Duration = Duration::from_millis(600);
 /// UI thread on the engine lock — defer to the next tick instead).
 const ENGINE_BUSY_RETRY: Duration = Duration::from_millis(100);
 /// How often the animation / opponent timer ticks.
-/// Animation / check-halo tick: 16 ms (~60 fps) so a 150 ms slide
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 300 ms slide
 /// redraws about 9 times instead of 3 — the 50 ms tick made the
 /// slide visibly choppy. Same interval as Practice.
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -294,6 +294,12 @@ pub enum Msg {
     OpponentAiMove { req_id: u64, mv: Move },
     /// A worker response this screen does not need.
     Ignored,
+    /// Exit save prompt: save the lesson progress, then go to the
+    /// menu (intercepted by `App::update`, which resets Learn).
+    SavePromptSave,
+    /// Exit save prompt: go to the menu without saving (intercepted
+    /// by `App::update`, which resets Learn).
+    SavePromptDiscard,
 }
 
 /// Learn screen state. Mirrors the egui `LearnState`
@@ -360,6 +366,12 @@ pub struct State {
     /// (egui `LearnState::flipped`).
     flipped: bool,
     started: bool,
+    /// The exit save prompt is open (leaving for the menu with an
+    /// unfinished lesson — Hieu, 2026-11-14).
+    show_save_prompt: bool,
+    /// The current lesson's progress was already saved, so the
+    /// prompt is not offered again for it.
+    saved_this_lesson: bool,
     /// ChessDB panel (`show_win_rate = false`: only the score chip +
     /// best move in Learn — Hieu, 2026-11-12).
     chessdb: ChessDbPanel,
@@ -417,6 +429,8 @@ impl State {
             last_move: None,
             flipped: false,
             started: false,
+            show_save_prompt: false,
+            saved_this_lesson: false,
             chessdb: ChessDbPanel::new(false, "chessdb-learn"),
             ai_tx: tx,
             ai_rx: Arc::new(Mutex::new(rx)),
@@ -439,6 +453,190 @@ impl State {
             return;
         };
         self.start_lesson(lesson);
+    }
+
+    // ------------------------------------------------------------------
+    // Saved lesson progress (Hieu, 2026-11-14)
+    // ------------------------------------------------------------------
+
+    /// % learned, same fraction as the panel's progress bar:
+    /// moves played / (moves played + main-branch moves left).
+    #[must_use]
+    pub fn progress_percent(&self) -> u8 {
+        let total = self.game.moves.len() + self.main_branch_remaining();
+        self.game
+            .moves
+            .len()
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(total))
+            .map(|p| p as u8)
+            .unwrap_or(0)
+    }
+
+    /// Whether the lesson is complete (100%): a finished lesson
+    /// needs no saved entry.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete.is_some()
+            || self
+                .tutor
+                .as_ref()
+                .map(|t| t.is_complete())
+                .unwrap_or(false)
+    }
+
+    /// Whether leaving for the menu should ask to save first: a
+    /// lesson is started, unfinished, has moves played, and has not
+    /// been saved already.
+    #[must_use]
+    pub fn needs_save_prompt(&self) -> bool {
+        self.started
+            && self.lesson.is_some()
+            && !self.is_complete()
+            && !self.game.moves.is_empty()
+            && !self.saved_this_lesson
+    }
+
+    /// Open the exit save prompt (called by the App instead of
+    /// navigating away when `needs_save_prompt`).
+    pub fn show_save_prompt(&mut self) {
+        self.show_save_prompt = true;
+    }
+
+    /// Save the current lesson progress into the shared store (and
+    /// to disk). One entry per lesson: saving again replaces the
+    /// old one. Marks the lesson saved so the prompt is not offered
+    /// again for it.
+    pub fn save_progress(&mut self, shared: &mut Shared) {
+        let Some(lesson) = &self.lesson else {
+            return;
+        };
+        let entry = crate::saved_games::SavedGame {
+            id: crate::saved_games::SavedGame::new_id(crate::saved_games::SavedMode::Learn),
+            mode: crate::saved_games::SavedMode::Learn,
+            label: format!("{} — {}% đã học", lesson.name_vi, self.progress_percent()),
+            created_unix: crate::saved_games::SavedGame::now_unix(),
+            finished: false,
+            start_fen: self.game.start.to_fen(),
+            moves: self
+                .game
+                .moves
+                .iter()
+                .map(|m| xq_core::notation::iccs(*m))
+                .collect(),
+            difficulty: 0,
+            human_red: None,
+            result: None,
+            lesson_id: Some(lesson.id.clone()),
+            node_path: self.node_path.clone(),
+            percent: Some(self.progress_percent()),
+        };
+        // One entry per lesson: drop the old one first.
+        let old: Vec<String> = shared
+            .saved_games
+            .entries
+            .iter()
+            .filter(|e| {
+                e.mode == crate::saved_games::SavedMode::Learn
+                    && e.lesson_id.as_deref() == Some(lesson.id.as_str())
+            })
+            .map(|e| e.id.clone())
+            .collect();
+        for id in old {
+            shared.saved_games.remove(&id);
+        }
+        shared.saved_games.add(entry);
+        shared.saved_games.save();
+        self.saved_this_lesson = true;
+    }
+
+    /// Resume a saved lesson: start it fresh, then replay the saved
+    /// moves silently through the Tutor (learner moves via
+    /// `on_user_move`, opponent moves via the matching child index)
+    /// and the screen's own game, so the Tutor's node path, grades
+    /// and book-move count land back where they were. A corrupt
+    /// entry (unknown lesson, illegal move) leaves the lesson
+    /// freshly started.
+    pub fn resume_saved(&mut self, saved: &crate::saved_games::SavedGame, shared: &mut Shared) {
+        let Some(lesson_id) = saved.lesson_id.clone() else {
+            return;
+        };
+        let Some(lesson) = shared.book.by_id(&lesson_id).cloned() else {
+            return;
+        };
+        // Validate the whole move list first (scratch game): a
+        // corrupt entry must not leave a half-replayed lesson.
+        let start = lesson
+            .start_fen
+            .as_deref()
+            .and_then(|f| Position::from_fen(f).ok())
+            .unwrap_or_else(Position::startpos);
+        let mut scratch = Game::new(start);
+        let mut parsed = Vec::new();
+        for iccs in &saved.moves {
+            let Ok(mv) = xq_core::notation::parse_iccs(iccs) else {
+                return;
+            };
+            if scratch.play(mv).is_err() {
+                return;
+            }
+            parsed.push(mv);
+        }
+        let learner_is_red = lesson.learner == xq_book::schema::Learner::Red;
+        let learner_side = if learner_is_red {
+            SideColor::Red
+        } else {
+            SideColor::Black
+        };
+        self.start_lesson(lesson);
+        for mv in parsed {
+            let Some(tutor) = self.tutor.as_mut() else {
+                return;
+            };
+            if tutor.game.pos.side() == learner_side {
+                let _ = tutor.on_user_move(mv);
+            } else {
+                // Opponent move: find the child index whose book
+                // move matches, then play it.
+                let pos_before = tutor.game.pos.clone();
+                let children = tutor.current_children().to_vec();
+                let mut played = false;
+                for (idx, node) in children.iter().enumerate() {
+                    if let Ok(child_mv) = notation::parse_cn(&pos_before, &node.mv) {
+                        if child_mv == mv {
+                            let _ = tutor.play_opponent_move(idx);
+                            played = true;
+                            break;
+                        }
+                    }
+                }
+                if !played {
+                    // Not a book child: the saved line left the book
+                    // — play it in the game only.
+                    let _ = tutor.game.play(mv);
+                }
+            }
+            if self.game.play(mv).is_err() {
+                return;
+            }
+            self.sync_from_tutor();
+        }
+        // Clear anything the silent replay raised: no dialogs, no
+        // pending opponent move, no preview — the learner resumes
+        // from the board as it stands. If it is the opponent's turn,
+        // the opponent moves after the usual delay.
+        self.off_book_pending = false;
+        self.show_complete_dialog = false;
+        self.complete = None;
+        self.next_preview = None;
+        self.show_opponent_choice = false;
+        self.saved_this_lesson = false;
+        self.refresh_hints();
+        if self.game.pos.side() != learner_side && !self.is_complete() {
+            self.opponent_due = Some(Instant::now() + OPPONENT_DELAY);
+        } else {
+            self.opponent_due = None;
+        }
     }
 
     /// Take the summary built by "Dừng và tóm tắt" (if any) so the
@@ -665,13 +863,19 @@ impl State {
         self.request_chessdb();
     }
 
-    fn play_move_common(&mut self, mv: Move, shared: &Shared) {
+    /// Play a move (user, tutor or engine). `animate` says whether
+    /// the piece slides: a drag-and-drop passes `false` — the piece
+    /// already travelled under the user's cursor, so sliding it
+    /// back from its source square would look like a jump (Hieu,
+    /// 2026-11-14); a click, a hint or an opponent move passes
+    /// `true`.
+    fn play_move_common(&mut self, mv: Move, shared: &Shared, animate: bool) {
         let pos_before = self.game.pos.clone();
         if self.game.play(mv).is_err() {
             return;
         }
         self.last_move = Some(mv);
-        if shared.settings.animate {
+        if animate && shared.settings.animate {
             self.board.start_anim(mv.from, mv.to);
         } else {
             self.board.anim = None;
@@ -687,8 +891,10 @@ impl State {
     /// source of truth, including the bad-branch `Acceptable` rule);
     /// the screen plays the same move in its own game and syncs tree
     /// state from the Tutor. Off-book moves open the Retry /
-    /// Continue dialog.
-    fn play_user_move(&mut self, mv: Move, shared: &Shared) {
+    /// Continue dialog. `animate` is passed through to
+    /// [`Self::play_move_common`]: `false` for a drag-and-drop,
+    /// `true` for a click or a hint.
+    fn play_user_move(&mut self, mv: Move, shared: &Shared, animate: bool) {
         let pos_before = self.game.pos.clone();
         let in_book = self.children().iter().any(|n| {
             notation::parse_cn(&pos_before, &n.mv)
@@ -697,7 +903,7 @@ impl State {
         });
         let tutor_event = self.tutor.as_mut().map(|t| t.on_user_move(mv));
         // Play the same move in our own game (Tutor played it in its game).
-        self.play_move_common(mv, shared);
+        self.play_move_common(mv, shared, animate);
         self.sync_from_tutor();
         self.hint_ply = None;
         match tutor_event {
@@ -895,7 +1101,7 @@ impl State {
         if let Some(tutor) = &mut self.tutor {
             if let Some(TutorEvent::OpponentMoves { mv, note_vi }) = tutor.next_opponent_move() {
                 self.tutor_message = note_vi.unwrap_or_default();
-                self.play_move_common(mv, shared);
+                self.play_move_common(mv, shared, true);
                 self.sync_from_tutor();
                 self.after_opponent_move();
                 return;
@@ -920,7 +1126,7 @@ impl State {
                 if let Ok(mv) = notation::parse_cn(&self.game.pos, &node.mv) {
                     self.node_path.push(chosen);
                     self.tutor_message = node.note_vi.clone().unwrap_or_default();
-                    self.play_move_common(mv, shared);
+                    self.play_move_common(mv, shared, true);
                     self.after_opponent_move();
                     return;
                 }
@@ -947,7 +1153,7 @@ impl State {
         if let Some(tutor) = &mut self.tutor {
             if let Some(TutorEvent::OpponentMoves { mv, note_vi }) = tutor.play_opponent_move(idx) {
                 self.tutor_message = note_vi.unwrap_or_default();
-                self.play_move_common(mv, shared);
+                self.play_move_common(mv, shared, true);
                 self.sync_from_tutor();
                 self.after_opponent_move();
                 return;
@@ -960,7 +1166,7 @@ impl State {
                 if let Ok(mv) = notation::parse_cn(&self.game.pos, &node.mv) {
                     self.node_path.push(idx);
                     self.tutor_message = node.note_vi.clone().unwrap_or_default();
-                    self.play_move_common(mv, shared);
+                    self.play_move_common(mv, shared, true);
                     self.after_opponent_move();
                     return;
                 }
@@ -1160,7 +1366,10 @@ impl State {
 
     /// One click / drag on the board: select a friendly piece, or
     /// play the selected piece's move to a legal destination.
-    fn click_square(&mut self, sq: Square, shared: &Shared) {
+    /// `from_drag` is true when the square came from a drop: the
+    /// piece already travelled under the cursor, so it does not
+    /// slide again.
+    fn click_square(&mut self, sq: Square, shared: &Shared, from_drag: bool) {
         let pos = self.game.pos.clone();
         if let Some(sel) = self.selected {
             if sel != sq
@@ -1169,7 +1378,7 @@ impl State {
                     .iter()
                     .any(|m| m.from == sel && m.to == sq)
             {
-                self.play_user_move(Move::new(sel, sq), shared);
+                self.play_user_move(Move::new(sel, sq), shared, !from_drag);
                 return;
             }
         }
@@ -1189,11 +1398,11 @@ impl State {
         }
         match msg {
             BoardMsg::DragStarted(sq) | BoardMsg::SquareClicked(sq) => {
-                self.click_square(sq, shared);
+                self.click_square(sq, shared, false);
             }
             BoardMsg::DragEnded(p) => {
                 if let Some(sq) = self.square_at_drop(p) {
-                    self.click_square(sq, shared);
+                    self.click_square(sq, shared, true);
                 }
             }
             BoardMsg::DragMoved(_) | BoardMsg::HoverSquare(_) => {}
@@ -1208,6 +1417,14 @@ impl State {
     pub fn update(&mut self, msg: Msg, shared: &mut Shared) -> Task<Msg> {
         match msg {
             Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout | Msg::ContinueWithAi => {
+                Task::none()
+            }
+            // `SavePromptSave` / `SavePromptDiscard` are intercepted
+            // by `App::update` (they save, reset Learn and navigate),
+            // so they never reach here — but a direct send must not
+            // leave the prompt open.
+            Msg::SavePromptSave | Msg::SavePromptDiscard => {
+                self.show_save_prompt = false;
                 Task::none()
             }
             Msg::WindowResized(size) => {
@@ -1238,7 +1455,7 @@ impl State {
             }
             Msg::PlayHint(mv) => {
                 if self.can_input() {
-                    self.play_user_move(mv, shared);
+                    self.play_user_move(mv, shared, true);
                 }
                 self.settle(shared);
                 Task::none()
@@ -1301,7 +1518,7 @@ impl State {
             Msg::OpponentAiMove { req_id, mv } => {
                 if response_is_current(req_id, self.opponent_ai_req) {
                     self.opponent_ai_req = None;
-                    self.play_move_common(mv, shared);
+                    self.play_move_common(mv, shared, true);
                     if self.out_of_book {
                         self.plies_after_book += 1;
                     }
@@ -1423,6 +1640,29 @@ impl State {
         .into()
     }
 
+    /// Exit save prompt ("Lưu tiến trình học?"): save the lesson
+    /// progress and go to the menu, or go without saving. The two
+    /// buttons are intercepted by `App::update`. Rendered as a card
+    /// at the top of the panel (Iced 0.14 has no modal dialog).
+    fn save_prompt_card(&self) -> Element<'_, Msg> {
+        container(
+            column![
+                text(i18n::t(Key::SaveLessonTitle)).size(FONT_SCREEN_TITLE),
+                text(i18n::t(Key::SaveLessonBody)).size(FONT_BODY),
+                row![
+                    primary_button(i18n::t(Key::SaveYes), Msg::SavePromptSave),
+                    secondary_button(i18n::t(Key::SaveNo), Msg::SavePromptDiscard),
+                ]
+                .spacing(12),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .width(Length::Fill)
+        .style(crate::theme::card_container_style)
+        .into()
+    }
+
     /// The board canvas: selection ring, legal targets, last move,
     /// hint / opponent arrows, check halo, slide animation.
     fn board_view(&self, pos: &Position) -> Element<'_, Msg> {
@@ -1492,7 +1732,9 @@ impl State {
         let mut col = column![].spacing(SPACE_16).width(Length::Fill);
 
         // Lesson-complete / off-book dialogs (cards at the top).
-        if self.show_complete_dialog {
+        if self.show_save_prompt {
+            col = col.push(self.save_prompt_card());
+        } else if self.show_complete_dialog {
             if let Some(summary) = &self.complete {
                 col = col.push(self.complete_card(summary));
             }
@@ -2041,7 +2283,7 @@ mod tests {
         st.start(&lesson.id, true, &mut shared);
         assert!(!st.hints.is_empty(), "hints for the first learner turn");
         let mv = st.hints[0].mv;
-        st.play_user_move(mv, &shared);
+        st.play_user_move(mv, &shared, true);
         let data = st.build_summary(&mut shared).expect("summary");
         assert_eq!(data.rows.len(), 1);
         assert_eq!(data.book_moves, 1);
@@ -2050,5 +2292,65 @@ mod tests {
         assert_eq!(data.rows[0].grade, Grade::Book);
         assert!(data.rows[0].best.is_some());
         assert_eq!(data.positions.len(), 2);
+    }
+
+    #[test]
+    fn save_progress_and_resume_restores_the_lesson() {
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let lesson = shared
+            .book
+            .by_learner(SideColor::Red)
+            .into_iter()
+            .next()
+            .expect("a Red lesson")
+            .clone();
+        let mut st = State::new(&shared);
+        st.start(&lesson.id, true, &mut shared);
+        assert!(!st.hints.is_empty(), "hints for the first learner turn");
+        let mv = st.hints[0].mv;
+        st.play_user_move(mv, &shared, false);
+        assert!(st.needs_save_prompt(), "unfinished lesson asks to save");
+        let pct = st.progress_percent();
+        assert!(pct > 0, "a played move is progress");
+        st.save_progress(&mut shared);
+        assert!(!st.needs_save_prompt(), "saved once, no prompt again");
+        let saved = shared
+            .saved_games
+            .lesson_progress(&lesson.id)
+            .expect("progress saved")
+            .clone();
+        assert_eq!(saved.percent, Some(pct));
+        assert_eq!(saved.moves.len(), 1);
+        // A fresh screen resumes it: same move, same tree node.
+        let mut resumed = State::new(&shared);
+        resumed.resume_saved(&saved, &mut shared);
+        assert_eq!(resumed.game.moves.len(), 1);
+        assert_eq!(resumed.game.pos.to_fen(), st.game.pos.to_fen());
+        assert_eq!(resumed.node_path, st.node_path);
+        assert_eq!(resumed.progress_percent(), pct);
+    }
+
+    #[test]
+    fn resume_saved_ignores_an_unknown_lesson() {
+        let mut shared = Shared::new();
+        let mut st = State::new(&shared);
+        let bad = crate::saved_games::SavedGame {
+            id: "learn-bad".to_string(),
+            mode: crate::saved_games::SavedMode::Learn,
+            label: "bad".to_string(),
+            created_unix: 0,
+            finished: false,
+            start_fen: Position::startpos().to_fen(),
+            moves: vec!["h2e2".to_string()],
+            difficulty: 0,
+            human_red: None,
+            result: None,
+            lesson_id: Some("no-such-lesson".to_string()),
+            node_path: Vec::new(),
+            percent: Some(10),
+        };
+        st.resume_saved(&bad, &mut shared);
+        assert!(st.lesson.is_none(), "unknown lesson is not started");
     }
 }

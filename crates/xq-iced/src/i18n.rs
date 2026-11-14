@@ -215,6 +215,8 @@ pub enum Key {
     PracticeEditorHint,
     PracticeUsePosition,
     PracticeEditorInvalid,
+    PracticeEditorTooMany,
+    PracticeEditorBadSquare,
     PracticeSideToMove,
     PracticeClearBoard,
     PracticeEraser,
@@ -258,6 +260,26 @@ pub enum Key {
     AboutSoundNote,
     AboutChessDbNote,
     SettingsEngineApplyNote,
+    // --- Saved games / lesson progress (Hieu, 2026-11-14) ---
+    SaveGame,
+    GameSaved,
+    SaveUnfinishedTitle,
+    SaveUnfinishedBody,
+    SaveYes,
+    SaveNo,
+    ResumeGameTitle,
+    ResumeGameBody,
+    ResumeYes,
+    ResumeDelete,
+    GameHistoryTitle,
+    NoSavedGames,
+    SavedGamesTitle,
+    LoadGame,
+    DeleteGame,
+    MovesCount,
+    LearnProgressPercent,
+    SaveLessonTitle,
+    SaveLessonBody,
 }
 
 /// UI string for `key` in the current language (see `set_language`).
@@ -423,6 +445,8 @@ fn t_vi(key: Key) -> &'static str {
         Key::PracticeEditorHint => "Chọn một quân rồi bấm vào ô để đặt; bấm vào quân trên bàn để xóa.",
         Key::PracticeUsePosition => "Dùng thế cờ này",
         Key::PracticeEditorInvalid => "Thế cờ chưa hợp lệ: cần đủ 2 Tướng và 2 Tướng không được đối mặt.",
+        Key::PracticeEditorTooMany => "Một bên chỉ có tối đa {n} quân {name}.",
+        Key::PracticeEditorBadSquare => "Quân {name} không được đứng ở ô này.",
         Key::PracticeSideToMove => "Bên đi",
         Key::PracticeClearBoard => "Xóa bàn",
         Key::PracticeEraser => "Tẩy",
@@ -466,6 +490,26 @@ fn t_vi(key: Key) -> &'static str {
         Key::AboutSoundNote => "Âm thanh: tiếng đi / ăn / chiếu / chiếu hết được tổng hợp bằng code và phát khi bật âm thanh trong Cài đặt.",
         Key::AboutChessDbNote => "Điểm ChessDB: hệ thống chấm điểm riêng qua mạng (chessdb.cn); không có mạng thì hiện “không khả dụng”.",
         Key::SettingsEngineApplyNote => "Thay đổi threads / hash / đường dẫn có hiệu lực khi bấm “Thử lại Pikafish” (hoặc khởi động lại app).",
+        // --- Saved games / lesson progress (Hieu, 2026-11-14) ---
+        Key::SaveGame => "Lưu ván này",
+        Key::GameSaved => "Đã lưu",
+        Key::SaveUnfinishedTitle => "Lưu ván đang dở?",
+        Key::SaveUnfinishedBody => "Ván này chưa kết thúc. Lưu lại để chơi tiếp sau?",
+        Key::SaveYes => "Lưu",
+        Key::SaveNo => "Không lưu",
+        Key::ResumeGameTitle => "Tiếp tục ván dở",
+        Key::ResumeGameBody => "Có một ván đang dở ({n} nước). Tiếp tục chơi?",
+        Key::ResumeYes => "Tiếp tục",
+        Key::ResumeDelete => "Xoá ván dở",
+        Key::GameHistoryTitle => "Lịch sử đấu",
+        Key::NoSavedGames => "Chưa có ván nào được lưu.",
+        Key::SavedGamesTitle => "Ván cờ đã lưu",
+        Key::LoadGame => "Mở ván",
+        Key::DeleteGame => "Xoá",
+        Key::MovesCount => "{n} nước",
+        Key::LearnProgressPercent => "{n}% đã học",
+        Key::SaveLessonTitle => "Lưu tiến trình học?",
+        Key::SaveLessonBody => "Bài này chưa xong. Lưu lại để học tiếp sau?",
     }
 }
 
@@ -623,6 +667,8 @@ fn t_en(key: Key) -> &'static str {
         Key::PracticeEditorHint => "Pick a piece, then tap a square to place it; tap a piece on the board to remove it.",
         Key::PracticeUsePosition => "Use this position",
         Key::PracticeEditorInvalid => "Position not valid: both Generals are required and they must not face each other.",
+        Key::PracticeEditorTooMany => "One side may have at most {n} {name}.",
+        Key::PracticeEditorBadSquare => "A {name} may not stand on this square.",
         Key::PracticeSideToMove => "Side to move",
         Key::PracticeClearBoard => "Clear board",
         Key::PracticeEraser => "Eraser",
@@ -666,6 +712,26 @@ fn t_en(key: Key) -> &'static str {
         Key::AboutSoundNote => "Sound: move / capture / check / checkmate tones are synthesized in code and play when sound is on in Settings.",
         Key::AboutChessDbNote => "ChessDB score: a separate scoring system over the network (chessdb.cn); without a network it shows “unavailable”.",
         Key::SettingsEngineApplyNote => "Threads / hash / path changes apply when you press “Retry Pikafish” (or restart the app).",
+        // --- Saved games / lesson progress (Hieu, 2026-11-14) ---
+        Key::SaveGame => "Save this game",
+        Key::GameSaved => "Saved",
+        Key::SaveUnfinishedTitle => "Save the unfinished game?",
+        Key::SaveUnfinishedBody => "This game isn't over yet. Save it to continue later?",
+        Key::SaveYes => "Save",
+        Key::SaveNo => "Don't save",
+        Key::ResumeGameTitle => "Continue the unfinished game",
+        Key::ResumeGameBody => "There's an unfinished game ({n} moves). Continue?",
+        Key::ResumeYes => "Continue",
+        Key::ResumeDelete => "Delete the unfinished game",
+        Key::GameHistoryTitle => "Game history",
+        Key::NoSavedGames => "No saved games yet.",
+        Key::SavedGamesTitle => "Saved games",
+        Key::LoadGame => "Open game",
+        Key::DeleteGame => "Delete",
+        Key::MovesCount => "{n} moves",
+        Key::LearnProgressPercent => "{n}% learned",
+        Key::SaveLessonTitle => "Save your learning progress?",
+        Key::SaveLessonBody => "This lesson isn't finished yet. Save your progress to continue later?",
     }
 }
 
@@ -694,6 +760,33 @@ pub fn grade_label(grade: Grade) -> &'static str {
         Grade::Acceptable => t(Key::GradeAcceptable),
         Grade::Inaccurate => t(Key::GradeInaccurate),
         Grade::Blunder => t(Key::GradeBlunder),
+    }
+}
+
+/// Localised name of a piece kind in the current language (used in
+/// editor validation errors, e.g. "Một bên chỉ có tối đa 2 quân Mã.").
+#[must_use]
+pub fn piece_kind_name(kind: xq_core::PieceKind) -> &'static str {
+    use xq_core::PieceKind::*;
+    match language() {
+        Language::Vietnamese => match kind {
+            King => "Tướng",
+            Advisor => "Sĩ",
+            Elephant => "Tượng",
+            Horse => "Mã",
+            Rook => "Xe",
+            Cannon => "Pháo",
+            Pawn => "Tốt",
+        },
+        Language::English => match kind {
+            King => "General",
+            Advisor => "Advisor",
+            Elephant => "Elephant",
+            Horse => "Horse",
+            Rook => "Rook",
+            Cannon => "Cannon",
+            Pawn => "Pawn",
+        },
     }
 }
 

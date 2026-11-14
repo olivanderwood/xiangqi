@@ -22,6 +22,7 @@ mod engine_manager;
 mod helpers;
 mod i18n;
 mod icons;
+mod saved_games;
 mod screens;
 mod settings;
 mod sound;

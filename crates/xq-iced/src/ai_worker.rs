@@ -454,11 +454,22 @@ impl AiWorker {
                     }
                 }
                 // Drain queued requests, keeping only the latest; a Stop
-                // queued between searches still takes effect.
+                // queued between searches still takes effect. A BestMove
+                // is the AI's move, not best-effort work: it must be
+                // answered or the game stalls on "máy đang nghĩ"
+                // (Hieu, 2026-11-14), so a later hint/grade never
+                // drops it — only a newer BestMove replaces one.
                 while let Ok(q) = req_rx.try_recv() {
                     match q {
                         AiRequest::Stop => stop_for_thread.stop(),
-                        other => pending = Some(other),
+                        other => {
+                            let pending_is_best =
+                                matches!(pending, Some(AiRequest::BestMove { .. }));
+                            let new_is_best = matches!(other, AiRequest::BestMove { .. });
+                            if !pending_is_best || new_is_best {
+                                pending = Some(other);
+                            }
+                        }
                     }
                 }
             }
@@ -912,5 +923,133 @@ mod tests {
         assert_eq!(got, vec![id1, id3], "req giữa phải bị bỏ, chỉ còn mới nhất");
         assert!(!response_is_current(id2, Some(id3)));
         assert!(response_is_current(id3, Some(id3)));
+    }
+
+    #[test]
+    fn best_move_is_not_dropped_by_a_later_grade() {
+        // The "máy đang nghĩ" hang (Hieu, 2026-11-14): a BestMove
+        // queued behind a running search used to be dropped when a
+        // later hint/grade arrived, leaving `ai_thinking` true
+        // forever. A BestMove must survive the drain — only a newer
+        // BestMove replaces one.
+        let mut w = mock_worker(FailMode::Slow);
+        let id1 = w.alloc_req_id();
+        let id2 = w.alloc_req_id();
+        let id3 = w.alloc_req_id();
+        // req 1 is slow (2 s); req 2 (BestMove) and req 3 (grade)
+        // queue behind it.
+        w.tx.send(AiRequest::BestMove {
+            req: startpos_req(SearchLimits::depth(1)),
+            req_id: id1,
+        })
+        .unwrap();
+        w.tx.send(AiRequest::BestMove {
+            req: startpos_req(SearchLimits::depth(1)),
+            req_id: id2,
+        })
+        .unwrap();
+        let mv = xq_core::notation::parse_iccs("h2e2").expect("h2e2");
+        w.tx.send(AiRequest::GradeMove {
+            start_fen: Position::startpos().to_fen(),
+            moves: Vec::new(),
+            mv,
+            req_id: id3,
+        })
+        .unwrap();
+        // Both BestMoves must be answered; the grade is dropped.
+        let mut got = Vec::new();
+        let mut graded = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while got.len() < 2 {
+            match w.rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(AiResponse::BestMove { req_id, mv, .. }) => {
+                    assert!(Position::startpos().legal_moves().contains(&mv));
+                    got.push(req_id);
+                }
+                Ok(AiResponse::Graded { .. }) => graded = true,
+                Ok(_) => {}
+                Err(_) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "worker không trả đủ 2 BestMove trong 10 s (đã có {got:?})"
+                    );
+                }
+            }
+        }
+        assert_eq!(got, vec![id1, id2], "grade sau không được bỏ BestMove");
+        assert!(!graded, "grade phải bị bỏ, BestMove được giữ");
+    }
+
+    /// Timing probe for the Play-vs-AI "máy đang nghĩ" hang (Hieu,
+    /// 2026-11-14). Ignored by default: it needs the real Pikafish
+    /// binary (`engine/`) and takes ~10 s. Run with
+    /// `cargo test -p xq-iced -- --ignored ai_timing --nocapture`
+    /// and read the printed timings: a BestMove at Medium limits
+    /// must arrive in ~1 s, a second one just as fast, and one
+    /// queued behind a grade in ~2.5 s. Anything far slower (or a
+    /// timeout) means the worker/engine path — not the UI — is the
+    /// bottleneck.
+    #[test]
+    #[ignore]
+    fn ai_timing_real_pikafish() {
+        use std::time::Instant;
+        use xq_engine::Level;
+        let located = match xq_pikafish::locate(None) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("ai_timing: Pikafish not found ({e}), skipping");
+                return;
+            }
+        };
+        let mut options = xq_pikafish::EngineOptions::new(located.nnue.clone());
+        options.threads = 1;
+        options.hash_mb = 64;
+        let mut engine = match xq_pikafish::PikafishEngine::spawn(located, options) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("ai_timing: Pikafish did not spawn ({e}), skipping");
+                return;
+            }
+        };
+        eprintln!("ai_timing: engine {}", engine.name());
+        let _ = engine.set_level(Level::Medium);
+        let w = AiWorker::new(xq_engine::shared_engine(Box::new(engine)));
+        let medium = SearchLimits {
+            max_depth: Some(6),
+            max_time_ms: Some(1000),
+            max_nodes: None,
+        };
+        let time_best_move = |w: &AiWorker, req: EngineRequest, req_id: u64, secs: u64| {
+            let start = Instant::now();
+            w.tx.send(AiRequest::BestMove { req, req_id }).unwrap();
+            let resp = wait_best_move(w, secs);
+            eprintln!("ai_timing: BestMove req {req_id} in {:?}", start.elapsed());
+            resp
+        };
+        // 1) First AI move from the start position.
+        let _ = time_best_move(&w, startpos_req(medium), 1, 30);
+        // 2) Second AI move after a human move (h2e2).
+        let mv = xq_core::notation::parse_iccs("h2e2").expect("h2e2");
+        let req = EngineRequest::new(Position::startpos().to_fen(), vec![mv], medium);
+        let _ = time_best_move(&w, req, 2, 30);
+        // 3) A grade (1.5 s) queued ahead of an AI move.
+        let start = Instant::now();
+        w.tx.send(AiRequest::GradeMove {
+            start_fen: Position::startpos().to_fen(),
+            moves: Vec::new(),
+            mv,
+            req_id: 3,
+        })
+        .unwrap();
+        w.tx.send(AiRequest::BestMove {
+            req: startpos_req(medium),
+            req_id: 4,
+        })
+        .unwrap();
+        let _ = wait_best_move(&w, 30);
+        eprintln!(
+            "ai_timing: grade + BestMove in {:?} (grade ~1.5 s, move ~1 s)",
+            start.elapsed()
+        );
     }
 }

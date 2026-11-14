@@ -3,14 +3,14 @@
 //! feature is kept, no feature is added: the start dialog (side +
 //! 5 difficulty levels, level 4 stays "Tùy chỉnh" with the custom
 //! Elo from Settings), Pikafish over UCI with the builtin fallback,
-//! the AI worker, the 150 ms slide, the move list with review, the
+//! the AI worker, the 300 ms slide, the move list with review, the
 //! eval bar + advantage chip, the ChessDB section, Undo / Hint /
 //! Draw / Resign / New game, and the move / capture / check /
 //! checkmate sounds.
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (150 ms) must finish BEFORE the AI,
+//! A move's slide animation (300 ms) must finish BEFORE the AI,
 //! grading, hint or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). Enforced here:
 //!
@@ -64,6 +64,7 @@ use crate::chessdb_worker::ChessDbResponse;
 use crate::helpers::{move_strings, position_at, render_move};
 use crate::i18n::{self, difficulty_name, Key};
 use crate::icons::Icon;
+use crate::saved_games::{SavedGame, SavedMode};
 use crate::settings::Settings;
 use crate::sound::sound_for_move;
 use crate::theme::{
@@ -84,7 +85,7 @@ fn new_seed() -> u64 {
         .unwrap_or(0x9E37_79B9_7F4A_7C15)
 }
 
-/// Animation / check-halo tick: 16 ms (~60 fps) so a 150 ms slide
+/// Animation / check-halo tick: 16 ms (~60 fps) so a 300 ms slide
 /// redraws about 9 times instead of 3 — the 50 ms tick made the
 /// slide visibly choppy. Same interval as Practice.
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -309,6 +310,14 @@ pub struct State {
     hovered_hint: Option<usize>,
     review: Option<usize>,
     result_ack: bool,
+    /// The exit save prompt is open (back to menu with a game in
+    /// progress — Hieu, 2026-11-14): "Lưu ván đang dở?" with Lưu /
+    /// Không lưu. Shown instead of navigating away.
+    show_save_prompt: bool,
+    /// The current game was already saved (finished via the result
+    /// dialog, or unfinished via the exit prompt), so the save
+    /// button / prompt is not offered again for it.
+    saved_this_game: bool,
     draw_message: Option<String>,
     check_since: Option<Instant>,
     last_grade: Option<(Grade, String)>,
@@ -391,6 +400,23 @@ pub enum Msg {
     ResultReview,
     /// Result dialog: close.
     ResultClose,
+    /// Result dialog: save the finished game to the history
+    /// (Hieu, 2026-11-14). One-shot per game.
+    SaveFinishedGame,
+    /// Exit save prompt: save the unfinished game, then go to the
+    /// menu (intercepted by `App::update`, which resets Play).
+    SavePromptSave,
+    /// Exit save prompt: go to the menu without saving (intercepted
+    /// by `App::update`, which resets Play).
+    SavePromptDiscard,
+    /// Start dialog: resume the unfinished saved game.
+    ResumeSaved,
+    /// Start dialog: delete the unfinished saved game (so the
+    /// resume row goes away).
+    DeleteSavedGame,
+    /// Start dialog: open the game history ("Lịch sử đấu",
+    /// intercepted by `App::update`).
+    OpenHistory,
 }
 
 impl State {
@@ -456,6 +482,8 @@ impl State {
             hovered_hint: None,
             review: None,
             result_ack: true,
+            show_save_prompt: false,
+            saved_this_game: false,
             draw_message: None,
             check_since: None,
             last_grade: None,
@@ -569,7 +597,7 @@ impl State {
             Msg::PlayHint(n) => {
                 if let Some(line) = self.hint_lines.get(n) {
                     let mv = line.mv;
-                    self.play_move(mv, shared);
+                    self.play_move(mv, shared, true);
                 }
                 Task::none()
             }
@@ -618,15 +646,51 @@ impl State {
                 self.result_ack = true;
                 Task::none()
             }
+            Msg::SaveFinishedGame => {
+                if self.game.result().is_over() && !self.saved_this_game {
+                    self.save_current_game(shared, true);
+                }
+                Task::none()
+            }
+            // `SavePromptSave` / `SavePromptDiscard` are intercepted
+            // by `App::update` (they save, reset Play and navigate),
+            // so they never reach here — but a direct send must not
+            // silently drop the prompt.
+            Msg::SavePromptSave | Msg::SavePromptDiscard => {
+                self.show_save_prompt = false;
+                Task::none()
+            }
+            Msg::ResumeSaved => {
+                if let Some(saved) = shared.saved_games.unfinished_play().cloned() {
+                    self.resume_saved(&saved, shared);
+                }
+                Task::none()
+            }
+            Msg::DeleteSavedGame => {
+                if let Some(saved) = shared.saved_games.unfinished_play() {
+                    let id = saved.id.clone();
+                    shared.saved_games.remove(&id);
+                    shared.saved_games.save();
+                }
+                Task::none()
+            }
+            // `OpenHistory` is intercepted by `App::update`.
+            Msg::OpenHistory => Task::none(),
         }
     }
 
     /// Iced `view`: header + (eval bar, board, panel), plus the
-    /// start / result dialog overlay when one is open.
+    /// start / result / save-prompt dialog overlay when one is open.
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let base = self.view_base(shared);
+        if self.show_save_prompt {
+            return Stack::with_children([base, self.save_prompt_overlay()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        }
         if self.show_start_dialog {
-            return Stack::with_children([base, self.start_dialog_overlay()])
+            return Stack::with_children([base, self.start_dialog_overlay(shared)])
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into();
@@ -641,8 +705,9 @@ impl State {
     }
 
     /// Iced `subscription`: the AI bridge and the ChessDB bridge
-    /// always run; the tick only runs while a piece is sliding or
-    /// the check halo is flashing. (The engine-install bridge
+    /// always run; the tick only runs while a piece is sliding, the
+    /// check halo is flashing, or the AI still owes a move (see
+    /// [`Self::ai_move_pending`]). (The engine-install bridge
     /// lives on `App`, not here — `App` forwards its outcome as
     /// `Msg::EngineInstalled` / `Msg::EngineUnavailable`.)
     pub fn subscription(&self) -> Subscription<Msg> {
@@ -651,7 +716,7 @@ impl State {
             self.chessdb.subscription().map(chessdb_bridge_msg),
             iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
-        if self.board.is_animating() || self.check_flash_active() {
+        if self.board.is_animating() || self.check_flash_active() || self.ai_move_pending() {
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
@@ -713,6 +778,27 @@ impl State {
             .is_some_and(|s| s.elapsed() < Duration::from_secs(1))
     }
 
+    /// The AI still owes a move: a game is running, it is the AI's
+    /// turn, and no AI request is in flight yet. The tick must keep
+    /// running while this is true, because [`Self::maybe_trigger_ai`]
+    /// returns early when the engine is busy (a grade or a hint
+    /// search holds the lock) and the retry happens on the next tick
+    /// — Learn already keeps its tick alive this way (`opponent_due`,
+    /// `ENGINE_BUSY_RETRY`), but Play only ticked while a piece was
+    /// sliding or the check halo flashed, so a busy engine at the
+    /// moment the slide/flash ended left the game stuck on the AI's
+    /// turn with no tick left to retry (Hieu, 2026-11-14: "máy đang
+    /// nghĩ" quá lâu). Once the request is sent (`ai_thinking`) this
+    /// is false and the tick stops — the answer arrives through the
+    /// AI bridge, not the tick.
+    fn ai_move_pending(&self) -> bool {
+        self.started
+            && !self.ai_thinking
+            && self.review.is_none()
+            && self.game.result() == GameResult::Ongoing
+            && matches!(self.opponent, VsOpponent::Ai { human, .. } if self.game.pos.side() != human)
+    }
+
     /// Check-halo pulse 0..1 (~2 Hz while flashing, 0.5 otherwise).
     fn check_pulse(&self) -> f32 {
         match self.check_since {
@@ -744,8 +830,12 @@ impl State {
     /// Play a move: history, animation, hints cleared, check flash
     /// armed, sound played (egui `VsAiState::play`). The grade is
     /// only recorded, never computed here — the worker grades it
-    /// after the piece lands.
-    fn play(&mut self, mv: Move, shared: &Shared) {
+    /// after the piece lands. `animate` says whether the piece
+    /// slides: a drag-and-drop passes `false` — the piece already
+    /// travelled under the user's cursor, so sliding it back from
+    /// its source square would look like a jump (Hieu, 2026-11-14);
+    /// a click, a hint or an AI move passes `true`.
+    fn play(&mut self, mv: Move, shared: &Shared, animate: bool) {
         let pos_before = self.game.pos.clone();
         let moves_before = self.game.moves.clone();
         let mover = pos_before.side();
@@ -756,7 +846,7 @@ impl State {
             self.pending_grade = Some((self.game.start.to_fen(), moves_before, mv));
         }
         self.last_move = Some(mv);
-        if shared.settings.animate {
+        if animate && shared.settings.animate {
             self.board.start_anim(mv.from, mv.to);
         } else {
             self.board.anim = None;
@@ -782,8 +872,10 @@ impl State {
 
     /// Play a move from the board / hint list, then start the work
     /// that follows it (a no-op while the piece is still sliding).
-    fn play_move(&mut self, mv: Move, shared: &mut Shared) {
-        self.play(mv, shared);
+    /// `animate` is passed through to [`Self::play`]: `false` for a
+    /// drag-and-drop, `true` for a click, a hint or an AI move.
+    fn play_move(&mut self, mv: Move, shared: &mut Shared, animate: bool) {
+        self.play(mv, shared, animate);
         self.trigger_work(shared);
     }
 
@@ -893,6 +985,182 @@ impl State {
         self.flipped = human == Color::Black;
         self.started = true;
         self.show_start_dialog = false;
+    }
+
+    // ------------------------------------------------------------------
+    // Saved games (Hieu, 2026-11-14)
+    // ------------------------------------------------------------------
+
+    /// Whether leaving for the menu should ask to save first: a
+    /// game is in progress (started, moves played, not over) and
+    /// has not been saved already.
+    #[must_use]
+    pub fn needs_save_prompt(&self) -> bool {
+        self.started
+            && !self.game.result().is_over()
+            && !self.game.moves.is_empty()
+            && !self.saved_this_game
+    }
+
+    /// Open the exit save prompt (called by the App instead of
+    /// navigating away when `needs_save_prompt`).
+    pub fn show_save_prompt(&mut self) {
+        self.show_save_prompt = true;
+    }
+
+    /// The human side for the saved entry (`None` in two-player
+    /// mode, where there is no "human" side).
+    fn human_red(&self) -> Option<bool> {
+        match self.opponent {
+            VsOpponent::Ai { human, .. } => Some(human == Color::Red),
+            VsOpponent::TwoPlayer => None,
+        }
+    }
+
+    /// Build the saved entry for the current game. `finished` is
+    /// whether the game is over (history) or still in progress
+    /// (resumable). The result string is `"red"` / `"black"` /
+    /// `"draw"` when finished, `None` otherwise.
+    fn to_saved_game(&self, finished: bool) -> SavedGame {
+        let result = if finished {
+            match self.game.result() {
+                GameResult::RedWins(_) => Some("red".to_string()),
+                GameResult::BlackWins(_) => Some("black".to_string()),
+                GameResult::Draw(_) => Some("draw".to_string()),
+                GameResult::Ongoing => None,
+            }
+        } else {
+            None
+        };
+        let moves = self.game.moves.len();
+        let label = match (&result, finished) {
+            (Some(r), true) => format!(
+                "Đấu với AI — {} — {moves} nước",
+                match r.as_str() {
+                    "red" => "Đỏ thắng",
+                    "black" => "Đen thắng",
+                    _ => "Hòa",
+                }
+            ),
+            _ => format!("Đấu với AI — đang dở — {moves} nước"),
+        };
+        SavedGame {
+            id: SavedGame::new_id(SavedMode::Play),
+            mode: SavedMode::Play,
+            label,
+            created_unix: SavedGame::now_unix(),
+            finished,
+            start_fen: self.game.start.to_fen(),
+            moves: self
+                .game
+                .moves
+                .iter()
+                .map(|m| xq_core::notation::iccs(*m))
+                .collect(),
+            difficulty: self.difficulty,
+            human_red: self.human_red(),
+            result,
+            lesson_id: None,
+            node_path: Vec::new(),
+            percent: None,
+        }
+    }
+
+    /// Save the current game into the shared store (and to disk).
+    /// A finished game goes to the history; an unfinished one
+    /// becomes the resumable game (replacing any older unfinished
+    /// Play entry). Marks the game saved so the prompt / button is
+    /// not offered again for it.
+    pub fn save_current_game(&mut self, shared: &mut Shared, finished: bool) {
+        let entry = self.to_saved_game(finished);
+        if !finished {
+            // At most one unfinished Play game is kept (see
+            // `SavedGames::unfinished_play`).
+            let old: Vec<String> = shared
+                .saved_games
+                .entries
+                .iter()
+                .filter(|e| e.mode == SavedMode::Play && !e.finished)
+                .map(|e| e.id.clone())
+                .collect();
+            for id in old {
+                shared.saved_games.remove(&id);
+            }
+        }
+        shared.saved_games.add(entry);
+        shared.saved_games.save();
+        self.saved_this_game = true;
+    }
+
+    /// Resume a saved Play game: rebuild the board by replaying
+    /// its moves from the saved start FEN, restore the difficulty
+    /// and the human side, and start playing. An unparseable entry
+    /// (corrupt file, illegal move) is ignored — the start dialog
+    /// stays open.
+    pub fn resume_saved(&mut self, saved: &SavedGame, shared: &mut Shared) {
+        let Ok(start) = xq_core::board::Position::from_fen(&saved.start_fen) else {
+            return;
+        };
+        let mut game = Game::new(start);
+        for iccs in &saved.moves {
+            let Ok(mv) = xq_core::notation::parse_iccs(iccs) else {
+                return;
+            };
+            if game.play(mv).is_err() {
+                return;
+            }
+        }
+        // Restore a terminal result that the position alone does not
+        // carry (resignation / agreed draw — checkmate and stalemate
+        // are already over from the position). `result` is the
+        // winner: "red" means Black resigned, "black" means Red
+        // resigned, "draw" means an agreed draw.
+        if !game.result().is_over() {
+            match saved.result.as_deref() {
+                Some("red") => game.resign(Color::Black),
+                Some("black") => game.resign(Color::Red),
+                Some("draw") => game.agree_draw(),
+                _ => {}
+            }
+        }
+        self.game = game;
+        let human = match saved.human_red {
+            Some(true) => Color::Red,
+            Some(false) => Color::Black,
+            None => Color::Red,
+        };
+        self.opponent = VsOpponent::Ai {
+            human,
+            difficulty: saved.difficulty,
+        };
+        self.difficulty = saved.difficulty;
+        self.custom_elo = shared.settings.custom_elo;
+        self.flipped = human == Color::Black;
+        self.started = true;
+        self.show_start_dialog = false;
+        self.show_save_prompt = false;
+        // A finished game loaded from the store is already in the
+        // history — don't offer to save it again (that would
+        // duplicate the entry). An unfinished one is the resumable
+        // game: playing on and saving replaces it.
+        self.saved_this_game = self.game.result().is_over();
+        self.result_ack = !self.game.result().is_over();
+        self.review = None;
+        self.last_move = self.game.moves.last().copied();
+        self.board.anim = None;
+        self.selected = None;
+        self.check_since = None;
+        self.ai_thinking = false;
+        self.ai_req_id = None;
+        self.hint_arrows.clear();
+        self.hint_lines.clear();
+        self.hint_req_id = None;
+        self.last_grade = None;
+        self.pending_grade = None;
+        self.grade_req_id = None;
+        self.draw_message = None;
+        self.game_seed = new_seed();
+        self.trigger_work(shared);
     }
 
     /// Undo: stop the AI first if it is thinking, then step back to
@@ -1215,7 +1483,7 @@ impl State {
                 self.ai_thinking = false;
                 self.ai_req_id = None;
                 self.ai_depth = 0;
-                self.play(mv, shared);
+                self.play(mv, shared, true);
                 self.trigger_work(shared);
             }
             AiEvent::Analysis { req_id, lines } => {
@@ -1231,7 +1499,7 @@ impl State {
                     self.ai_depth = 0;
                     let picked = self.pick_from_lines(&lines, shared);
                     if let Some(mv) = picked.or_else(|| lines.first().map(|l| l.mv)) {
-                        self.play(mv, shared);
+                        self.play(mv, shared, true);
                         self.trigger_work(shared);
                     }
                     return;
@@ -1318,7 +1586,8 @@ impl State {
         if let Some(from) = self.selected {
             let mv = Move::new(from, sq);
             if self.game.pos.legal_moves().contains(&mv) {
-                self.play_move(mv, shared);
+                // A click: the piece slides to its destination.
+                self.play_move(mv, shared, true);
                 return;
             }
         }
@@ -1328,11 +1597,14 @@ impl State {
     /// A drag ending on `sq`: only a legal move from the selected
     /// (dragged) piece counts; an illegal drop leaves the selection
     /// so the user can click a destination (egui).
+    /// Drop a dragged piece on `sq`. No slide animation: the piece
+    /// already travelled under the user's cursor, so it just stays
+    /// where it was dropped.
     fn drop_on(&mut self, sq: Square, shared: &mut Shared) {
         if let Some(from) = self.selected {
             let mv = Move::new(from, sq);
             if self.game.pos.legal_moves().contains(&mv) {
-                self.play_move(mv, shared);
+                self.play_move(mv, shared, false);
             }
         }
     }
@@ -1817,7 +2089,7 @@ impl State {
     /// shared `primary_button` / `secondary_button` label size).
     /// Behaviour is unchanged: the same four sides, five difficulty
     /// levels, and Start / Cancel messages.
-    fn start_dialog_overlay(&self) -> Element<'_, Msg> {
+    fn start_dialog_overlay(&self, shared: &Shared) -> Element<'_, Msg> {
         // One option button: gold when selected, surface-2 otherwise,
         // full width of its column, 48 px tall.
         let option = |label: &'static str, selected: bool, msg: Msg| {
@@ -1872,6 +2144,29 @@ impl State {
                 text(i18n::t(Key::StartGameTitle))
                     .size(FONT_SCREEN_TITLE)
                     .font(theme::inter_font_semibold()),
+                // Resume the unfinished saved game (Hieu, 2026-11-14):
+                // re-entering Play offers to continue it; "Xoá ván
+                // dở" deletes it so the row goes away.
+                match shared.saved_games.unfinished_play() {
+                    Some(saved) => column![
+                        text(
+                            i18n::t(Key::ResumeGameBody)
+                                .replace("{n}", &saved.moves.len().to_string())
+                        )
+                        .size(FONT_BODY),
+                        row![
+                            primary_button(i18n::t(Key::ResumeYes), Msg::ResumeSaved)
+                                .width(Length::Fill)
+                                .height(Length::Fixed(48.0)),
+                            secondary_button(i18n::t(Key::ResumeDelete), Msg::DeleteSavedGame)
+                                .width(Length::Fill)
+                                .height(Length::Fixed(48.0)),
+                        ]
+                        .spacing(crate::theme::SPACE_12),
+                    ]
+                    .spacing(crate::theme::SPACE_8),
+                    None => column![].spacing(0),
+                },
                 row![side_col, diff_col].spacing(crate::theme::SPACE_16),
                 row![
                     primary_button_with_icon(i18n::t(Key::Start), Icon::Plus, Msg::StartGame)
@@ -1882,6 +2177,10 @@ impl State {
                         .height(Length::Fixed(48.0)),
                 ]
                 .spacing(crate::theme::SPACE_12),
+                // Game history ("Lịch sử đấu"): finished saved games.
+                secondary_button(i18n::t(Key::GameHistoryTitle), Msg::OpenHistory)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(48.0)),
             ]
             .spacing(crate::theme::SPACE_16),
         )
@@ -1899,14 +2198,72 @@ impl State {
 
     /// Result dialog overlay: result text + New game / Review / Close.
     fn result_dialog_overlay(&self) -> Element<'_, Msg> {
+        let mut buttons = row![
+            primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::ResultNewGame),
+            secondary_button(i18n::t(Key::ReviewGame), Msg::ResultReview),
+            secondary_button(i18n::t(Key::Close), Msg::ResultClose),
+        ]
+        .spacing(12);
+        // Save the finished game to the history (one-shot: once
+        // saved the button is replaced by a "Đã lưu" note).
+        let result = self.game.result();
+        let result_color = crate::widgets::result_text_color(result);
+        let card_el = if self.saved_this_game {
+            container(
+                column![
+                    text(i18n::t(Key::ResultTitle)).size(FONT_SCREEN_TITLE),
+                    text(result.describe_vi())
+                        .size(FONT_BODY)
+                        .style(move |_: &Theme| text::Style {
+                            color: Some(result_color),
+                        }),
+                    text(i18n::t(Key::GameSaved)).size(FONT_BODY),
+                    buttons,
+                ]
+                .spacing(12),
+            )
+        } else {
+            buttons = buttons.push(secondary_button(
+                i18n::t(Key::SaveGame),
+                Msg::SaveFinishedGame,
+            ));
+            container(
+                column![
+                    text(i18n::t(Key::ResultTitle)).size(FONT_SCREEN_TITLE),
+                    text(result.describe_vi())
+                        .size(FONT_BODY)
+                        .style(move |_: &Theme| text::Style {
+                            color: Some(result_color),
+                        }),
+                    buttons,
+                ]
+                .spacing(12),
+            )
+        };
+        let card_el = card_el
+            .padding(16)
+            .width(Length::Fixed(340.0))
+            .style(crate::theme::card_container_style);
+        container(card_el)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(dim_background)
+            .into()
+    }
+
+    /// Exit save prompt ("Lưu ván đang dở?"): save the unfinished
+    /// game and go to the menu, or go without saving. The two
+    /// buttons are intercepted by `App::update`.
+    fn save_prompt_overlay(&self) -> Element<'_, Msg> {
         let card_el = container(
             column![
-                text(i18n::t(Key::ResultTitle)).size(FONT_SCREEN_TITLE),
-                text(self.game.result().describe_vi()).size(FONT_BODY),
+                text(i18n::t(Key::SaveUnfinishedTitle)).size(FONT_SCREEN_TITLE),
+                text(i18n::t(Key::SaveUnfinishedBody)).size(FONT_BODY),
                 row![
-                    primary_button_with_icon(i18n::t(Key::NewGame), Icon::Plus, Msg::ResultNewGame),
-                    secondary_button(i18n::t(Key::ReviewGame), Msg::ResultReview),
-                    secondary_button(i18n::t(Key::Close), Msg::ResultClose),
+                    primary_button(i18n::t(Key::SaveYes), Msg::SavePromptSave),
+                    secondary_button(i18n::t(Key::SaveNo), Msg::SavePromptDiscard),
                 ]
                 .spacing(12),
             ]
@@ -2097,16 +2454,46 @@ mod tests {
         assert!(state.started);
         // Red cannon (file 1, rank 2) to the centre: P8-5.
         let mv = Move::new(19, 22);
-        state.play(mv, &shared);
+        state.play(mv, &shared, true);
         assert_eq!(state.game.moves.len(), 1);
         assert_eq!(state.last_move, Some(mv));
         assert!(state.selected.is_none());
         // The piece is still sliding: no computation may start.
         assert!(state.board.is_animating());
-        // ...until the slide finishes, 150 ms later.
-        let later = Instant::now() + Duration::from_millis(200);
+        // ...until the slide finishes, 300 ms later.
+        let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
         assert!(state.board.finish_anim(later));
         assert!(!state.board.is_animating());
+    }
+
+    #[test]
+    fn ai_move_pending_keeps_the_tick_alive() {
+        // The "máy đang nghĩ" hang (Hieu, 2026-11-14): when the
+        // engine is busy, `maybe_trigger_ai` returns early and the
+        // retry happens on the next tick — so the tick must keep
+        // running while the AI still owes a move, not just while a
+        // piece slides or the check halo flashes.
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        // Not started yet: no AI move is pending.
+        assert!(!state.ai_move_pending());
+        state.start(StartSide::Red, 1, &mut shared);
+        // Human (Red) to move: the AI owes nothing.
+        assert!(!state.ai_move_pending());
+        // Human plays: now it is the AI's (Black) turn, no request
+        // in flight yet — the tick must stay alive to retry.
+        state.play(Move::new(19, 22), &shared, true);
+        assert!(state.ai_move_pending());
+        // Once the request is sent (`ai_thinking`), the answer comes
+        // through the bridge, so the tick may stop.
+        state.ai_thinking = true;
+        assert!(!state.ai_move_pending());
+        state.ai_thinking = false;
+        assert!(state.ai_move_pending());
+        // Reviewing a past ply: no AI move is owed.
+        state.review = Some(0);
+        assert!(!state.ai_move_pending());
     }
 
     #[test]
@@ -2116,8 +2503,8 @@ mod tests {
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         // Two plies by hand (Red, then Black), as if the AI replied.
-        state.play(Move::new(19, 22), &shared);
-        state.play(Move::new(82, 65), &shared);
+        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(82, 65), &shared, true);
         assert_eq!(state.game.moves.len(), 2);
         state.undo();
         // Back to the human's turn: the human's own last move is
@@ -2125,5 +2512,125 @@ mod tests {
         assert_eq!(state.game.moves.len(), 0);
         assert_eq!(state.game.pos.side(), Color::Red);
         assert!(state.last_move.is_none());
+    }
+
+    #[test]
+    fn save_prompt_only_for_a_game_in_progress() {
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        // Not started: nothing to save.
+        assert!(!state.needs_save_prompt());
+        state.start(StartSide::Red, 1, &mut shared);
+        // Started but no move yet: nothing to save.
+        assert!(!state.needs_save_prompt());
+        state.play(Move::new(19, 22), &shared, true);
+        // A move played, game ongoing: ask to save on exit.
+        assert!(state.needs_save_prompt());
+        // Once saved, no prompt again for this game.
+        state.save_current_game(&mut shared, false);
+        assert!(!state.needs_save_prompt());
+        assert!(shared.saved_games.unfinished_play().is_some());
+    }
+
+    #[test]
+    fn save_unfinished_and_resume_restores_the_game() {
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(82, 65), &shared, true);
+        let fen_before = state.game.pos.to_fen();
+        state.save_current_game(&mut shared, false);
+        let saved = shared
+            .saved_games
+            .unfinished_play()
+            .expect("unfinished game saved")
+            .clone();
+        assert_eq!(saved.moves.len(), 2);
+        assert!(!saved.finished);
+        // A fresh screen resumes it: same moves, same position.
+        let mut resumed = State::new(&shared);
+        resumed.resume_saved(&saved, &mut shared);
+        assert_eq!(resumed.game.moves.len(), 2);
+        assert_eq!(resumed.game.pos.to_fen(), fen_before);
+        assert!(resumed.started);
+        assert!(!resumed.show_start_dialog);
+    }
+
+    #[test]
+    fn resume_ignores_a_corrupt_entry() {
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        let mut bad = SavedGame {
+            id: "play-bad".to_string(),
+            mode: SavedMode::Play,
+            label: "bad".to_string(),
+            created_unix: 0,
+            finished: false,
+            start_fen: "not a fen".to_string(),
+            moves: vec!["h2e2".to_string()],
+            difficulty: 1,
+            human_red: Some(true),
+            result: None,
+            lesson_id: None,
+            node_path: Vec::new(),
+            percent: None,
+        };
+        state.resume_saved(&bad, &mut shared);
+        // Still at the start dialog: nothing was loaded.
+        assert!(!state.started);
+        assert!(state.show_start_dialog);
+        // An illegal move in an otherwise valid entry is ignored too.
+        bad.start_fen = Position::startpos().to_fen();
+        bad.moves = vec!["a0a9".to_string()];
+        state.resume_saved(&bad, &mut shared);
+        assert!(!state.started);
+    }
+
+    #[test]
+    fn resume_finished_game_shows_result_and_allows_undo() {
+        // Hieu, 2026-11-14: a finished game loaded from the history
+        // shows its result (with the winner's color) and still lets
+        // the user undo.
+        let mut shared = Shared::new();
+        shared.settings.animate = false;
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(82, 65), &shared, true);
+        state.game.resign(Color::Red);
+        assert!(state.game.result().is_over());
+        state.save_current_game(&mut shared, true);
+        let saved = shared
+            .saved_games
+            .by_mode(SavedMode::Play)
+            .into_iter()
+            .next()
+            .expect("finished game saved")
+            .clone();
+        assert!(saved.finished);
+        // A fresh screen resumes it: the result dialog is pending
+        // (not acknowledged) and the game is marked saved already.
+        let mut resumed = State::new(&shared);
+        resumed.resume_saved(&saved, &mut shared);
+        assert!(resumed.game.result().is_over());
+        assert!(!resumed.result_ack);
+        assert!(resumed.saved_this_game);
+        // The winner's color: Red lost here (resigned), so the
+        // result is a Black win.
+        assert_eq!(
+            crate::widgets::result_text_color(resumed.game.result()),
+            crate::theme::TEXT
+        );
+        // Undo reopens the game (Play undoes a full round vs AI, back
+        // to the human's turn — here the start, since only one round
+        // was played).
+        resumed.undo();
+        assert!(!resumed.game.result().is_over());
+        assert_eq!(resumed.game.moves.len(), 0);
+        assert_eq!(resumed.game.pos.side(), Color::Red);
     }
 }

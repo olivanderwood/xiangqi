@@ -271,3 +271,13 @@ pub fn card_container_style(_theme: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+
+/// Dim backdrop behind a centred dialog overlay (60% opaque
+/// background — same as the Play screen's private helper).
+#[must_use]
+pub fn dim_background(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(iced::Color { a: 0.6, ..BG })),
+        ..Default::default()
+    }
+}

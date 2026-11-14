@@ -26,7 +26,7 @@
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
-//! A move's slide animation (150 ms) must finish BEFORE the AI,
+//! A move's slide animation (300 ms) must finish BEFORE the AI,
 //! grading, hint or ChessDB work for the new position starts (Hieu,
 //! restated 2026-11-12, three times in one day). In Elm terms:
 //! `update()` only triggers AI / grading / hint / ChessDB work when
@@ -53,7 +53,9 @@ use crate::bridge;
 use crate::engine_log::EngineLog;
 use crate::engine_manager::{self, EngineEvent};
 use crate::i18n;
-use crate::screens::{home, learn, learn_select, play, practice, settings_dialog, summary};
+use crate::screens::{
+    history, home, learn, learn_select, play, practice, settings_dialog, summary,
+};
 use crate::settings::{settings_path, Settings};
 use crate::sound::{SharedSound, SoundPlayer};
 use crate::theme;
@@ -73,6 +75,9 @@ pub enum Screen {
     Practice,
     /// Lesson summary.
     Summary,
+    /// Saved games: "Lịch sử đấu" (Play) or "Ván cờ đã lưu"
+    /// (Practice). The mode lives in the History state.
+    History,
 }
 
 /// State shared by every screen.
@@ -98,6 +103,10 @@ pub struct Shared {
     /// (the parent dir of `settings.json`); the Pikafish log sink
     /// writes into it, and the About dialog opens its folder.
     pub engine_log: Option<Arc<EngineLog>>,
+    /// Saved games and lesson progress (Hieu, 2026-11-14):
+    /// `<config_dir>/xiangqi/saved_games.json`. Loaded once at
+    /// startup; screens mutate it and call `save()` after a change.
+    pub saved_games: crate::saved_games::SavedGames,
 }
 
 impl Default for Shared {
@@ -145,6 +154,7 @@ impl Shared {
             book,
             engine_name: "AI tích hợp".to_string(),
             engine_log,
+            saved_games: crate::saved_games::SavedGames::load(),
         }
     }
 }
@@ -159,6 +169,7 @@ pub struct App {
     learn: learn::State,
     practice: practice::State,
     summary: summary::State,
+    history: history::State,
     /// The open Settings / About dialog, if any (`None` = no dialog).
     /// Built fresh from `Shared` when opened, dropped on close or on
     /// navigation.
@@ -189,6 +200,8 @@ pub enum Message {
     Practice(practice::Msg),
     /// Summary screen message.
     Summary(summary::Msg),
+    /// Saved-games list message.
+    History(history::Msg),
     /// Settings / About dialog message.
     Dialog(settings_dialog::Msg),
     /// Go to a screen.
@@ -234,6 +247,7 @@ impl App {
             learn: learn::State::new(&shared),
             practice: practice::State::new(&shared),
             summary: summary::State::new(&shared),
+            history: history::State::new(&shared),
             shared,
             dialog: None,
             install_rx,
@@ -349,7 +363,38 @@ impl App {
             },
             Message::Play(msg) => match msg {
                 play::Msg::Navigate(screen) => {
-                    self.goto(screen);
+                    // Back to the menu is an exit (Hieu, 2026-11-14):
+                    // a game in progress asks to save first instead
+                    // of navigating away; otherwise the mode resets
+                    // completely, so re-entering it starts fresh.
+                    if screen == Screen::Home && self.play.needs_save_prompt() {
+                        self.play.show_save_prompt();
+                        Task::none()
+                    } else {
+                        if screen == Screen::Home {
+                            self.play = play::State::new(&self.shared);
+                        }
+                        self.goto(screen);
+                        Task::none()
+                    }
+                }
+                // Exit save prompt: save the unfinished game (or
+                // not), then reset Play and go to the menu.
+                play::Msg::SavePromptSave => {
+                    self.play.save_current_game(&mut self.shared, false);
+                    self.play = play::State::new(&self.shared);
+                    self.goto(Screen::Home);
+                    Task::none()
+                }
+                play::Msg::SavePromptDiscard => {
+                    self.play = play::State::new(&self.shared);
+                    self.goto(Screen::Home);
+                    Task::none()
+                }
+                // Open the game history ("Lịch sử đấu").
+                play::Msg::OpenHistory => {
+                    self.history.open(crate::saved_games::SavedMode::Play);
+                    self.goto(Screen::History);
                     Task::none()
                 }
                 play::Msg::ShowSettings => {
@@ -368,11 +413,23 @@ impl App {
                     // before switching (integration wiring, 2026-11-13).
                     if screen == Screen::Learn {
                         if let Some(choice) = self.learn_select.take_choice() {
-                            self.learn.start(
-                                &choice.lesson_id,
-                                choice.learner_is_red,
-                                &mut self.shared,
-                            );
+                            // Saved progress (Hieu, 2026-11-14):
+                            // resume the lesson where the learner left
+                            // off instead of starting it fresh.
+                            if let Some(saved) = self
+                                .shared
+                                .saved_games
+                                .lesson_progress(&choice.lesson_id)
+                                .cloned()
+                            {
+                                self.learn.resume_saved(&saved, &mut self.shared);
+                            } else {
+                                self.learn.start(
+                                    &choice.lesson_id,
+                                    choice.learner_is_red,
+                                    &mut self.shared,
+                                );
+                            }
                         }
                     }
                     self.goto(screen);
@@ -393,14 +450,41 @@ impl App {
             },
             Message::Learn(msg) => match msg {
                 learn::Msg::Navigate(screen) => {
-                    // Hand the built summary to the Summary screen
-                    // before switching (integration wiring, 2026-11-13).
-                    if screen == Screen::Summary {
-                        if let Some(data) = self.learn.take_pending_summary() {
-                            self.summary.load(data);
+                    // Back to the menu is an exit: an unfinished
+                    // lesson asks to save its progress first instead
+                    // of navigating away; otherwise the mode resets
+                    // completely, so re-entering it starts fresh
+                    // (Hieu, 2026-11-14). A finished lesson is 100%
+                    // and needs no saved entry.
+                    if screen == Screen::Home && self.learn.needs_save_prompt() {
+                        self.learn.show_save_prompt();
+                        Task::none()
+                    } else {
+                        // Hand the built summary to the Summary screen
+                        // before switching (integration wiring, 2026-11-13).
+                        if screen == Screen::Summary {
+                            if let Some(data) = self.learn.take_pending_summary() {
+                                self.summary.load(data);
+                            }
                         }
+                        if screen == Screen::Home {
+                            self.learn = learn::State::new(&self.shared);
+                        }
+                        self.goto(screen);
+                        Task::none()
                     }
-                    self.goto(screen);
+                }
+                // Exit save prompt: save the lesson progress (or
+                // not), then reset Learn and go to the menu.
+                learn::Msg::SavePromptSave => {
+                    self.learn.save_progress(&mut self.shared);
+                    self.learn = learn::State::new(&self.shared);
+                    self.goto(Screen::Home);
+                    Task::none()
+                }
+                learn::Msg::SavePromptDiscard => {
+                    self.learn = learn::State::new(&self.shared);
+                    self.goto(Screen::Home);
                     Task::none()
                 }
                 learn::Msg::ShowSettings => {
@@ -428,7 +512,42 @@ impl App {
             },
             Message::Practice(msg) => match msg {
                 practice::Msg::Navigate(screen) => {
-                    self.goto(screen);
+                    // Back to the menu is an exit: a game in progress
+                    // asks to save first instead of navigating away;
+                    // otherwise the mode resets completely, so
+                    // re-entering it starts from scratch (Hieu,
+                    // 2026-11-14). A fresh State is the reset — it
+                    // rebuilds the setup phase, the editor and the
+                    // game, and spawns a fresh AI worker (the old
+                    // worker's thread exits when its channels drop).
+                    if screen == Screen::Home && self.practice.needs_save_prompt() {
+                        self.practice.show_save_prompt();
+                        Task::none()
+                    } else {
+                        if screen == Screen::Home {
+                            self.practice = practice::State::new(&self.shared);
+                        }
+                        self.goto(screen);
+                        Task::none()
+                    }
+                }
+                // Exit save prompt: save the unfinished game (or
+                // not), then reset Practice and go to the menu.
+                practice::Msg::SavePromptSave => {
+                    self.practice.save_current_game(&mut self.shared, false);
+                    self.practice = practice::State::new(&self.shared);
+                    self.goto(Screen::Home);
+                    Task::none()
+                }
+                practice::Msg::SavePromptDiscard => {
+                    self.practice = practice::State::new(&self.shared);
+                    self.goto(Screen::Home);
+                    Task::none()
+                }
+                // Open the saved-games list ("Ván cờ đã lưu").
+                practice::Msg::OpenSavedGames => {
+                    self.history.open(crate::saved_games::SavedMode::Practice);
+                    self.goto(Screen::History);
                     Task::none()
                 }
                 practice::Msg::ShowSettings => {
@@ -473,6 +592,55 @@ impl App {
                     .update(other, &mut self.shared)
                     .map(Message::Summary),
             },
+            Message::History(msg) => match msg {
+                history::Msg::Navigate(screen) => {
+                    self.goto(screen);
+                    Task::none()
+                }
+                history::Msg::ShowSettings => {
+                    self.open_settings();
+                    Task::none()
+                }
+                history::Msg::ShowAbout => {
+                    self.open_about();
+                    Task::none()
+                }
+                history::Msg::LoadGame(id) => {
+                    let Some(entry) = self
+                        .shared
+                        .saved_games
+                        .entries
+                        .iter()
+                        .find(|e| e.id == id)
+                        .cloned()
+                    else {
+                        return Task::none();
+                    };
+                    match entry.mode {
+                        crate::saved_games::SavedMode::Play => {
+                            self.play = play::State::new(&self.shared);
+                            self.play.resume_saved(&entry, &mut self.shared);
+                            self.goto(Screen::Play);
+                        }
+                        crate::saved_games::SavedMode::Practice => {
+                            self.practice = practice::State::new(&self.shared);
+                            self.practice.load_saved(&entry, &mut self.shared);
+                            self.goto(Screen::Practice);
+                        }
+                        crate::saved_games::SavedMode::Learn => {
+                            // Lesson progress is resumed from the
+                            // lesson list, not from this screen.
+                        }
+                    }
+                    Task::none()
+                }
+                history::Msg::DeleteGame(id) => {
+                    self.shared.saved_games.remove(&id);
+                    self.shared.saved_games.save();
+                    Task::none()
+                }
+                history::Msg::Noop => Task::none(),
+            },
         }
     }
 
@@ -491,6 +659,7 @@ impl App {
             Screen::Learn => self.learn.view(&self.shared).map(Message::Learn),
             Screen::Practice => self.practice.view(&self.shared).map(Message::Practice),
             Screen::Summary => self.summary.view(&self.shared).map(Message::Summary),
+            Screen::History => self.history.view(&self.shared).map(Message::History),
         };
         let Some(dialog) = &self.dialog else {
             return base;
@@ -523,6 +692,7 @@ impl App {
             Screen::Learn => self.learn.subscription().map(Message::Learn),
             Screen::Practice => self.practice.subscription().map(Message::Practice),
             Screen::Summary => self.summary.subscription().map(Message::Summary),
+            Screen::History => Subscription::none(),
         };
         let mut subs = vec![screen];
         if let Some(rx) = &self.install_rx {
@@ -598,5 +768,24 @@ mod tests {
             "log path is {}",
             log.path().display()
         );
+    }
+
+    #[test]
+    fn back_to_menu_from_practice_resets_it() {
+        // Back to menu is an exit (Hieu, 2026-11-14): re-entering
+        // Practice must start from scratch, not resume the old game.
+        use crate::screens::practice;
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Goto(Screen::Practice));
+        assert_eq!(app.screen, Screen::Practice);
+        assert_eq!(app.practice.phase(), practice::PracticePhase::Setup);
+        // Start a game, so the phase is Playing.
+        let _ = app.update(Message::Practice(practice::Msg::StartFromStart));
+        assert_eq!(app.practice.phase(), practice::PracticePhase::Playing);
+        // Back to the menu: the screen switches AND the Practice
+        // state is a fresh one (Setup phase).
+        let _ = app.update(Message::Practice(practice::Msg::Navigate(Screen::Home)));
+        assert_eq!(app.screen, Screen::Home);
+        assert_eq!(app.practice.phase(), practice::PracticePhase::Setup);
     }
 }

@@ -250,7 +250,12 @@ impl State {
     /// "Đã hoàn thành" when the lesson is done. `CompletedMark`
     /// carries its own "✓" glyph, so the glyph is stripped here —
     /// the icon replaces it, it must not appear twice.
-    fn lesson_row(&self, lesson: &Lesson, progress_completed: bool) -> Element<'_, Msg> {
+    fn lesson_row(
+        &self,
+        lesson: &Lesson,
+        progress_completed: bool,
+        saved_percent: Option<u8>,
+    ) -> Element<'_, Msg> {
         let mut label = row![
             text(format!(
                 "{}  {}",
@@ -277,6 +282,15 @@ impl State {
                     .size(FONT_CAPTION)
                     .font(theme::inter_font_medium())
                     .style(|_: &iced::Theme| iced::widget::text::Style { color: Some(GREEN) }),
+            );
+        } else if let Some(pct) = saved_percent {
+            // Saved progress (Hieu, 2026-11-14): "% đã học" so the
+            // learner sees how far they got before picking it up.
+            label = label.push(
+                text(i18n::t(Key::LearnProgressPercent).replace("{n}", &pct.to_string()))
+                    .size(FONT_CAPTION)
+                    .font(theme::inter_font_medium())
+                    .style(|_: &iced::Theme| iced::widget::text::Style { color: Some(GOLD) }),
             );
         }
         let selected = self.selected.as_deref() == Some(lesson.id.as_str());
@@ -323,7 +337,11 @@ impl State {
                         .progress
                         .get(&lesson.id)
                         .is_some_and(|p| p.completed);
-                    list = list.push(self.lesson_row(lesson, completed));
+                    let saved_percent = shared
+                        .saved_games
+                        .lesson_progress(&lesson.id)
+                        .and_then(|e| e.percent);
+                    list = list.push(self.lesson_row(lesson, completed, saved_percent));
                 }
                 let list_el = scrollable(list)
                     .height(Length::Fixed(320.0))
