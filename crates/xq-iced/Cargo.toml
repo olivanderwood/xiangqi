@@ -15,6 +15,7 @@ xq-book = { path = "../xq-book" }
 xq-engine = { path = "../xq-engine" }
 xq-pikafish = { path = "../xq-pikafish" }
 xq-chessdb = { path = "../xq-chessdb" }
+xq-recognize = { path = "../xq-recognize" }
 # Iced 0.14, pinned (see docs/SPIKE-iced.md §5: 0.14 is the last
 # release before 1.0, which will break the API once). `tokio` is
 # needed for `time::every`; `canvas` draws the board.
@@ -23,6 +24,11 @@ iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image", "
 rodio = "0.21"
 # Native file dialog for the practice screen's board-photo upload.
 rfd = "0.15"
+# Clipboard image paste (practice screen): `arboard` reads the
+# system clipboard; `image` encodes the pasted RGBA pixels to PNG
+# so they feed the same image-load path as a picked file.
+arboard = "3"
+image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Settings live in a JSON file under the user's config dir.

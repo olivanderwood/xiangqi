@@ -1,0 +1,20 @@
+# Board-recognition assets: the pin for what `tools/fetch-recognize.sh`
+# (and `.bat`) downloads into `recognize/`. This file IS committed;
+# the models + the ONNX Runtime library are NOT (see .gitignore).
+#
+# Models: Xiangqi Arena (https://github.com/dffge552/xiangqi-pwa-offline),
+# MIT, Copyright (c) 2026 dffge552. Attribution (required by the MIT
+# licence) is in `crates/xq-recognize/models/README.md` and shown in
+# the app's About screen.
+[models]
+repo = "dffge552/xiangqi-pwa-offline"
+# The repo commit the models were taken from (the .onnx files are
+# not versioned by release; pin the commit for reproducibility).
+commit = "master"
+physical = "Entity_chess_recognition_model.onnx"
+detector = "online_xiangqi_piece_detector.onnx"
+classifier = "online_xiangqi_classifier.onnx"
+
+[onnxruntime]
+# Official ONNX Runtime release (https://github.com/microsoft/onnxruntime).
+version = "1.31.0"

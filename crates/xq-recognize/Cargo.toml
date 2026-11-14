@@ -1,0 +1,23 @@
+[package]
+name = "xq-recognize"
+version = "0.1.0"
+edition = "2021"
+description = "Board recognition from a photo/screenshot (ONNX, offline)"
+license = "MIT"
+
+[dependencies]
+# ONNX Runtime (safe wrapper). Pinned to an exact RC: 2.0 is still
+# pre-release and the API moves between RCs. `load-dynamic` loads
+# the native ONNX Runtime library at run time instead of downloading
+# prebuilt binaries at build time (the `ort` CDN is unreachable
+# from this VM, and the app already fetches native binaries on
+# demand — see `tools/fetch-engine.sh` for the engine). Set
+# `ORT_DYLIB_PATH` to the library (`libonnxruntime.so` / `.dylib` /
+# `.dll`, ONNX Runtime 1.31.0) before running.
+ort = { version = "=2.0.0-rc.15", features = ["load-dynamic"] }
+# Decode/resize the photo before inference.
+image = "0.25"
+xq-core = { path = "../xq-core" }
+
+[dev-dependencies]
+# (none yet)

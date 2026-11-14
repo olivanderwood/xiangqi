@@ -354,6 +354,13 @@ pub struct BoardRender {
     /// set this from their own `flipped` state (auto-flip when the
     /// human/learner plays Black, plus a manual Flip button).
     pub flipped: bool,
+    /// Which colour's pieces can be dragged (`None` = dragging
+    /// disabled — the board is read-only or no side may move yet).
+    /// Only that colour's pieces lift off their square and follow
+    /// the cursor; pressing any other piece still reports
+    /// `DragStarted`, so a click on it can capture with the
+    /// selected piece — the piece just never lifts.
+    pub draggable: Option<SideColor>,
 }
 
 impl BoardRender {
@@ -370,6 +377,7 @@ impl BoardRender {
             anim: None,
             pulse: 0.5,
             flipped: false,
+            draggable: None,
         }
     }
 }
@@ -851,11 +859,18 @@ impl Program<BoardMsg> for BoardProgram {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
                 let pos = cursor.position_in(bounds)?;
                 let sq = g.square_at(pos)?;
-                if self.render.position.piece_at(sq).is_some() {
-                    state.drag_sq = Some(sq);
-                    state.drag_pos = Some(pos);
-                    state.press_pos = Some(pos);
-                    state.dragged = false;
+                if let Some(piece) = self.render.position.piece_at(sq) {
+                    // Only the draggable colour's pieces lift and
+                    // follow the cursor. Pressing any other piece
+                    // still reports `DragStarted`, so the screen can
+                    // capture with the selected piece on a click —
+                    // the piece just never lifts.
+                    if self.render.draggable.is_some_and(|c| piece.color == c) {
+                        state.drag_sq = Some(sq);
+                        state.drag_pos = Some(pos);
+                        state.press_pos = Some(pos);
+                        state.dragged = false;
+                    }
                     return Some(Action::publish(BoardMsg::DragStarted(sq)));
                 }
                 Some(Action::publish(BoardMsg::SquareClicked(sq)))
@@ -1150,7 +1165,9 @@ mod tests {
         // and release without moving: the piece must stay on its
         // square — it is only lifted once the pointer actually
         // moves past the drag threshold.
-        let program = BoardProgram::new(BoardRender::new(Position::startpos()));
+        let mut render = BoardRender::new(Position::startpos());
+        render.draggable = Some(SideColor::Red);
+        let program = BoardProgram::new(render);
         let mut state = DragState::default();
         let bounds = bounds_1x();
         let press = Point::new(40.0, 616.0);
@@ -1197,6 +1214,55 @@ mod tests {
             bounds,
             Cursor::Available(Point::new(50.0, 616.0)),
         );
+        assert_eq!(state.drag_sq, None);
+        assert!(!state.lifted());
+    }
+
+    #[test]
+    fn press_on_non_draggable_piece_does_not_lift() {
+        // Only Red may be dragged: pressing a Black piece still
+        // reports the click (so the screen can capture with the
+        // selected piece) but the piece never lifts, however far
+        // the pointer moves, and releasing reports nothing.
+        let mut render = BoardRender::new(Position::startpos());
+        render.draggable = Some(SideColor::Red);
+        let program = BoardProgram::new(render);
+        let mut state = DragState::default();
+        let bounds = bounds_1x();
+        // Black chariot, square 81, centre (40, 40) at 1x.
+        let press = Point::new(40.0, 40.0);
+
+        let action = program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            bounds,
+            Cursor::Available(press),
+        );
+        assert!(action.is_some());
+        assert_eq!(state.drag_sq, None);
+        assert!(!state.dragged);
+        assert!(!state.lifted());
+
+        // Moving far past the threshold still does not lift it.
+        program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(200.0, 200.0),
+            }),
+            bounds,
+            Cursor::Available(Point::new(200.0, 200.0)),
+        );
+        assert_eq!(state.drag_sq, None);
+        assert!(!state.lifted());
+
+        // Release reports nothing (no drag ever started).
+        let action = program.update(
+            &mut state,
+            &Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+            bounds,
+            Cursor::Available(Point::new(200.0, 200.0)),
+        );
+        assert!(action.is_none());
         assert_eq!(state.drag_sq, None);
         assert!(!state.lifted());
     }

@@ -35,10 +35,14 @@
 //! - **Board photo (raster display).** The uploaded photo IS shown
 //!   (`iced::widget::image`, feature `image` enabled for `iced` at
 //!   integration): the kept bytes are rendered below the file name.
-//!   Recognition is attempted via [`recognize_board_image`] — it
-//!   always fails for now (no vision model), so the UI reports
-//!   "image could not be recognised" and the user rebuilds the
-//!   position in the editor below.
+//!   Recognition runs in the background via [`recognize_board_image`]
+//!   (`xq-recognize`, ONNX, offline — models + ONNX Runtime library
+//!   in `recognize/`, see `tools/fetch-recognize.sh`); on success
+//!   the editor is filled with the recognised position and the user
+//!   picks the side to move, on failure the UI reports "image could
+//!   not be recognised" and the user rebuilds the position in the
+//!   editor below. The board is estimated from the detections
+//!   (no calibration yet), so the editor is the safety net.
 //! - **Flip.** The playing board flips with the shared `flipped`
 //!   state (button in the panel; `BoardRender::flipped` +
 //!   `Geom::from_bounds_flipped`, restored at integration). The
@@ -150,8 +154,25 @@ pub enum PracticeSource {
 /// on each square, and build the `Position` from the resulting
 /// board. [`State::editor_from_position`] is ready to pour the
 /// recognised position into the editor for the user to check.
-fn recognize_board_image(_bytes: &[u8]) -> Result<Position, &'static str> {
-    Err("no board-recognition model available")
+/// Recognise a board from photo `bytes`, in the background (this
+/// loads the ONNX model + runs inference — seconds, never on the
+/// UI thread). The models + ONNX Runtime library live in
+/// `recognize/` (see `tools/fetch-recognize.sh`); when they are
+/// absent the photo is reported as not recognised and the user
+/// sets the position up by hand in the editor. No calibration is
+/// passed yet, so the board is estimated from the detections
+/// (best-effort); the editor is the safety net.
+async fn recognize_board_image(bytes: Arc<[u8]>) -> Result<Position, String> {
+    let Some(dir) = xq_recognize::find_models_dir() else {
+        return Err(i18n::t(Key::PracticeImageNotRecognized).to_string());
+    };
+    let paths = xq_recognize::ModelPaths::in_dir(&dir);
+    let lib = xq_recognize::lib_path_for(&dir);
+    let lib = lib.exists().then_some(lib.as_path());
+    let mut recognizer = xq_recognize::Recognizer::load(&paths, lib).map_err(|e| e.to_string())?;
+    recognizer
+        .recognize(&bytes, None)
+        .map_err(|e| e.to_string())
 }
 
 /// Where the current suggestions came from.
@@ -214,6 +235,18 @@ pub struct State {
     image_bytes: Option<Arc<[u8]>>,
     /// Image load / recognition error (setup).
     image_error: Option<String>,
+    /// The editor board was filled by a successful recognition
+    /// (not typed in by hand): the editor shows the "choose the
+    /// side to move, then start the game" step instead of the plain
+    /// side radio + "use this position" row.
+    recognized: bool,
+    /// A board photo is being recognised in the background
+    /// (the UI stays responsive; see `ImageRecognized`).
+    recognizing: bool,
+    /// A file is being dragged over the window (setup, image
+    /// source): the drop zone highlights until it is dropped or
+    /// leaves.
+    drop_hover: bool,
     /// Board editor pieces (setup, image source): one slot per square.
     editor_board: [Option<Piece>; 90],
     /// Editor palette selection: `Some(piece)` places it, `None` erases.
@@ -389,6 +422,22 @@ pub enum Msg {
     /// The file dialog finished: `Some((path, bytes))` when the user
     /// picked a file, `None` when they cancelled.
     ImageDialogDone(Option<(String, Arc<[u8]>)>),
+    /// A file was dropped onto the window (setup, image source):
+    /// load it as a board photo, like a picked file.
+    ImageFileDropped(std::path::PathBuf),
+    /// A file is being dragged over the window (`true`) or has left
+    /// it (`false`): highlight the drop zone while it hovers.
+    ImageDropHovered(bool),
+    /// Paste a board photo from the system clipboard (Ctrl+V, or the
+    /// Paste button): read the clipboard image and load it.
+    PasteImage,
+    /// The clipboard paste finished: `Some((name, bytes))` when the
+    /// clipboard held an image, `None` when it did not.
+    ClipboardImageDone(Option<(String, Arc<[u8]>)>),
+    /// The background board recognition finished: `Ok(position)` when
+    /// a position was read from the photo, `Err(message)` when it
+    /// could not be (no model, no pieces, invalid position).
+    ImageRecognized(Result<Position, String>),
     /// The user picked a palette piece (`None` = the eraser).
     EditorPaletteSelected(Option<Piece>),
     /// The user picked the side to move of the editor position.
@@ -466,6 +515,9 @@ impl State {
             image_path: String::new(),
             image_bytes: None,
             image_error: None,
+            recognized: false,
+            recognizing: false,
+            drop_hover: false,
             editor_board: [None; 90],
             editor_selected: None,
             editor_side: Color::Red,
@@ -618,25 +670,105 @@ impl State {
             }
             Msg::ImageDialogDone(picked) => {
                 if let Some((path, bytes)) = picked {
-                    self.image_path = path;
-                    // Try to read a position from the photo. There is
-                    // no vision model yet, so this reports that the
-                    // photo could not be recognised; the user sets
-                    // the position up by hand in the editor below.
-                    match recognize_board_image(&bytes) {
-                        Ok(pos) => {
-                            self.image_error = None;
-                            self.image_bytes = Some(bytes);
-                            self.editor_from_position(&pos);
-                        }
-                        Err(_) => {
-                            self.image_bytes = Some(bytes);
-                            self.image_error =
-                                Some(i18n::t(Key::PracticeImageNotRecognized).to_string());
-                        }
+                    self.load_image(path, bytes)
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::ClipboardImageDone(picked) => match picked {
+                Some((name, bytes)) => self.load_image(name, bytes),
+                None => {
+                    self.image_error = Some(i18n::t(Key::PracticeClipboardEmpty).to_string());
+                    Task::none()
+                }
+            },
+            Msg::ImageRecognized(result) => {
+                self.recognizing = false;
+                match result {
+                    Ok(pos) => {
+                        self.image_error = None;
+                        self.recognized = true;
+                        self.editor_from_position(&pos);
+                    }
+                    Err(msg) => {
+                        self.recognized = false;
+                        self.image_error = Some(msg);
                     }
                 }
                 Task::none()
+            }
+            Msg::ImageFileDropped(path) => {
+                // Only the setup screen (image source) accepts a
+                // dropped file; a drop anywhere else is ignored.
+                if self.phase != PracticePhase::Setup || self.source != PracticeSource::Image {
+                    self.drop_hover = false;
+                    return Task::none();
+                }
+                self.drop_hover = false;
+                // Only image files: anything else gets a plain error
+                // instead of the misleading "not recognised" message.
+                let is_image = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    matches!(
+                        e.to_ascii_lowercase().as_str(),
+                        "png" | "jpg" | "jpeg" | "bmp" | "webp"
+                    )
+                });
+                if !is_image {
+                    self.image_error = Some(i18n::t(Key::PracticeDropNotImage).to_string());
+                    return Task::none();
+                }
+                Task::perform(
+                    async move {
+                        match std::fs::read(&path) {
+                            Ok(bytes) => Msg::ImageDialogDone(Some((
+                                path.display().to_string(),
+                                Arc::from(bytes.as_slice()),
+                            ))),
+                            Err(_) => Msg::ImageDialogDone(None),
+                        }
+                    },
+                    |msg| msg,
+                )
+            }
+            Msg::ImageDropHovered(hovering) => {
+                self.drop_hover = hovering;
+                Task::none()
+            }
+            Msg::PasteImage => {
+                // Read the clipboard image (arboard) and encode it
+                // to PNG, so it feeds the same load path as a picked
+                // file. Runs as a `Task` so a slow clipboard or a
+                // big screenshot does not block the UI.
+                Task::perform(
+                    async {
+                        let png = (|| {
+                            let mut clipboard = arboard::Clipboard::new().ok()?;
+                            let img = clipboard.get_image().ok()?;
+                            let buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                                img.width as u32,
+                                img.height as u32,
+                                img.bytes.into_owned(),
+                            )?;
+                            let dyn_img = image::DynamicImage::ImageRgba8(buf);
+                            let mut png = Vec::new();
+                            dyn_img
+                                .write_to(
+                                    &mut std::io::Cursor::new(&mut png),
+                                    image::ImageFormat::Png,
+                                )
+                                .ok()?;
+                            Some(png)
+                        })();
+                        match png {
+                            Some(bytes) => Msg::ClipboardImageDone(Some((
+                                i18n::t(Key::PracticeClipboardImageName).to_string(),
+                                Arc::from(bytes.as_slice()),
+                            ))),
+                            None => Msg::ClipboardImageDone(None),
+                        }
+                    },
+                    |msg| msg,
+                )
             }
             Msg::EditorPaletteSelected(piece) => {
                 self.editor_selected = piece;
@@ -918,16 +1050,14 @@ impl State {
                 if self.board.is_animating() {
                     return;
                 }
-                // Select the dragged piece when it belongs to the
-                // side to move (both sides are the user here).
-                if self
-                    .game
-                    .pos
-                    .piece_at(sq)
-                    .is_some_and(|p| p.color == self.game.pos.side())
-                {
-                    self.selected = Some(sq);
-                }
+                // A press on a piece is a click (or the start of a
+                // drag): select your own piece, or capture with the
+                // selected piece — exactly like `SquareClicked`.
+                // (Before, this only selected own pieces, so
+                // clicking an enemy piece to capture did nothing
+                // while drag-and-drop worked, because `DragEnded`
+                // already routed through `click_square`.)
+                self.click_square(sq, shared);
             }
             BoardMsg::DragMoved(_) => {}
             BoardMsg::DragEnded(point) => {
@@ -1090,6 +1220,20 @@ impl State {
     /// Fill the manual board editor from a recognised position (used
     /// when `recognize_board_image` succeeds, so the user can check
     /// and fix the pieces before playing).
+    /// Load a board photo (picked, dropped, or pasted) and start
+    /// recognising it in the background. The photo is kept for the
+    /// preview; the result arrives as `Msg::ImageRecognized`.
+    /// On success the editor is filled with the recognised position;
+    /// on failure the user sets the position up by hand.
+    fn load_image(&mut self, path: String, bytes: Arc<[u8]>) -> Task<Msg> {
+        self.image_path = path;
+        self.image_bytes = Some(bytes.clone());
+        self.image_error = None;
+        self.recognized = false;
+        self.recognizing = true;
+        Task::perform(recognize_board_image(bytes), Msg::ImageRecognized)
+    }
+
     fn editor_from_position(&mut self, pos: &Position) {
         for sq in 0..90u8 {
             self.editor_board[sq as usize] = pos.piece_at(sq);
@@ -1236,16 +1380,58 @@ impl State {
         col.into()
     }
 
+    /// Drop zone: a bordered area that highlights (gold border)
+    /// while a file is dragged over the window. Dropping an image
+    /// file anywhere on the window loads it as a board photo.
+    fn drop_zone(&self) -> Element<'_, Msg> {
+        let hover = self.drop_hover;
+        container(
+            text(i18n::t(Key::PracticeDropImage))
+                .size(FONT_BODY)
+                .style(move |_: &Theme| text::Style {
+                    color: Some(if hover { theme::GOLD } else { theme::TEXT }),
+                }),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(56.0))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(iced::Background::Color(if hover {
+                theme::SURFACE2
+            } else {
+                theme::SURFACE
+            })),
+            border: iced::Border {
+                color: if hover { theme::GOLD } else { theme::BORDER },
+                width: if hover { 2.0 } else { 1.0 },
+                radius: 10.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    }
+
     /// Setup (image source): pick a photo from the device, show its
     /// file name + size as proof of load (the raster picture itself
     /// is not displayed — see the module docs), and set the position
     /// up by hand in the board editor below.
     fn view_setup_image(&self) -> Element<'_, Msg> {
-        let mut col = column![primary_button(
-            i18n::t(Key::PracticePickImage),
-            Msg::PickImage
-        ),]
+        let mut col = column![
+            row![
+                primary_button(i18n::t(Key::PracticePickImage), Msg::PickImage),
+                secondary_button(i18n::t(Key::PracticePasteImage), Msg::PasteImage),
+            ]
+            .spacing(8),
+            // Drop zone: dropping an image file anywhere on the
+            // window loads it; the zone highlights (gold border)
+            // while a file hovers.
+            self.drop_zone(),
+        ]
         .spacing(8);
+        if self.recognizing {
+            col = col.push(text(i18n::t(Key::PracticeRecognizing)).size(FONT_BODY));
+        }
         if let Some(err) = &self.image_error {
             col = col.push(
                 text(err)
@@ -1274,6 +1460,48 @@ impl State {
         }
         col = col.push(self.view_editor());
         col.into()
+    }
+
+    /// The post-recognition step (editor, image source): the
+    /// position was recognised from the photo, so the user picks
+    /// the side to move and starts the game from it. The board
+    /// above stays editable, so a wrongly recognised piece can
+    /// still be fixed before starting.
+    fn view_recognized_step(&self) -> Element<'_, Msg> {
+        let side_button = |label: &'static str, color: Color| {
+            if self.editor_side == color {
+                Button::new(text(label).size(FONT_BODY))
+                    .on_press(Msg::EditorSideChanged(color))
+                    .padding(6)
+                    .style(theme::primary_button_style)
+            } else {
+                Button::new(text(label).size(FONT_BODY))
+                    .on_press(Msg::EditorSideChanged(color))
+                    .padding(6)
+                    .style(theme::secondary_button_style)
+            }
+        };
+        column![
+            text(i18n::t(Key::PracticeRecognized))
+                .size(FONT_BODY)
+                .style(|_: &Theme| text::Style {
+                    color: Some(theme::GREEN),
+                }),
+            text(i18n::t(Key::PracticeRecognizedHint)).size(FONT_BODY),
+            row![
+                text(i18n::t(Key::PracticeSideToMove)).size(FONT_BODY),
+                side_button(i18n::t(Key::PracticeRedToMove), Color::Red),
+                side_button(i18n::t(Key::PracticeBlackToMove), Color::Black),
+            ]
+            .spacing(12),
+            row![
+                primary_button(i18n::t(Key::PracticeStartGame), Msg::UseEditorPosition),
+                secondary_button(i18n::t(Key::PracticeClearBoard), Msg::EditorClear),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8)
+        .into()
     }
 
     /// The board editor section (setup, image source): palette,
@@ -1320,29 +1548,35 @@ impl State {
             .width(Length::Fixed(EDITOR_WIDTH))
             .height(Length::Fixed(EDITOR_HEIGHT)),
         );
-        col = col.push(
-            row![
-                text(i18n::t(Key::PracticeSideToMove)).size(FONT_BODY),
-                radio(
-                    i18n::t(Key::RedSide),
-                    Color::Red,
-                    Some(self.editor_side),
-                    Msg::EditorSideChanged,
-                ),
-                radio(
-                    i18n::t(Key::BlackSide),
-                    Color::Black,
-                    Some(self.editor_side),
-                    Msg::EditorSideChanged,
-                ),
-                secondary_button(i18n::t(Key::PracticeClearBoard), Msg::EditorClear),
-            ]
-            .spacing(12),
-        );
-        col = col.push(primary_button(
-            i18n::t(Key::PracticeUsePosition),
-            Msg::UseEditorPosition,
-        ));
+        if self.recognized {
+            // Recognised from a photo: the explicit step is to pick
+            // the side to move and start the game from it.
+            col = col.push(self.view_recognized_step());
+        } else {
+            col = col.push(
+                row![
+                    text(i18n::t(Key::PracticeSideToMove)).size(FONT_BODY),
+                    radio(
+                        i18n::t(Key::RedSide),
+                        Color::Red,
+                        Some(self.editor_side),
+                        Msg::EditorSideChanged,
+                    ),
+                    radio(
+                        i18n::t(Key::BlackSide),
+                        Color::Black,
+                        Some(self.editor_side),
+                        Msg::EditorSideChanged,
+                    ),
+                    secondary_button(i18n::t(Key::PracticeClearBoard), Msg::EditorClear),
+                ]
+                .spacing(12),
+            );
+            col = col.push(primary_button(
+                i18n::t(Key::PracticeUsePosition),
+                Msg::UseEditorPosition,
+            ));
+        }
         if let Some(err) = &self.editor_error {
             col = col.push(
                 text(err)
@@ -1404,6 +1638,9 @@ impl State {
         render.anim = self.board.anim;
         render.pulse = pulse;
         render.flipped = self.flipped;
+        // Only the side to move can be dragged (both sides are the
+        // user here, but the other side's pieces never lift).
+        render.draggable = Some(pos.side());
         let board_size = board_size_for_window(self.window);
         let board_el = container(BoardProgram::canvas(render).map(Msg::Board))
             .width(Length::Fixed(board_size.width))
@@ -1650,6 +1887,40 @@ impl State {
         }
     }
 
+    /// Map a runtime event to a Practice message: a file dropped onto
+    /// the window, a file hovering over it, or Ctrl+V (paste an image
+    /// from the clipboard). `listen_with` takes a plain `fn`, so this
+    /// lives at module level; the screen filters by phase/source in
+    /// `update`.
+    fn window_event_to_msg(
+        event: iced::Event,
+        _status: iced::event::Status,
+        _id: iced::window::Id,
+    ) -> Option<Msg> {
+        match event {
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Msg::ImageFileDropped(path))
+            }
+            iced::Event::Window(iced::window::Event::FileHovered(_)) => {
+                Some(Msg::ImageDropHovered(true))
+            }
+            iced::Event::Window(iced::window::Event::FilesHoveredLeft) => {
+                Some(Msg::ImageDropHovered(false))
+            }
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                // Cross-platform paste: Cmd+V on macOS, Ctrl+V elsewhere.
+                if modifiers.command()
+                    && matches!(&key, iced::keyboard::Key::Character(c) if c.as_str() == "v")
+                {
+                    Some(Msg::PasteImage)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Subscriptions: the ChessDB bridge, the AI bridge (Pikafish
     /// fallback + grades), and — only while a piece is sliding or
     /// the check halo is fresh — the animation tick. Nothing else
@@ -1665,6 +1936,10 @@ impl State {
                     }
                 }),
             iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
+            // File drops onto the window + Ctrl+V clipboard paste
+            // (setup, image source): the drop zone and the paste
+            // button share this stream.
+            iced::event::listen_with(Self::window_event_to_msg),
             bridge::from_mpsc("practice-ai", Arc::clone(&self.ai_rx)).filter_map(|resp| {
                 match resp {
                     AiResponse::Analysis { req_id, lines } => {
@@ -1698,6 +1973,11 @@ impl State {
 
 /// One palette button: the piece's Han character in its colour,
 /// gold when it is the selected palette piece.
+/// A palette button: the piece drawn on a light disc, as on the
+/// board. The character used to be bare text on the dark button
+/// surface, where a black piece (#2B2B2B on #2A2E36, ~1:1) was
+/// invisible — text and border both. The disc keeps both colours
+/// readable and matches the board.
 fn palette_button(piece: Piece, selected: bool) -> Button<'static, Msg> {
     let color = match piece.color {
         Color::Red => RED_PIECE,
@@ -1707,9 +1987,23 @@ fn palette_button(piece: Piece, selected: bool) -> Button<'static, Msg> {
         .size(22.0)
         .font(theme::cjk_font())
         .style(move |_: &Theme| text::Style { color: Some(color) });
-    let btn = Button::new(label)
+    let disc = container(label)
+        .width(Length::Fixed(36.0))
+        .height(Length::Fixed(36.0))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(iced::Background::Color(PIECE_BG)),
+            border: iced::Border {
+                color,
+                width: 2.0,
+                radius: 18.0.into(),
+            },
+            ..Default::default()
+        });
+    let btn = Button::new(disc)
         .on_press(Msg::EditorPaletteSelected(Some(piece)))
-        .padding(6)
+        .padding(2)
         .width(Length::Fixed(44.0))
         .height(Length::Fixed(40.0));
     if selected {
@@ -1886,9 +2180,210 @@ mod tests {
     }
 
     #[test]
-    fn recognize_board_image_always_fails_without_a_model() {
-        assert!(recognize_board_image(&[0u8; 16]).is_err());
-        assert!(recognize_board_image(&[]).is_err());
+    fn load_image_starts_background_recognition() {
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        let _task = state.load_image("board.png".to_string(), Arc::from([0u8; 16].as_slice()));
+        assert!(state.recognizing);
+        assert!(!state.recognized);
+        assert!(state.image_error.is_none());
+        assert!(state.image_bytes.is_some());
+    }
+
+    #[test]
+    fn image_recognized_failure_reports_error() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.recognizing = true;
+        let _ = state.update(
+            Msg::ImageRecognized(Err("no pieces detected".to_string())),
+            &mut shared,
+        );
+        assert!(!state.recognizing);
+        assert!(!state.recognized);
+        assert_eq!(state.image_error.as_deref(), Some("no pieces detected"));
+    }
+
+    #[test]
+    fn image_recognized_success_fills_editor() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.recognizing = true;
+        let pos = startpos();
+        let _ = state.update(Msg::ImageRecognized(Ok(pos.clone())), &mut shared);
+        assert!(!state.recognizing);
+        assert!(state.recognized);
+        assert!(state.image_error.is_none());
+        // The editor holds the recognised position.
+        assert_eq!(state.editor_board[0], pos.piece_at(0));
+        assert_eq!(state.editor_side, pos.side());
+    }
+
+    /// Build a `KeyPressed` event for a key + modifiers, to feed
+    /// `window_event_to_msg` in tests.
+    fn key_pressed(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> iced::Event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyV),
+            location: iced::keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
+    #[test]
+    fn window_event_maps_file_drop_to_image_load() {
+        let event = iced::Event::Window(iced::window::Event::FileDropped(
+            std::path::PathBuf::from("board.png"),
+        ));
+        assert!(matches!(
+            State::window_event_to_msg(
+                event,
+                iced::event::Status::Ignored,
+                iced::window::Id::unique()
+            ),
+            Some(Msg::ImageFileDropped(p))
+                if p.as_path() == std::path::Path::new("board.png")
+        ));
+    }
+
+    #[test]
+    fn window_event_maps_file_hover_to_drop_highlight() {
+        let hover = iced::Event::Window(iced::window::Event::FileHovered(
+            std::path::PathBuf::from("board.png"),
+        ));
+        assert!(matches!(
+            State::window_event_to_msg(
+                hover,
+                iced::event::Status::Ignored,
+                iced::window::Id::unique()
+            ),
+            Some(Msg::ImageDropHovered(true))
+        ));
+        let left = iced::Event::Window(iced::window::Event::FilesHoveredLeft);
+        assert!(matches!(
+            State::window_event_to_msg(
+                left,
+                iced::event::Status::Ignored,
+                iced::window::Id::unique()
+            ),
+            Some(Msg::ImageDropHovered(false))
+        ));
+    }
+
+    #[test]
+    fn window_event_maps_paste_shortcut_to_paste_image() {
+        let paste = key_pressed(
+            iced::keyboard::Key::Character("v".into()),
+            iced::keyboard::Modifiers::COMMAND,
+        );
+        assert!(matches!(
+            State::window_event_to_msg(
+                paste,
+                iced::event::Status::Ignored,
+                iced::window::Id::unique()
+            ),
+            Some(Msg::PasteImage)
+        ));
+        // A bare "v" (no modifier) is not a paste.
+        let plain = key_pressed(
+            iced::keyboard::Key::Character("v".into()),
+            iced::keyboard::Modifiers::empty(),
+        );
+        assert!(State::window_event_to_msg(
+            plain,
+            iced::event::Status::Ignored,
+            iced::window::Id::unique()
+        )
+        .is_none());
+        // Cmd/Ctrl+C is not a paste either.
+        let copy = key_pressed(
+            iced::keyboard::Key::Character("c".into()),
+            iced::keyboard::Modifiers::COMMAND,
+        );
+        assert!(State::window_event_to_msg(
+            copy,
+            iced::event::Status::Ignored,
+            iced::window::Id::unique()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn drop_hover_flag_is_set_and_cleared() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        assert!(!state.drop_hover);
+        let _ = state.update(Msg::ImageDropHovered(true), &mut shared);
+        assert!(state.drop_hover);
+        let _ = state.update(Msg::ImageDropHovered(false), &mut shared);
+        assert!(!state.drop_hover);
+    }
+
+    #[test]
+    fn dropped_non_image_file_reports_not_an_image() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.source = PracticeSource::Image;
+        let _ = state.update(
+            Msg::ImageFileDropped(std::path::PathBuf::from("notes.txt")),
+            &mut shared,
+        );
+        assert_eq!(
+            state.image_error.as_deref(),
+            Some(i18n::t(Key::PracticeDropNotImage))
+        );
+    }
+
+    #[test]
+    fn clipboard_empty_reports_no_image() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        let _ = state.update(Msg::ClipboardImageDone(None), &mut shared);
+        assert_eq!(
+            state.image_error.as_deref(),
+            Some(i18n::t(Key::PracticeClipboardEmpty))
+        );
+    }
+
+    #[test]
+    fn failed_recognition_clears_recognized_flag() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        // Pretend a previous recognition succeeded.
+        state.recognized = true;
+        // Loading a new photo starts background recognition (the
+        // flag is cleared immediately; the error arrives with the
+        // result).
+        let _task = state.load_image("board.png".to_string(), Arc::from([0u8; 16].as_slice()));
+        assert!(!state.recognized);
+        assert!(state.recognizing);
+        // The background recognition fails: the error is reported.
+        let _ = state.update(
+            Msg::ImageRecognized(Err("no pieces detected".to_string())),
+            &mut shared,
+        );
+        assert!(!state.recognized);
+        assert!(!state.recognizing);
+        assert!(state.image_error.is_some());
+    }
+
+    #[test]
+    fn recognized_position_starts_with_chosen_side() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        // Fill the editor with the start position, mark it
+        // recognised, choose Black to move, and start the game:
+        // the game must start with Black to move.
+        let pos = startpos();
+        state.editor_from_position(&pos);
+        state.recognized = true;
+        state.editor_side = Color::Black;
+        let _ = state.update(Msg::UseEditorPosition, &mut shared);
+        assert_eq!(state.phase, PracticePhase::Playing);
+        assert_eq!(state.game.pos.side(), Color::Black);
     }
 
     #[test]
@@ -1939,5 +2434,63 @@ mod tests {
         assert_eq!(state.custom_elo, shared.settings.custom_elo);
         assert!(state.game.moves.is_empty());
         assert!(!state.board.is_animating());
+    }
+
+    /// Clicking an enemy piece (not dragging) captures with the
+    /// selected piece. `DragStarted` fires for a press on a piece,
+    /// so it must route through `click_square` exactly like
+    /// `SquareClicked`; before this fix it only selected own pieces,
+    /// so a click-to-capture did nothing while drag-and-drop worked.
+    #[test]
+    fn click_on_enemy_piece_captures() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        // Red chariot a1 (sq 0) can capture the Black pawn a5
+        // (sq 36); the Red pawn e5 blocks the two generals.
+        let pos = Position::from_fen("4k4/9/9/9/9/p3P4/9/9/9/R3K4 w").expect("capture FEN");
+        state.start_from(pos);
+        // Press the Red chariot: it is selected.
+        state.handle_board(BoardMsg::DragStarted(0), &mut shared);
+        assert_eq!(state.selected, Some(0));
+        // Press the Black pawn: the chariot must capture it.
+        state.handle_board(BoardMsg::DragStarted(36), &mut shared);
+        assert_eq!(state.game.moves.len(), 1);
+        assert_eq!(state.game.moves[0], Move::new(0, 36));
+        assert!(state
+            .game
+            .pos
+            .piece_at(36)
+            .is_some_and(|p| p.color == Color::Red));
+    }
+
+    /// WCAG relative luminance, for the palette contrast check.
+    fn relative_luminance(c: iced::Color) -> f32 {
+        let lin = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    /// WCAG contrast ratio between two colours.
+    fn contrast_ratio(a: iced::Color, b: iced::Color) -> f32 {
+        let (l1, l2) = (relative_luminance(a), relative_luminance(b));
+        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The palette draws each piece on a light disc (`PIECE_BG`), so
+    /// both piece colours must stay readable on it (WCAG AA, 4.5:1).
+    /// A black piece as bare text on the dark button surface
+    /// (`SURFACE2`) was ~1:1 and invisible — text and border both.
+    #[test]
+    fn palette_piece_colors_have_enough_contrast_on_the_disc() {
+        for piece_color in [RED_PIECE, BLACK_PIECE] {
+            assert!(contrast_ratio(piece_color, PIECE_BG) >= 4.5);
+        }
+        assert!(contrast_ratio(BLACK_PIECE, theme::SURFACE2) < 1.5);
     }
 }

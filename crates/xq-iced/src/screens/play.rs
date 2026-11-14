@@ -1491,6 +1491,13 @@ impl State {
             anim: if in_review { None } else { self.board.anim },
             pulse: self.check_pulse(),
             flipped: self.flipped,
+            // Only the side to move can be dragged; in review the
+            // board is read-only, so nothing lifts.
+            draggable: if in_review {
+                None
+            } else {
+                Some(self.movable_color())
+            },
         }
     }
 

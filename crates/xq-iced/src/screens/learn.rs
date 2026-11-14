@@ -1468,6 +1468,10 @@ impl State {
             anim: self.board.anim,
             pulse: self.pulse(),
             flipped: self.flipped,
+            // Only the learner's pieces can be dragged; the
+            // opponent's pieces never lift (a click on one still
+            // captures with the selected piece).
+            draggable: self.learner_color(),
         };
         let board_size = board_size_for_window(self.window);
         container(BoardProgram::canvas(render).map(Msg::Board))

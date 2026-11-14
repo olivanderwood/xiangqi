@@ -10,3 +10,8 @@ target/
 # PIKAFISH_VERSION.toml is the pin and IS committed.
 engine/*
 !engine/PIKAFISH_VERSION.toml
+# Board-recognition models (Xiangqi Arena, MIT) + the ONNX Runtime
+# library (downloaded by tools/fetch-recognize.sh, never committed).
+# RECOGNIZE_VERSION.toml is the pin and IS committed.
+recognize/*
+!recognize/RECOGNIZE_VERSION.toml
