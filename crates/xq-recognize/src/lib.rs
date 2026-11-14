@@ -242,9 +242,14 @@ impl Recognizer {
             orig_w: input.orig_w as f32,
             orig_h: input.orig_h as f32,
         };
-        let detections = yolo::parse_yolo_output(data, &dims, board::PHYSICAL_CLASSES, &frame);
+        let result = yolo::parse_yolo_output(data, &dims, board::PHYSICAL_CLASSES, &frame);
+        let detections = result.detections;
         if detections.is_empty() {
-            return Err(RecognizeError::NoPosition("no pieces detected".to_string()));
+            return Err(RecognizeError::NoPosition(format!(
+                "no pieces detected (strongest score {:.2}, threshold {:.2})",
+                result.max_confidence,
+                yolo::CONF_THRESHOLD
+            )));
         }
         let grid = board::detections_to_grid(&detections, calibration);
         board::grid_to_position(&grid)
@@ -255,10 +260,19 @@ impl Recognizer {
 mod tests {
     use super::*;
 
-    /// The cloned Xiangqi Arena repo (models are fetched, not
-    /// committed): the validation test reads them from there.
+    /// The models, fetched by `tools/fetch-recognize.sh` into the
+    /// workspace `recognize/` dir (not committed). Falls back to
+    /// the cloned upstream repo in /tmp, if present.
     fn model_dir() -> PathBuf {
-        PathBuf::from("/tmp/xiangqi-pwa-offline")
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recognize");
+        if workspace
+            .join("Entity_chess_recognition_model.onnx")
+            .exists()
+        {
+            workspace
+        } else {
+            PathBuf::from("/tmp/xiangqi-pwa-offline")
+        }
     }
 
     #[test]

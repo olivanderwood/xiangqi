@@ -46,6 +46,19 @@ pub struct Frame {
     pub orig_h: f32,
 }
 
+/// The result of parsing a YOLOv8 output: the kept detections
+/// plus the highest class score seen (before the threshold), for
+/// diagnostics — it tells whether the model saw nothing at all
+/// or something weak (a wrong kind of image vs. a low-confidence
+/// one).
+pub struct YoloResult {
+    /// Detections above the confidence threshold, after NMS.
+    pub detections: Vec<Detection>,
+    /// Highest class score across all anchors (0 when the output
+    /// has no usable rows).
+    pub max_confidence: f32,
+}
+
 /// Parse a YOLOv8 output tensor into detections, in the original
 /// image's coordinates.
 ///
@@ -58,11 +71,15 @@ pub fn parse_yolo_output(
     dims: &[usize],
     num_classes: usize,
     frame: &Frame,
-) -> Vec<Detection> {
+) -> YoloResult {
     let Some((layout, n)) = yolo_layout(dims, num_classes) else {
-        return Vec::new();
+        return YoloResult {
+            detections: Vec::new(),
+            max_confidence: 0.0,
+        };
     };
     let mut out = Vec::new();
+    let mut max_confidence = 0f32;
     for i in 0..n {
         let (x, y, w, h, scores) = match layout {
             Layout::RowMajor => {
@@ -97,6 +114,9 @@ pub fn parse_yolo_output(
                 best = c;
             }
         }
+        if best_score > max_confidence {
+            max_confidence = best_score;
+        }
         if best_score < CONF_THRESHOLD {
             continue;
         }
@@ -117,7 +137,10 @@ pub fn parse_yolo_output(
             confidence: best_score,
         });
     }
-    non_max_suppression(out)
+    YoloResult {
+        detections: non_max_suppression(out),
+        max_confidence,
+    }
 }
 
 /// YOLOv8 output layout: which dimension holds the channels
@@ -236,12 +259,15 @@ mod tests {
             orig_w: 640.0,
             orig_h: 640.0,
         };
-        let dets = parse_yolo_output(&data, &dims, 2, &frame);
+        let result = parse_yolo_output(&data, &dims, 2, &frame);
+        let dets = result.detections;
         assert_eq!(dets.len(), 1);
         assert_eq!(dets[0].class, 0);
         assert!((dets[0].confidence - 0.9).abs() < 1e-6);
         assert!((dets[0].cx - 320.0).abs() < 1e-6);
         assert!((dets[0].cy - 320.0).abs() < 1e-6);
+        // The strongest score overall is the kept detection's 0.9.
+        assert!((result.max_confidence - 0.9).abs() < 1e-6);
     }
 
     #[test]
@@ -256,7 +282,8 @@ mod tests {
             orig_w: 1280.0,
             orig_h: 1280.0,
         };
-        let dets = parse_yolo_output(&data, &dims, 2, &frame);
+        let result = parse_yolo_output(&data, &dims, 2, &frame);
+        let dets = result.detections;
         assert_eq!(dets.len(), 1);
         assert!((dets[0].cx - 620.0).abs() < 1e-4);
         assert!((dets[0].cy - 600.0).abs() < 1e-4);

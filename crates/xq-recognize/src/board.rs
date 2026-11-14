@@ -47,8 +47,8 @@ pub fn physical_class_to_piece(class: usize) -> Option<Piece> {
         8 => (Color::Black, PieceKind::Advisor),
         9 => (Color::Black, PieceKind::Elephant),
         10 => (Color::Black, PieceKind::Horse),
-        11 => (Color::Black, PieceKind::Cannon),
-        12 => (Color::Black, PieceKind::Rook),
+        11 => (Color::Black, PieceKind::Rook),
+        12 => (Color::Black, PieceKind::Cannon),
         13 => (Color::Black, PieceKind::Pawn),
         _ => return None,
     };
@@ -239,6 +239,16 @@ mod tests {
         assert_eq!(
             physical_class_to_piece(7),
             Some(Piece::new(Color::Black, PieceKind::King))
+        );
+        // Upstream order for Black is rook (11) before cannon (12)
+        // — unlike Red, where cannon (4) comes before rook (5).
+        assert_eq!(
+            physical_class_to_piece(11),
+            Some(Piece::new(Color::Black, PieceKind::Rook))
+        );
+        assert_eq!(
+            physical_class_to_piece(12),
+            Some(Piece::new(Color::Black, PieceKind::Cannon))
         );
         assert_eq!(
             physical_class_to_piece(13),
