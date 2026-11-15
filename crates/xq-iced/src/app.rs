@@ -824,7 +824,6 @@ mod tests {
         assert_eq!(app.screen, Screen::Learn);
         assert!(!app.learn.save_prompt_open());
         // Play one learner move: the lesson is now unfinished.
-        app.shared.settings.animate = false;
         assert!(!app.learn.hints().is_empty(), "hints for the first turn");
         let mv = app.learn.hints()[0].mv;
         let _ = app.update(Message::Learn(learn::Msg::Board(

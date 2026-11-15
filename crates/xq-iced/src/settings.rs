@@ -45,7 +45,6 @@ pub struct Settings {
     #[serde(default)]
     pub language: String,
     pub sound: bool,
-    pub animate: bool,
     /// §5: varied Master moves (default on).
     #[serde(default = "default_true")]
     pub diversity: bool,
@@ -90,7 +89,6 @@ impl Default for Settings {
             notation: NotationChoice::Vietnamese,
             language: "vi".to_string(),
             sound: true,
-            animate: true,
             diversity: true,
             tournament: false,
             custom_elo: default_custom_elo(),

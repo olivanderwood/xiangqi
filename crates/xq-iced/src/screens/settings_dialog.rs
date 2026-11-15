@@ -84,8 +84,6 @@ pub enum Msg {
     LanguageChanged(Language),
     /// Sound on/off.
     SoundToggled(bool),
-    /// Piece-slide animation on/off.
-    AnimateToggled(bool),
     /// Move notation changed.
     NotationChanged(NotationChoice),
     /// Difficulty 0–4 changed.
@@ -176,11 +174,6 @@ impl State {
                 if let Ok(mut sfx) = shared.sound.try_lock() {
                     sfx.set_enabled(on);
                 }
-                shared.settings.save();
-                Task::none()
-            }
-            Msg::AnimateToggled(on) => {
-                shared.settings.animate = on;
                 shared.settings.save();
                 Task::none()
             }
@@ -349,9 +342,6 @@ impl State {
             toggler(s.sound)
                 .label(i18n::t(Key::SoundOn))
                 .on_toggle(Msg::SoundToggled),
-            toggler(s.animate)
-                .label(i18n::t(Key::AnimateLabel))
-                .on_toggle(Msg::AnimateToggled),
             section_title(i18n::t(Key::NotationLabel)),
             row![
                 radio(

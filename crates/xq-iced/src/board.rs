@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 use iced::alignment::Vertical;
 use iced::mouse::{self, Button, Cursor};
 use iced::widget::canvas::{
-    gradient::{Gradient, Linear}, Action, Canvas, Event, Frame, Geometry, LineDash, Path, Program,
-    Stroke, Text as CanvasText,
+    gradient::{Gradient, Linear},
+    Action, Canvas, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
 };
 use iced::widget::text::Alignment;
 use iced::{Color, Element, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};

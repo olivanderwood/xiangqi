@@ -1,9 +1,12 @@
 //! Sound effects for moves, captures, checks and checkmate
-//! (Hieu, 2026-11-12).
+//! (Hieu, 2026-11-12; recorded sounds 2026-11-15).
 //!
-//! Tones are synthesized in code — no audio files are needed.
-//! `rodio` plays them on its own thread, so `play_*` never blocks
-//! the UI thread.
+//! Move and capture play Hieu's own recordings
+//! (`assets/sounds/move.wav` — placing a piece, `assets/sounds/capture.wav`
+//! — capturing), trimmed of silence and denoised, embedded at build time
+//! and decoded by rodio. Check and checkmate are still synthesized in
+//! code, so no audio device or file is needed for those. `rodio` plays
+//! everything on its own thread, so `play_*` never blocks the UI thread.
 //!
 //! # Wiring (for the integrator)
 //!
@@ -47,7 +50,8 @@
 // `SharedSound`) and called after a move is played.
 
 use rodio::buffer::SamplesBuffer;
-use rodio::{OutputStream, OutputStreamBuilder};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder};
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use xq_core::board::Position;
 use xq_core::types::Move;
@@ -82,8 +86,14 @@ pub fn sound_for_move(shared: &SharedSound, pos_before: &Position, mv: Move, pos
     }
 }
 
-/// Sample rate for the synthesized tones.
+/// Sample rate for the synthesized tones (check / checkmate).
 const SAMPLE_RATE: u32 = 44_100;
+
+/// Hieu's recordings, trimmed and denoised (2026-11-15):
+/// `move.wav` — placing a piece, 0.17 s; `capture.wav` — capturing,
+/// 0.25 s. Both 44.1 kHz mono WAV, peak-normalized to −1 dB.
+const MOVE_WAV: &[u8] = include_bytes!("../assets/sounds/move.wav");
+const CAPTURE_WAV: &[u8] = include_bytes!("../assets/sounds/capture.wav");
 
 /// One sound player. Cheap to create; the audio stream is opened
 /// lazily on the first `play_*` call, so constructing it never blocks
@@ -130,6 +140,26 @@ impl SoundPlayer {
         }
     }
 
+    /// Queue an embedded WAV recording for playback. Returns `true`
+    /// when it was queued; on a decode failure the caller falls back
+    /// to the synthesized tone, so a bad file is never silence.
+    fn play_wav(&mut self, bytes: &'static [u8]) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.ensure_stream();
+        let Some(stream) = &self.stream else {
+            return false;
+        };
+        match Decoder::new(Cursor::new(bytes)) {
+            Ok(source) => {
+                stream.mixer().add(source);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Queue synthesized samples for playback (non-blocking: the
     /// mixer plays them on rodio's audio thread).
     fn play_samples(&mut self, samples: Vec<f32>) {
@@ -144,16 +174,20 @@ impl SoundPlayer {
         }
     }
 
-    /// A normal move: one short wooden "knock".
+    /// A normal move: Hieu's recorded piece-placement sound.
     pub fn play_move(&mut self) {
-        self.play_samples(note(520.0, 0.08, 38.0, 0.55));
+        if !self.play_wav(MOVE_WAV) {
+            self.play_samples(note(520.0, 0.08, 38.0, 0.55));
+        }
     }
 
-    /// A capture: a lower, sharper and slightly longer knock.
+    /// A capture: Hieu's recorded capture sound.
     pub fn play_capture(&mut self) {
-        let low = note(330.0, 0.14, 26.0, 0.7);
-        let snap = note(660.0, 0.06, 55.0, 0.35);
-        self.play_samples(mix(&low, &snap));
+        if !self.play_wav(CAPTURE_WAV) {
+            let low = note(330.0, 0.14, 26.0, 0.7);
+            let snap = note(660.0, 0.06, 55.0, 0.35);
+            self.play_samples(mix(&low, &snap));
+        }
     }
 
     /// A check: two rising warning notes.
@@ -209,6 +243,7 @@ fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rodio::Source;
 
     #[test]
     fn note_has_expected_length_and_bounds() {
@@ -227,6 +262,20 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert!((m[0] - 1.0).abs() < 1e-6);
         assert!((m[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn embedded_recordings_decode_and_have_sane_length() {
+        // Hieu's recordings (2026-11-15): a trimmed knock each, no
+        // leading silence, so they play the instant a move lands.
+        for bytes in [MOVE_WAV, CAPTURE_WAV] {
+            let source = Decoder::new(Cursor::new(bytes)).expect("embedded WAV decodes");
+            assert_eq!(source.sample_rate(), SAMPLE_RATE);
+            assert_eq!(source.channels(), 1);
+            let n = source.count();
+            // 0.1–0.5 s of mono audio at 44.1 kHz.
+            assert!((4_410..=22_050).contains(&n), "samples: {n}");
+        }
     }
 
     #[test]

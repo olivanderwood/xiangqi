@@ -893,7 +893,7 @@ impl State {
             return;
         }
         self.last_move = Some(mv);
-        if animate && shared.settings.animate {
+        if animate {
             self.board.start_anim(mv.from, mv.to);
         } else {
             self.board.anim = None;
@@ -2334,7 +2334,6 @@ mod tests {
     #[test]
     fn save_progress_and_resume_restores_the_lesson() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let lesson = shared
             .book
             .by_learner(SideColor::Red)

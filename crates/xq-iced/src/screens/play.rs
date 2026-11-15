@@ -846,7 +846,7 @@ impl State {
             self.pending_grade = Some((self.game.start.to_fen(), moves_before, mv));
         }
         self.last_move = Some(mv);
-        if animate && shared.settings.animate {
+        if animate {
             self.board.start_anim(mv.from, mv.to);
         } else {
             self.board.anim = None;
@@ -2448,7 +2448,6 @@ mod tests {
     #[test]
     fn playing_a_move_starts_the_slide_and_blocks_work() {
         let mut shared = Shared::new();
-        shared.settings.animate = true;
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         assert!(state.started);
@@ -2474,7 +2473,6 @@ mod tests {
         // running while the AI still owes a move, not just while a
         // piece slides or the check halo flashes.
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         // Not started yet: no AI move is pending.
         assert!(!state.ai_move_pending());
@@ -2499,7 +2497,6 @@ mod tests {
     #[test]
     fn undo_returns_to_the_human_turn() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         // Two plies by hand (Red, then Black), as if the AI replied.
@@ -2517,7 +2514,6 @@ mod tests {
     #[test]
     fn save_prompt_only_for_a_game_in_progress() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         // Not started: nothing to save.
         assert!(!state.needs_save_prompt());
@@ -2536,7 +2532,6 @@ mod tests {
     #[test]
     fn save_unfinished_and_resume_restores_the_game() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         state.play(Move::new(19, 22), &shared, true);
@@ -2562,7 +2557,6 @@ mod tests {
     #[test]
     fn resume_ignores_a_corrupt_entry() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         let mut bad = SavedGame {
             id: "play-bad".to_string(),
@@ -2596,7 +2590,6 @@ mod tests {
         // shows its result (with the winner's color) and still lets
         // the user undo.
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         state.play(Move::new(19, 22), &shared, true);

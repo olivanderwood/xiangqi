@@ -1510,7 +1510,7 @@ impl State {
         if gives_check {
             self.check_since = Some(Instant::now());
         }
-        if animate && shared.settings.animate {
+        if animate {
             self.board.start_anim(mv.from, mv.to);
         }
         self.selected = None;
@@ -3248,7 +3248,6 @@ mod tests {
     #[test]
     fn save_unfinished_and_load_restores_the_game() {
         let mut shared = Shared::new();
-        shared.settings.animate = false;
         let mut state = State::new(&shared);
         state.start_from(Position::startpos());
         assert_eq!(state.phase(), PracticePhase::Playing);
