@@ -65,7 +65,7 @@ use crate::helpers::{move_strings, render_move};
 use crate::i18n::{self, difficulty_name, Key};
 use crate::icons::Icon;
 use crate::screens::summary::{SummaryData, SummaryRow};
-use crate::sound::sound_for_move;
+use crate::sound::{decide_sound, play_sound, MoveSound};
 use crate::theme::{
     self, BLACK_PIECE, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GOLD, RED_PIECE, SPACE_16,
     SPACE_24, SPACE_4, SPACE_8, TEXT_DIM,
@@ -361,6 +361,11 @@ pub struct State {
     board: BoardState,
     selected: Option<Square>,
     last_move: Option<Move>,
+    /// Sound owed to the landing of the sliding piece (Hieu,
+    /// 2026-11-15: the sound plays when the piece is placed down,
+    /// not when it is picked up). `None` when nothing is owed — a
+    /// dragged piece plays its sound at once, it never slides.
+    pending_sound: Option<MoveSound>,
     /// Whether the board is flipped (Black at the bottom). Auto-set
     /// when the learner plays Black; the Flip button toggles it
     /// (egui `LearnState::flipped`).
@@ -427,6 +432,7 @@ impl State {
             board: BoardState::default(),
             selected: None,
             last_move: None,
+            pending_sound: None,
             flipped: false,
             started: false,
             show_save_prompt: false,
@@ -899,10 +905,21 @@ impl State {
             self.board.anim = None;
         }
         self.selected = None;
-        // Sound for the move just played: move / capture / check /
-        // checkmate. Non-blocking and silent when sound is off or no
-        // audio device is present.
-        sound_for_move(&shared.sound, &pos_before, mv, &self.game.pos);
+        // Hieu, 2026-11-15: the sound plays when the piece lands,
+        // not when it is picked up. A sliding piece owes its sound
+        // to the landing tick; a dragged piece is already at its
+        // destination, so its sound plays at once. A sound still owed
+        // from an earlier move (its slide was cut short) plays now
+        // rather than being dropped.
+        if let Some(prev) = self.pending_sound.take() {
+            play_sound(&shared.sound, prev);
+        }
+        let sound = decide_sound(&pos_before, mv, &self.game.pos);
+        if animate {
+            self.pending_sound = Some(sound);
+        } else {
+            play_sound(&shared.sound, sound);
+        }
     }
 
     /// The learner played `mv`. The Tutor grades it (its event is the
@@ -1451,9 +1468,14 @@ impl State {
             }
             Msg::Ignored => Task::none(),
             Msg::Tick(now) => {
-                // The piece has landed: the work that waited for the
-                // slide may run now (see the settle step below).
-                let _ = self.board.finish_anim(now);
+                // The piece has landed: its sound plays now, then the
+                // work that waited for the slide may run (see the
+                // settle step below).
+                if self.board.finish_anim(now) {
+                    if let Some(sound) = self.pending_sound.take() {
+                        play_sound(&shared.sound, sound);
+                    }
+                }
                 if let Some(due) = self.opponent_due {
                     if now >= due {
                         self.play_opponent(shared);
@@ -2329,6 +2351,32 @@ mod tests {
         assert_eq!(data.rows[0].grade, Grade::Book);
         assert!(data.rows[0].best.is_some());
         assert_eq!(data.positions.len(), 2);
+    }
+
+    #[test]
+    fn move_sound_waits_for_the_landing() {
+        // Hieu, 2026-11-15: the sound plays when the piece is
+        // placed down, not when it is picked up.
+        let mut shared = Shared::new();
+        let lesson = shared
+            .book
+            .by_learner(SideColor::Red)
+            .into_iter()
+            .next()
+            .expect("a Red lesson")
+            .clone();
+        let mut st = State::new(&shared);
+        st.start(&lesson.id, true, &mut shared);
+        assert!(!st.hints.is_empty(), "hints for the first learner turn");
+        let mv = st.hints[0].mv;
+        // A click: the piece slides, so the sound is owed to the
+        // landing, not played at once.
+        st.play_user_move(mv, &shared, true);
+        assert_eq!(st.pending_sound, Some(MoveSound::Move));
+        // The landing tick plays it.
+        let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
+        let _ = st.update(Msg::Tick(later), &mut shared);
+        assert_eq!(st.pending_sound, None);
     }
 
     #[test]

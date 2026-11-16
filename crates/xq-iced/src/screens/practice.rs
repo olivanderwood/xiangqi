@@ -90,7 +90,7 @@ use crate::chessdb_worker::{ChessDbResponse, ChessDbView};
 use crate::helpers::{format_advantage, position_at, render_move};
 use crate::i18n::{self, difficulty_name, Key};
 use crate::icons::Icon;
-use crate::sound::sound_for_move;
+use crate::sound::{decide_sound, play_sound, MoveSound};
 use crate::theme::{
     self, BLACK_PIECE, BOARD_HEIGHT, BOARD_LINE, BOARD_WIDTH, FONT_BODY, FONT_CAPTION, FONT_PIECE,
     FONT_SCREEN_TITLE, PIECE_BG, PIECE_INNER_RADIUS, PIECE_RADIUS, RED, RED_PIECE, SPACE_12,
@@ -431,6 +431,11 @@ pub struct State {
     /// Grade request waiting for the piece to land (see the
     /// invariant above). `None` when nothing is waiting.
     pending_grade: Option<PendingGrade>,
+    /// Sound owed to the landing of the sliding piece (Hieu,
+    /// 2026-11-15: the sound plays when the piece is placed down,
+    /// not when it is picked up). `None` when nothing is owed — a
+    /// dragged piece plays its sound at once, it never slides.
+    pending_sound: Option<MoveSound>,
     /// Which suggestion row the mouse is over (`None` = none); its
     /// arrow draws at full opacity, the rest at 38% (DESIGN-iced.md §1).
     hover_suggest: Option<usize>,
@@ -822,6 +827,7 @@ impl State {
             worker,
             ai_rx: Arc::new(Mutex::new(real_rx)),
             pending_grade: None,
+            pending_sound: None,
             hover_suggest: None,
             show_save_prompt: false,
             saved_this_game: false,
@@ -1195,10 +1201,13 @@ impl State {
                 Task::none()
             }
             Msg::Tick(now) => {
-                // The piece has landed: flush the work that was
-                // waiting for the animation (see the invariant at the
-                // top of this file).
+                // The piece has landed: its sound plays now, then the
+                // work that was waiting for the animation flushes
+                // (see the invariant at the top of this file).
                 if self.board.finish_anim(now) {
+                    if let Some(sound) = self.pending_sound.take() {
+                        play_sound(&shared.sound, sound);
+                    }
                     self.flush_pending_grade();
                     self.maybe_suggest(shared, now);
                 }
@@ -1514,10 +1523,21 @@ impl State {
             self.board.start_anim(mv.from, mv.to);
         }
         self.selected = None;
-        // Sound for the move just played: move / capture / check /
-        // checkmate. Non-blocking and silent when sound is off or no
-        // audio device is present.
-        sound_for_move(&shared.sound, &pos_before, mv, &self.game.pos);
+        // Hieu, 2026-11-15: the sound plays when the piece lands,
+        // not when it is picked up. A sliding piece owes its sound
+        // to the landing tick; a dragged piece is already at its
+        // destination, so its sound plays at once. A sound still owed
+        // from an earlier move (its slide was cut short) plays now
+        // rather than being dropped.
+        if let Some(prev) = self.pending_sound.take() {
+            play_sound(&shared.sound, prev);
+        }
+        let sound = decide_sound(&pos_before, mv, &self.game.pos);
+        if animate {
+            self.pending_sound = Some(sound);
+        } else {
+            play_sound(&shared.sound, sound);
+        }
         self.pending_grade = Some(PendingGrade {
             start_fen,
             moves_before,
@@ -3243,6 +3263,27 @@ mod tests {
             assert!(contrast_ratio(piece_color, PIECE_BG) >= 4.5);
         }
         assert!(contrast_ratio(BLACK_PIECE, theme::SURFACE2) < 1.5);
+    }
+
+    #[test]
+    fn move_sound_waits_for_the_landing() {
+        // Hieu, 2026-11-15: the sound plays when the piece is
+        // placed down, not when it is picked up.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start_from(Position::startpos());
+        assert_eq!(state.phase(), PracticePhase::Playing);
+        // A click: the piece slides, so the sound is owed to the
+        // landing, not played at once.
+        state.play_move(Move::new(19, 22), &mut shared, true);
+        assert_eq!(state.pending_sound, Some(MoveSound::Move));
+        // The landing tick plays it.
+        let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
+        let _ = state.update(Msg::Tick(later), &mut shared);
+        assert_eq!(state.pending_sound, None);
+        // A drag-and-drop never slides: its sound plays at once.
+        state.play_move(Move::new(82, 65), &mut shared, false);
+        assert_eq!(state.pending_sound, None);
     }
 
     #[test]

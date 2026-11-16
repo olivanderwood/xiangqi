@@ -23,21 +23,19 @@
 //! let mut sfx = SoundPlayer::new();
 //! sfx.set_enabled(settings.sound);
 //! ```
-//! After a move is played, call exactly one of these, decided from
-//! the position BEFORE the move and the position AFTER it:
+//! After a move is played, decide its sound from the position BEFORE
+//! the move and the position AFTER it, then play it — but only when
+//! the piece has landed (Hieu, 2026-11-15: the sound plays when the
+//! piece is placed down, not when it is picked up). A sliding piece
+//! (click / hint / AI) owes its sound to the landing tick; a dragged
+//! piece is already at its destination, so its sound plays at once:
 //! ```ignore
 //! // `pos_before` = position before the move, `pos_after` = after.
-//! let captured = pos_before.piece_at(mv.to).is_some();
-//! let gives_check = pos_after.in_check(pos_after.side());
-//! let is_mate = gives_check && pos_after.legal_moves().is_empty();
-//! if is_mate {
-//!     sfx.play_mate();
-//! } else if gives_check {
-//!     sfx.play_check();
-//! } else if captured {
-//!     sfx.play_capture();
+//! let sound = decide_sound(&pos_before, mv, &pos_after);
+//! if animate {
+//!     self.pending_sound = Some(sound); // played on the landing tick
 //! } else {
-//!     sfx.play_move();
+//!     play_sound(&shared.sound, sound);
 //! }
 //! ```
 //! (Checkmate wins over check, check wins over capture — a checking
@@ -61,28 +59,55 @@ use xq_core::types::Move;
 /// only held for the short `play_*` call, never across a search.
 pub type SharedSound = Arc<Mutex<SoundPlayer>>;
 
-/// Play the sound for a move just played, decided from the position
-/// before the move and the position after it. Checkmate wins over
-/// check, check wins over capture. Never blocks, never panics: a
-/// missing audio device or a busy player is silently a no-op.
-pub fn sound_for_move(shared: &SharedSound, pos_before: &Position, mv: Move, pos_after: &Position) {
+/// Which sound a move makes, decided from the position before the
+/// move and the position after it. Checkmate wins over check, check
+/// wins over capture — a checking capture sounds like a check, a
+/// mating move like checkmate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveSound {
+    /// A quiet move: the recorded piece-placement sound.
+    Move,
+    /// A capture: the recorded capture sound.
+    Capture,
+    /// A check: the synthesized warning notes.
+    Check,
+    /// Checkmate: the synthesized arpeggio.
+    Mate,
+}
+
+/// Decide which sound a move makes, from the position before the
+/// move and the position after it.
+#[must_use]
+pub fn decide_sound(pos_before: &Position, mv: Move, pos_after: &Position) -> MoveSound {
+    let captured = pos_before.piece_at(mv.to).is_some();
+    let gives_check = pos_after.in_check(pos_after.side());
+    let is_mate = gives_check && pos_after.legal_moves().is_empty();
+    if is_mate {
+        MoveSound::Mate
+    } else if gives_check {
+        MoveSound::Check
+    } else if captured {
+        MoveSound::Capture
+    } else {
+        MoveSound::Move
+    }
+}
+
+/// Play the sound for a move just played. Never blocks, never
+/// panics: a missing audio device or a busy player is silently a
+/// no-op.
+pub fn play_sound(shared: &SharedSound, sound: MoveSound) {
     let Ok(mut sfx) = shared.try_lock() else {
         return;
     };
     if !sfx.is_enabled() {
         return;
     }
-    let captured = pos_before.piece_at(mv.to).is_some();
-    let gives_check = pos_after.in_check(pos_after.side());
-    let is_mate = gives_check && pos_after.legal_moves().is_empty();
-    if is_mate {
-        sfx.play_mate();
-    } else if gives_check {
-        sfx.play_check();
-    } else if captured {
-        sfx.play_capture();
-    } else {
-        sfx.play_move();
+    match sound {
+        MoveSound::Move => sfx.play_move(),
+        MoveSound::Capture => sfx.play_capture(),
+        MoveSound::Check => sfx.play_check(),
+        MoveSound::Mate => sfx.play_mate(),
     }
 }
 
