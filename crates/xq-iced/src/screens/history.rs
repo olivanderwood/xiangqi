@@ -92,7 +92,8 @@ impl State {
         .style(|_: &Theme| container::Style {
             background: Some(iced::Background::Color(theme::SURFACE)),
             ..Default::default()
-        });
+        })
+        .align_y(iced::Alignment::Center);
         // Finished Play games only (the history); every Practice
         // game, finished or not (the saved-games list).
         let entries: Vec<_> = shared

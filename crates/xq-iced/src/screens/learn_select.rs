@@ -139,6 +139,7 @@ impl State {
             background: Some(iced::Background::Color(theme::SURFACE)),
             ..Default::default()
         })
+        .align_y(iced::Alignment::Center)
         .into()
     }
 
@@ -183,6 +184,10 @@ impl State {
             ]
             .spacing(SPACE_8)
             .align_y(iced::Alignment::Center);
+            let content = container(content)
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
             Button::new(content)
                 .on_press(Msg::SelectSide(side))
                 .style(
@@ -390,14 +395,20 @@ impl State {
                     row![
                         Space::new().width(Length::Fill),
                         Button::new(
-                            row![
-                                icon_tinted(Icon::BookOpen, TEXT_DIM),
-                                text(i18n::t(Key::StartLesson))
-                                    .size(FONT_BODY)
-                                    .font(theme::inter_font_semibold()),
-                            ]
-                            .spacing(SPACE_8)
-                            .align_y(iced::Alignment::Center),
+                            container(
+                                row![
+                                    icon_tinted(Icon::BookOpen, TEXT_DIM),
+                                    text(i18n::t(Key::StartLesson))
+                                        .size(FONT_BODY)
+                                        .font(theme::inter_font_semibold()),
+                                ]
+                                .spacing(SPACE_8)
+                                .align_y(iced::Alignment::Center),
+                            )
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .center_x(Length::Fill)
+                            .center_y(Length::Fill),
                         )
                         .style(theme::secondary_button_style)
                         .padding(SPACE_12)

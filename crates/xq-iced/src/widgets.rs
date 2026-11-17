@@ -118,19 +118,41 @@ fn labeled_icon<'a, Message: 'a>(icn: Icon, tint: Color, label: &'a str) -> Row<
     .align_y(Alignment::Center)
 }
 
+/// Centers a button's content inside whatever extra room `.width` /
+/// `.height` give the button: `iced`'s `Button` lays content flush
+/// to the top-left corner of its bounds otherwise (there is no
+/// built-in alignment), which left-hugs the label on every button a
+/// screen stretches with `.width(Length::Fill)` or a fixed size
+/// bigger than the label. Wrapping in a `Length::Fill` container
+/// here is safe for callers that leave width/height at the default
+/// `Shrink` too: every helper below pins the `Button` back to
+/// `Shrink` explicitly, which makes this inner `Fill` degrade to the
+/// label's own intrinsic size (`iced_core::layout::Limits`
+/// compression), so unsized buttons render exactly as before.
+fn centered<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
 /// Primary button: gold fill, dark text (`theme::primary_button_style`).
 pub fn primary_button<'a, Message>(label: &'a str, on_press: Message) -> Button<'a, Message>
 where
     Message: Clone + 'a,
 {
-    Button::new(
+    Button::new(centered(
         text(label)
             .size(FONT_BODY)
             .font(theme::inter_font_semibold()),
-    )
+    ))
     .on_press(on_press)
     .style(theme::primary_button_style)
     .padding(SPACE_12)
+    .width(Length::Shrink)
+    .height(Length::Shrink)
 }
 
 /// Primary button with a leading icon, tinted dark so it reads on
@@ -143,10 +165,12 @@ pub fn primary_button_with_icon<'a, Message>(
 where
     Message: Clone + 'a,
 {
-    Button::new(labeled_icon(icn, BG, label))
+    Button::new(centered(labeled_icon(icn, BG, label)))
         .on_press(on_press)
         .style(theme::primary_button_style)
         .padding(SPACE_12)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
 }
 
 /// Secondary button: surface-2 fill, light text, border
@@ -155,14 +179,16 @@ pub fn secondary_button<'a, Message>(label: &'a str, on_press: Message) -> Butto
 where
     Message: Clone + 'a,
 {
-    Button::new(
+    Button::new(centered(
         text(label)
             .size(FONT_BODY)
             .font(theme::inter_font_semibold()),
-    )
+    ))
     .on_press(on_press)
     .style(theme::secondary_button_style)
     .padding(SPACE_12)
+    .width(Length::Shrink)
+    .height(Length::Shrink)
 }
 
 /// Secondary button with a leading icon (mockup: "Hoàn nước",
@@ -175,10 +201,12 @@ pub fn secondary_button_with_icon<'a, Message>(
 where
     Message: Clone + 'a,
 {
-    Button::new(labeled_icon(icn, TEXT, label))
+    Button::new(centered(labeled_icon(icn, TEXT, label)))
         .on_press(on_press)
         .style(theme::secondary_button_style)
         .padding(SPACE_12)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
 }
 
 /// Danger button with a leading icon (mockup: "Xin thua" with the
@@ -191,10 +219,12 @@ pub fn danger_button_with_icon<'a, Message>(
 where
     Message: Clone + 'a,
 {
-    Button::new(labeled_icon(icn, TEXT, label))
+    Button::new(centered(labeled_icon(icn, TEXT, label)))
         .on_press(on_press)
         .style(theme::danger_button_style)
         .padding(SPACE_12)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
 }
 
 /// Ghost button style (mockup headers: transparent fill, light text,
@@ -228,10 +258,12 @@ pub fn ghost_button_with_icon<'a, Message>(
 where
     Message: Clone + 'a,
 {
-    Button::new(labeled_icon(icn, TEXT, label))
+    Button::new(centered(labeled_icon(icn, TEXT, label)))
         .on_press(on_press)
         .style(ghost_button_style)
         .padding(SPACE_12)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
 }
 
 /// A button with no `on_press` (rendered disabled by Iced), with a
@@ -240,9 +272,11 @@ pub fn disabled_button_with_icon<'a, Message>(label: &'a str, icn: Icon) -> Butt
 where
     Message: 'a,
 {
-    Button::new(labeled_icon(icn, TEXT_DIM, label))
+    Button::new(centered(labeled_icon(icn, TEXT_DIM, label)))
         .style(theme::secondary_button_style)
         .padding(SPACE_12)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
 }
 
 // The menu's big call-to-action: a primary button filling its card,
@@ -428,6 +462,7 @@ pub fn status_chip<'a, Message: 'a>(
             },
             ..Default::default()
         })
+        .align_y(iced::Alignment::Center)
         .into()
 }
 

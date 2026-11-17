@@ -1646,7 +1646,8 @@ impl State {
         .style(|_: &Theme| container::Style {
             background: Some(iced::Background::Color(theme::SURFACE)),
             ..Default::default()
-        });
+        })
+        .align_y(iced::Alignment::Center);
 
         // Board: canvas + side panel. (No eval bar: Hieu 2026-11-13
         // asked to remove the colour bar at the far left; the

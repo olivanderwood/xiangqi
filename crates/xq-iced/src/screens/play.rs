@@ -1739,6 +1739,7 @@ impl State {
             background: Some(Background::Color(theme::SURFACE)),
             ..Default::default()
         })
+        .align_y(Alignment::Center)
         .into()
     }
 

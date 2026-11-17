@@ -1937,7 +1937,8 @@ impl State {
         .style(|_: &Theme| container::Style {
             background: Some(iced::Background::Color(theme::SURFACE)),
             ..Default::default()
-        });
+        })
+        .align_y(iced::Alignment::Center);
         column![
             header,
             header_divider(),
@@ -2336,7 +2337,8 @@ impl State {
         .style(|_: &Theme| container::Style {
             background: Some(iced::Background::Color(theme::SURFACE)),
             ..Default::default()
-        });
+        })
+        .align_y(iced::Alignment::Center);
         column![
             header,
             header_divider(),
@@ -2709,11 +2711,17 @@ fn palette_button(piece: Piece, selected: bool) -> Button<'static, Msg> {
             },
             ..Default::default()
         });
-    let btn = Button::new(disc)
-        .on_press(Msg::EditorPaletteSelected(Some(piece)))
-        .padding(2)
-        .width(Length::Fixed(44.0))
-        .height(Length::Fixed(40.0));
+    let btn = Button::new(
+        container(disc)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .on_press(Msg::EditorPaletteSelected(Some(piece)))
+    .padding(2)
+    .width(Length::Fixed(44.0))
+    .height(Length::Fixed(40.0));
     if selected {
         btn.style(theme::primary_button_style)
     } else {
