@@ -324,9 +324,9 @@ struct PendingGrade {
 /// Practice screen state.
 pub struct State {
     phase: PracticePhase,
-    /// Difficulty index (0..=4) for Pikafish, same scale as the app.
+    /// Difficulty index (0..=7) for Pikafish, same scale as the app.
     difficulty: u8,
-    /// Custom Elo when `difficulty == 4`.
+    /// Custom Elo when `difficulty == 7`.
     custom_elo: u16,
     /// Which setup source tab is open.
     source: PracticeSource,
@@ -553,9 +553,9 @@ pub enum Msg {
     ShowSettings,
     /// Open the About dialog (intercepted by `App::update`).
     ShowAbout,
-    /// The user picked another difficulty (0..=4).
+    /// The user picked another difficulty (0..=7).
     DifficultyChanged(u8),
-    /// The custom-Elo slider moved (difficulty 4).
+    /// The custom-Elo slider moved (difficulty 7).
     CustomEloChanged(u16),
     /// The user picked another setup source tab.
     SourceChanged(PracticeSource),
@@ -846,13 +846,7 @@ impl State {
     /// The practice difficulty as an engine `Level` (same scale as
     /// `Settings::level()`).
     fn level(&self) -> Level {
-        match self.difficulty {
-            0 => Level::Easy,
-            2 => Level::Hard,
-            3 => Level::Master,
-            4 => Level::Elo(self.custom_elo),
-            _ => Level::Medium,
-        }
+        crate::settings::difficulty_level(self.difficulty, self.custom_elo)
     }
 
     /// Best available advantage score (Red perspective) for the eval
@@ -1821,7 +1815,7 @@ impl State {
     /// tall, like the Learn-select start button.
     fn view_setup(&self) -> Element<'_, Msg> {
         let mut diff_col = Column::new().spacing(4);
-        for d in 0..=4u8 {
+        for d in 0..=7u8 {
             diff_col = diff_col.push(radio(
                 difficulty_name(d),
                 d,
@@ -1837,11 +1831,11 @@ impl State {
             diff_col,
         ]
         .spacing(8);
-        if self.difficulty == 4 {
+        if self.difficulty == 7 {
             col = col.push(
                 row![
                     text(i18n::t(Key::EngineCustomElo)).size(FONT_BODY),
-                    slider(1200..=3000u16, self.custom_elo, Msg::CustomEloChanged)
+                    slider(1000..=2800u16, self.custom_elo, Msg::CustomEloChanged)
                         .step(50u16)
                         .width(Length::Fixed(220.0)),
                     text(format!("Elo {}", self.custom_elo)).size(FONT_BODY),
@@ -2285,6 +2279,9 @@ impl State {
         } else {
             None
         };
+        // Red check arrows (Hieu, 2026-11-19): from every piece
+        // giving check to the checked general.
+        render.arrows.extend(crate::board::check_arrows(&pos));
         render.anim = self.board.anim;
         render.pulse = pulse;
         render.flipped = self.flipped;
@@ -2368,10 +2365,9 @@ impl State {
     /// Its column is Fill too, and the action buttons are Fill,
     /// so the panel content stretches with the panel instead of
     /// staying 380 px wide in a wide window.
-    fn view_panel(&self, shared: &Shared, pos: &Position, lines_current: bool) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(SPACE_12).width(Length::Fill);
-        // Status: result, check, or whose turn it is.
-        let status = if let Some(result) = self.result_text() {
+    /// Status line: result, check, or whose turn it is.
+    fn status_text(&self, pos: &Position) -> String {
+        if let Some(result) = self.result_text() {
             result
         } else if pos.in_check(pos.side()) {
             format!(
@@ -2387,7 +2383,13 @@ impl State {
                 Color::Red => i18n::t(Key::RedToMove).to_string(),
                 Color::Black => i18n::t(Key::BlackToMove).to_string(),
             }
-        };
+        }
+    }
+
+    fn view_panel(&self, shared: &Shared, pos: &Position, lines_current: bool) -> Element<'_, Msg> {
+        let mut col = Column::new().spacing(SPACE_12).width(Length::Fill);
+        // Status: result, check, or whose turn it is.
+        let status = self.status_text(pos);
         // Status: result, check, or whose turn it is. A finished
         // game shows the result in the winner's color (Hieu,
         // 2026-11-14).
@@ -2397,6 +2399,15 @@ impl State {
             text(status)
                 .size(FONT_BODY)
                 .style(move |_: &Theme| iced::widget::text::Style { color: Some(color) })
+        } else if pos.in_check(pos.side()) {
+            // Check reads red + semibold (Hieu, 2026-11-19): the
+            // status line must shout the check, not whisper it.
+            text(status)
+                .size(FONT_BODY)
+                .font(theme::inter_font_semibold())
+                .style(|_: &Theme| iced::widget::text::Style {
+                    color: Some(theme::RED),
+                })
         } else {
             text(status).size(FONT_BODY)
         };
@@ -2633,8 +2644,8 @@ impl State {
 
     /// Subscriptions: the ChessDB bridge, the AI bridge (Pikafish
     /// fallback + grades), and — only while a piece is sliding or
-    /// the check halo is fresh — the animation tick. Nothing else
-    /// ticks: with no animation and no halo there is nothing to
+    /// the position is in check — the animation tick. Nothing else
+    /// ticks: with no animation and no check there is nothing to
     /// animate, and worker answers arrive as pushed messages.
     pub fn subscription(&self) -> Subscription<Msg> {
         let mut subs = vec![
@@ -2670,10 +2681,10 @@ impl State {
                 }
             }),
         ];
-        let ticking = self.board.is_animating()
-            || self
-                .check_since
-                .is_some_and(|s| s.elapsed() < Duration::from_secs(1));
+        // The halo keeps pulsing while the check stands (Hieu,
+        // 2026-11-19) — the old 1 s window froze it before the
+        // next move was calculated.
+        let ticking = self.board.is_animating() || self.game.pos.in_check(self.game.pos.side());
         if ticking {
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
@@ -2893,6 +2904,22 @@ mod tests {
         board[85] = None;
         board[86] = Some(Piece::new(Color::Black, PieceKind::King));
         assert!(!editor_generals_face(&board));
+    }
+
+    #[test]
+    fn check_status_names_the_check() {
+        // Hieu, 2026-11-19: the status line must name the check.
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        // Black to move, in check from the Red rook on (4, 1).
+        let pos = Position::from_fen("4k4/9/9/9/9/9/9/9/4R4/4K4 b - - 0 1").expect("check FEN");
+        state.game = Game::new(pos.clone());
+        let status = state.status_text(&pos);
+        assert!(status.contains(i18n::t(Key::Check)));
+        assert!(status.contains(i18n::t(Key::BlackToMove)));
+        // No check: just whose turn it is.
+        let pos = startpos();
+        assert!(!state.status_text(&pos).contains(i18n::t(Key::Check)));
     }
 
     #[test]

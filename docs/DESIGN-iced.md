@@ -132,6 +132,11 @@ bản viết lại UI bằng Iced.
   thắng/hòa/thua, nước tốt nhất; không mạng thì hiện "không khả dụng".
 - Tải ảnh từ thiết bị (rfd) + báo không nhận diện được khi không nhận diện được.
 - Âm thanh đi/ăn/chiếu/chiếu hết; halo chiếu nhấp nháy; hiệu ứng ăn quân.
+  Hiệu ứng chiếu (Hieu, 2026-11-19: phải nhìn thấy ngay để tính nước
+  tiếp theo): halo đỏ nhấp nháy LIÊN TỤC chừng nào còn chiếu (không tắt
+  sau 1 s), quầng đỏ mờ dưới quân Tướng + vòng đậm 5 px, mũi tên đỏ từ
+  quân chiếu tới Tướng, dòng trạng thái "Chiếu! — …" màu đỏ đậm (cả lúc
+  AI đang nghĩ thì hiện cả 2) — áp dụng cả 3 mode Đấu / Học / Tự luyện.
 - Localize EN/VI; ký hiệu nước đi Việt/Anh; nút Reset ở cả 3 mode.
 - Nguyên tắc vàng: quân phải đặt xuống và animation chạy XONG rồi mới tính
   toán (AI, chấm, gợi ý, ChessDB).

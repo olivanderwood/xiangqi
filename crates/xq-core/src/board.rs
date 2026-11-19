@@ -350,9 +350,14 @@ impl Position {
             .count()
     }
 
-    /// Is `sq` attacked by any piece of colour `by`?
+    /// Squares of `by`'s pieces attacking `target`, nearest first
+    /// per ray (empty when nothing attacks). The check UI needs the
+    /// attackers themselves, not just a yes/no — [`is_attacked`] is
+    /// this list non-empty (Hieu, 2026-11-19: a check must be
+    /// unmistakable, including which piece gives it).
     #[must_use]
-    pub fn is_attacked(&self, target: u8, by: Color) -> bool {
+    pub fn attackers_of(&self, target: u8, by: Color) -> Vec<u8> {
+        let mut out = Vec::new();
         let tf = file_of(target);
         let tr = rank_of(target);
         // 1. Sliding pieces (rook / cannon / flying general).
@@ -367,19 +372,22 @@ impl Position {
                     if !screen_seen {
                         if p.color == by {
                             if p.kind == PieceKind::Rook {
-                                return true;
+                                out.push(s);
                             }
                             // Flying general: enemy king counts as a rook
                             // vertically; orthogonal adjacency also attacks.
                             if p.kind == PieceKind::King
                                 && (df == 0 || (f - tf).abs() + (r - tr).abs() == 1)
                             {
-                                return true;
+                                out.push(s);
                             }
                         }
                         screen_seen = true;
                     } else if p.color == by && p.kind == PieceKind::Cannon {
-                        return true;
+                        out.push(s);
+                        // A third piece cannot attack through this
+                        // cannon; the ray ends here.
+                        break;
                     } else {
                         // Second piece that is not an enemy cannon ends the ray.
                         break;
@@ -417,7 +425,7 @@ impl Position {
             let s = sq(af, ar).unwrap();
             if let Some(p) = self.board[s as usize] {
                 if p.color == by && p.kind == PieceKind::Horse {
-                    return true;
+                    out.push(s);
                 }
             }
         }
@@ -435,7 +443,7 @@ impl Position {
             let s = sq(tf, pawn_rank).unwrap();
             if let Some(p) = self.board[s as usize] {
                 if p.color == by && p.kind == PieceKind::Pawn {
-                    return true;
+                    out.push(s);
                 }
             }
         }
@@ -452,7 +460,7 @@ impl Position {
                     let s = sq(pf, tr).unwrap();
                     if let Some(p) = self.board[s as usize] {
                         if p.color == by && p.kind == PieceKind::Pawn {
-                            return true;
+                            out.push(s);
                         }
                     }
                 }
@@ -466,7 +474,7 @@ impl Position {
                 let s = sq(af, ar).unwrap();
                 if let Some(p) = self.board[s as usize] {
                     if p.color == by && p.kind == PieceKind::Advisor {
-                        return true;
+                        out.push(s);
                     }
                 }
             }
@@ -478,13 +486,19 @@ impl Position {
                     let s = sq(ef, er).unwrap();
                     if let Some(p) = self.board[s as usize] {
                         if p.color == by && p.kind == PieceKind::Elephant {
-                            return true;
+                            out.push(s);
                         }
                     }
                 }
             }
         }
-        false
+        out
+    }
+
+    /// Is `target` attacked by any piece of colour `by`?
+    #[must_use]
+    pub fn is_attacked(&self, target: u8, by: Color) -> bool {
+        !self.attackers_of(target, by).is_empty()
     }
 
     #[must_use]

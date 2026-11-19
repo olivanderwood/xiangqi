@@ -1757,6 +1757,9 @@ impl State {
                 arrows.push(arrow);
             }
         }
+        // Red check arrows (Hieu, 2026-11-19): from every piece
+        // giving check to the checked general.
+        arrows.extend(crate::board::check_arrows(pos));
         let render = BoardRender {
             position: pos.clone(),
             selected,
@@ -1789,6 +1792,28 @@ impl State {
     /// the panel instead of staying 380 px wide in a wide window.
     fn panel_view(&self, lesson: &Lesson, pos: &Position, shared: &Shared) -> Element<'_, Msg> {
         let mut col = column![].spacing(SPACE_16).width(Length::Fill);
+
+        // Check status (Hieu, 2026-11-19): Learn had no text
+        // indicator at all — the halo alone was easy to miss while
+        // studying the line.
+        if pos.in_check(pos.side()) {
+            let status = format!(
+                "{} — {}",
+                i18n::t(Key::Check),
+                match pos.side() {
+                    SideColor::Red => i18n::t(Key::RedToMove),
+                    SideColor::Black => i18n::t(Key::BlackToMove),
+                }
+            );
+            col = col.push(
+                text(status)
+                    .size(FONT_BODY)
+                    .font(theme::inter_font_semibold())
+                    .style(|_: &Theme| iced::widget::text::Style {
+                        color: Some(theme::RED),
+                    }),
+            );
+        }
 
         // Lesson-complete / off-book dialogs (cards at the top).
         // The exit save prompt is NOT here: it is a full-screen

@@ -361,7 +361,7 @@ impl State {
             section_title(i18n::t(Key::Difficulty)),
         ]
         .spacing(SPACE_8);
-        for d in 0..=4u8 {
+        for d in 0..=7u8 {
             col = col.push(radio(
                 difficulty_name(d),
                 d,
@@ -369,11 +369,11 @@ impl State {
                 Msg::DifficultyChanged,
             ));
         }
-        if s.difficulty == 4 {
+        if s.difficulty == 7 {
             col = col.push(
                 row![
                     text(i18n::t(Key::EngineCustomElo)).size(FONT_BODY),
-                    slider(1200..=3000u16, s.custom_elo, Msg::CustomEloChanged)
+                    slider(1000..=2800u16, s.custom_elo, Msg::CustomEloChanged)
                         .step(50u16)
                         .width(Length::Fixed(220.0)),
                     text(format!("Elo {}", s.custom_elo)).size(FONT_BODY),

@@ -60,7 +60,7 @@ use xq_core::eval;
 use xq_core::game::{Game, GameResult};
 use xq_core::search::AnalysisLine;
 use xq_core::types::{Color, Move};
-use xq_engine::{Engine, EngineRequest, Level, Line, Score, StopHandle};
+use xq_engine::{Engine, EngineRequest, Level, Line, Score, StopHandle, Weaken};
 use xq_pikafish::{pick_weighted, GameRng, DIVERSITY_MARGIN_CP, DIVERSITY_PLIES};
 
 use crate::ai_worker::{response_is_current, AiRequest, AiResponse, AiWorker};
@@ -73,7 +73,7 @@ use crate::helpers::{move_strings, position_at, render_move};
 use crate::i18n::{self, difficulty_name, Key};
 use crate::icons::Icon;
 use crate::saved_games::{SavedGame, SavedMode};
-use crate::settings::Settings;
+use crate::settings::{difficulty_level, Settings};
 use crate::sound::{decide_sound, play_sound, MoveSound};
 use crate::theme::{
     self, BLACK_PIECE, BORDER, FONT_BODY, FONT_CAPTION, FONT_SCREEN_TITLE, GOLD, GREEN, RADIUS_6,
@@ -118,16 +118,16 @@ fn perspective_score(score_red: i32, human: Option<Color>) -> i32 {
     }
 }
 
-/// Difficulty index (0..=4) to its engine level (same table as the
-/// egui app; 4 is the custom Elo from Settings).
-fn difficulty_level(difficulty: u8, custom_elo: u16) -> Level {
-    match difficulty {
-        0 => Level::Easy,
-        2 => Level::Hard,
-        3 => Level::Master,
-        4 => Level::Elo(custom_elo),
-        _ => Level::Medium,
+/// A blunder pick: a random legal move, or `None` (no blunder this
+/// turn). Pure in (rng, rate, legal) so tests can drive it directly.
+/// The caller rolls this before the weighted pick; a rate of 0 never
+/// blunders, a rate of 1 always does.
+fn blunder_pick(rng: &mut GameRng, rate: f64, legal: &[Move]) -> Option<Move> {
+    if rate <= 0.0 || legal.is_empty() || rng.next_f64() >= rate {
+        return None;
     }
+    let idx = (rng.next_f64() * legal.len() as f64) as usize;
+    Some(legal[idx.min(legal.len() - 1)])
 }
 
 /// Whether the AI accepts a draw offer: its own score (from its
@@ -805,11 +805,14 @@ impl State {
         }
     }
 
-    /// Whether the check halo is still flashing (under 1 s since
-    /// the checking move — the tick only runs while this is true).
+    /// Whether the check halo is flashing: the displayed position
+    /// is in check (Hieu, 2026-11-19: the halo must keep pulsing
+    /// while the check stands — the old flash stopped 1 s after the
+    /// checking move, before the next move was calculated). The
+    /// tick only runs while this is true.
     fn check_flash_active(&self) -> bool {
-        self.check_since
-            .is_some_and(|s| s.elapsed() < Duration::from_secs(1))
+        let pos = self.display_pos();
+        pos.in_check(pos.side())
     }
 
     /// The AI still owes a move: a game is running, it is the AI's
@@ -833,16 +836,14 @@ impl State {
             && matches!(self.opponent, VsOpponent::Ai { human, .. } if self.game.pos.side() != human)
     }
 
-    /// Check-halo pulse 0..1 (~2 Hz while flashing, 0.5 otherwise).
+    /// Check-halo pulse 0..1 (~2 Hz from the checking move, 0.5
+    /// otherwise). It keeps oscillating while the check stands —
+    /// the old version froze at 0.5 one second after the checking
+    /// move (Hieu, 2026-11-19).
     fn check_pulse(&self) -> f32 {
         match self.check_since {
             Some(since) => {
-                let e = since.elapsed().as_secs_f32();
-                if e < 1.0 {
-                    0.5 + 0.5 * (e * 4.0 * std::f32::consts::PI).sin()
-                } else {
-                    0.5
-                }
+                0.5 + 0.5 * (since.elapsed().as_secs_f32() * 4.0 * std::f32::consts::PI).sin()
             }
             None => 0.5,
         }
@@ -1010,9 +1011,9 @@ impl State {
         self.game = game;
         self.opponent = VsOpponent::Ai {
             human,
-            difficulty: 1,
+            difficulty: 2,
         };
-        self.difficulty = 1;
+        self.difficulty = 2;
         self.ai_thinking = false;
         self.ai_req_id = None;
         self.game_seed = new_seed();
@@ -1395,26 +1396,35 @@ impl State {
         }
         match self.game.result() {
             GameResult::Ongoing => {
-                if self.ai_thinking {
-                    if self.ai_depth > 0 {
+                // Check first: the player must see it to calculate
+                // the next move — even while the AI is thinking
+                // (Hieu, 2026-11-19: the old text hid the check
+                // behind "Máy đang nghĩ" after your own checking
+                // move). The thinking state is appended, not lost.
+                let side_text = match self.game.pos.side() {
+                    Color::Red => i18n::t(Key::RedToMove),
+                    Color::Black => i18n::t(Key::BlackToMove),
+                };
+                let thinking = if self.ai_thinking {
+                    Some(if self.ai_depth > 0 {
                         i18n::t(Key::ThinkingDepth).replace("{n}", &self.ai_depth.to_string())
                     } else {
                         i18n::t(Key::Thinking).to_string()
-                    }
-                } else if self.game.pos.in_check(self.game.pos.side()) {
-                    format!(
-                        "{} — {}",
-                        i18n::t(Key::Check),
-                        match self.game.pos.side() {
-                            Color::Red => i18n::t(Key::RedToMove),
-                            Color::Black => i18n::t(Key::BlackToMove),
-                        }
-                    )
+                    })
                 } else {
-                    match self.game.pos.side() {
-                        Color::Red => i18n::t(Key::RedToMove).to_string(),
-                        Color::Black => i18n::t(Key::BlackToMove).to_string(),
+                    None
+                };
+                if self.game.pos.in_check(self.game.pos.side()) {
+                    let mut s = format!("{} — {}", i18n::t(Key::Check), side_text);
+                    if let Some(t) = thinking {
+                        s.push_str(" • ");
+                        s.push_str(&t);
                     }
+                    s
+                } else if let Some(t) = thinking {
+                    t
+                } else {
+                    side_text.to_string()
                 }
             }
             r => r.describe_vi().to_string(),
@@ -1544,11 +1554,11 @@ impl State {
         }
     }
 
-    /// (margin_cp, temperature) when this AI move should be picked
-    /// from an analysis instead of playing the best move: the §5
-    /// diversity pick at Master, or the level weakening at
-    /// Easy/Medium (egui `VsAiState::pick_config`).
-    fn pick_config(&self, engine: &dyn Engine, settings: &Settings) -> Option<(i32, f64)> {
+    /// The level's weakening when this AI move should be picked from
+    /// an analysis instead of playing the best move: the §5 diversity
+    /// pick at Master, or the level weakening at the low levels (egui
+    /// `VsAiState::pick_config`). The diversity pick never blunders.
+    fn pick_config(&self, engine: &dyn Engine, settings: &Settings) -> Option<Weaken> {
         let level = self.level();
         if level == Level::Master {
             if !settings.diversity
@@ -1563,9 +1573,13 @@ impl State {
             if pos.in_check(pos.side()) || pos.in_check(pos.side().opposite()) {
                 return None;
             }
-            return Some((DIVERSITY_MARGIN_CP, 10.0));
+            return Some(Weaken {
+                margin_cp: DIVERSITY_MARGIN_CP,
+                temperature: 10.0,
+                blunder_rate: 0.0,
+            });
         }
-        engine.weaken(level).map(|w| (w.margin_cp, w.temperature))
+        engine.weaken(level)
     }
 
     /// Pick the AI's move from an analysis (diversity/weaken path).
@@ -1573,7 +1587,7 @@ impl State {
     /// the same seed reproduces the same picks.
     fn pick_from_lines(&self, lines: &[AnalysisLine], shared: &Shared) -> Option<Move> {
         let engine = shared.engine.try_lock()?;
-        let (margin, temp) = self.pick_config(&**engine, &shared.settings)?;
+        let weaken = self.pick_config(&**engine, &shared.settings)?;
         let engine_lines: Vec<Line> = lines
             .iter()
             .map(|l| Line {
@@ -1584,7 +1598,21 @@ impl State {
             })
             .collect();
         let mut rng = GameRng::for_ply(self.game_seed, self.game.moves.len());
-        pick_weighted(&engine_lines, margin, temp, &mut rng)
+        // Blunder (Hieu, 2026-11-19): on a fraction of turns at the
+        // low levels, play a random legal move instead — a real
+        // mistake, like hanging a piece. The weighted pick alone
+        // never blunders (the top-3 lines cluster within ~30 cp),
+        // so Easy felt like Hard.
+        if let Some(mv) = blunder_pick(&mut rng, weaken.blunder_rate, &self.game.pos.legal_moves())
+        {
+            return Some(mv);
+        }
+        pick_weighted(
+            &engine_lines,
+            weaken.margin_cp,
+            weaken.temperature,
+            &mut rng,
+        )
     }
 
     /// Send a hint analysis for the current position (egui
@@ -1925,7 +1953,7 @@ impl State {
         } else {
             None
         };
-        let arrows = if in_review {
+        let mut arrows = if in_review {
             Vec::new()
         } else {
             self.hint_arrows
@@ -1938,6 +1966,10 @@ impl State {
                 })
                 .collect()
         };
+        // Check arrows (Hieu, 2026-11-19): red, from every piece
+        // giving check to the checked general — shown in review too,
+        // so a reviewed checking position reads the same way.
+        arrows.extend(crate::board::check_arrows(&display_pos));
         BoardRender {
             position: display_pos,
             selected,
@@ -1968,9 +2000,20 @@ impl State {
     /// Scrollable, so long content never flexes the board — the
     /// egui layout rule.
     fn panel<'a>(&'a self, shared: &'a Shared, display_pos: &Position) -> Element<'a, Msg> {
-        let mut col = column![text(self.status_text()).size(FONT_BODY)]
-            .spacing(SPACE_16)
-            .width(Length::Fill);
+        // The status line turns red + semibold while the side to
+        // move is in check (Hieu, 2026-11-19): the check must read
+        // at a glance in the panel, not just on the board.
+        let in_check = self.game.result() == GameResult::Ongoing
+            && self.game.pos.in_check(self.game.pos.side());
+        let status_el = if in_check {
+            text(self.status_text())
+                .size(FONT_BODY)
+                .font(theme::inter_font_semibold())
+                .style(|_: &Theme| text::Style { color: Some(RED) })
+        } else {
+            text(self.status_text()).size(FONT_BODY)
+        };
+        let mut col = column![status_el].spacing(SPACE_16).width(Length::Fill);
 
         // Opponent + player cards (mockup page 2: 44 px piece disc,
         // Semibold 16 name, 13 px Medium subtitle, status chip;
@@ -2272,7 +2315,7 @@ impl State {
     /// side by side instead of stacking in a 340 px column. Every
     /// option button is 48 px tall with 15 px Semibold text (the
     /// shared `primary_button` / `secondary_button` label size).
-    /// Behaviour is unchanged: the same four sides, five difficulty
+    /// Behaviour is unchanged: the same four sides, eight difficulty
     /// levels, and Start / Cancel messages.
     fn start_dialog_overlay(&self, shared: &Shared) -> Element<'_, Msg> {
         // One option button: gold when selected, surface-2 otherwise,
@@ -2317,7 +2360,7 @@ impl State {
             .font(theme::inter_font_semibold()),]
         .spacing(crate::theme::SPACE_8)
         .width(Length::Fill);
-        for d in 0..=4u8 {
+        for d in 0..=7u8 {
             diff_col = diff_col.push(option(
                 difficulty_name(d),
                 self.start_difficulty == d,
@@ -2479,14 +2522,85 @@ mod tests {
     }
 
     #[test]
-    fn difficulty_level_mapping_matches_egui() {
-        assert_eq!(difficulty_level(0, 1900), Level::Easy);
-        assert_eq!(difficulty_level(1, 1900), Level::Medium);
-        assert_eq!(difficulty_level(2, 1900), Level::Hard);
-        assert_eq!(difficulty_level(3, 1900), Level::Master);
-        assert_eq!(difficulty_level(4, 1900), Level::Elo(1900));
-        assert_eq!(difficulty_level(4, 2400), Level::Elo(2400));
-        assert_eq!(difficulty_level(9, 1900), Level::Medium);
+    fn check_stays_visible_while_in_check() {
+        // Hieu, 2026-11-19: a check must be unmistakable — the halo
+        // keeps pulsing while the check stands, the status names
+        // the check even while the AI is thinking, and the board
+        // shows a red arrow from the checking piece.
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        // Black to move, in check from the Red rook on (4, 1).
+        let pos = Position::from_fen("4k4/9/9/9/9/9/9/9/4R4/4K4 b - - 0 1").expect("check FEN");
+        state.game = Game::new(pos);
+        state.started = true;
+        state.check_since = Some(Instant::now());
+
+        // The halo is still flashing: no 1 s cutoff any more.
+        assert!(state.check_flash_active());
+        // The status names the check...
+        assert!(state.status_text().contains(i18n::t(Key::Check)));
+        // ...even while the AI is thinking (the thinking state is
+        // appended, not a replacement).
+        state.ai_thinking = true;
+        assert!(state.status_text().contains(i18n::t(Key::Check)));
+        assert!(state.status_text().contains(i18n::t(Key::Thinking)));
+        // The board shows the halo square and one red check arrow.
+        let render = state.board_render();
+        assert_eq!(render.check_square, Some(85));
+        assert_eq!(render.arrows.len(), 1);
+        assert!(matches!(
+            render.arrows[0].color,
+            crate::board::ArrowColor::Red
+        ));
+
+        // No check (startpos): no flash, no check in the status, no
+        // check arrow.
+        state.game = Game::new(startpos());
+        state.ai_thinking = false;
+        state.check_since = None;
+        assert!(!state.check_flash_active());
+        assert!(!state.status_text().contains(i18n::t(Key::Check)));
+        assert!(state.board_render().arrows.is_empty());
+    }
+
+    #[test]
+    fn difficulty_level_mapping() {
+        assert_eq!(difficulty_level(0, 1900), Level::Elo(1000));
+        assert_eq!(difficulty_level(1, 1900), Level::Elo(1400));
+        assert_eq!(difficulty_level(2, 1900), Level::Elo(1900));
+        assert_eq!(difficulty_level(3, 1900), Level::Elo(2200));
+        assert_eq!(difficulty_level(4, 1900), Level::Elo(2400));
+        assert_eq!(difficulty_level(5, 1900), Level::Elo(2600));
+        assert_eq!(difficulty_level(6, 1900), Level::Master);
+        assert_eq!(difficulty_level(7, 1900), Level::Elo(1900));
+        assert_eq!(difficulty_level(7, 2400), Level::Elo(2400));
+        assert_eq!(difficulty_level(9, 1900), Level::Elo(1900));
+    }
+
+    #[test]
+    fn blunder_pick_honours_its_rate() {
+        // Hieu, 2026-11-19: the low levels must sometimes make a
+        // real mistake. A rate of 0 never blunders, a rate of 1
+        // always does, and a 30% rate blunders about 30% of the time
+        // — and the pick is always a legal move.
+        let legal = startpos().legal_moves();
+        assert!(!legal.is_empty());
+        let mut rng = GameRng::for_ply(1, 0);
+        assert!(blunder_pick(&mut rng, 0.0, &legal).is_none());
+        let mut rng = GameRng::for_ply(1, 0);
+        let mv = blunder_pick(&mut rng, 1.0, &legal).expect("rate 1 blunders");
+        assert!(legal.contains(&mv));
+        let mut blunders = 0;
+        for seed in 0..200u64 {
+            let mut rng = GameRng::for_ply(seed, 0);
+            if blunder_pick(&mut rng, 0.30, &legal).is_some() {
+                blunders += 1;
+            }
+        }
+        assert!(
+            (30..=90).contains(&blunders),
+            "30% rate blundered {blunders}/200 times"
+        );
     }
 
     #[test]

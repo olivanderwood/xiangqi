@@ -114,10 +114,25 @@ impl SavedGame {
 }
 
 /// The store: all saved entries, newest first.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedGames {
     #[serde(default)]
     pub entries: Vec<SavedGame>,
+    /// `true` once entry difficulties have been migrated to the
+    /// 8-level scale (Hieu, 2026-11-19): old 0–4 → 1/2/4/6/7.
+    /// Old files lack this key, so they load as `false` and migrate
+    /// on load. A fresh store is already new-scheme (`true`).
+    #[serde(default)]
+    pub difficulty_v2: bool,
+}
+
+impl Default for SavedGames {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            difficulty_v2: true,
+        }
+    }
 }
 
 pub fn saved_games_path() -> PathBuf {
@@ -138,10 +153,32 @@ impl SavedGames {
     /// touch the user's real config).
     #[must_use]
     pub fn load_from(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut s: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.migrate_difficulty();
+        s
+    }
+
+    /// Migrate entry difficulties from the old 0–4 scale to the
+    /// 8-level scale (0→1, 1→2, 2→4, 3→6, 4→7) so an unfinished
+    /// game resumes at the same strength it was saved with.
+    fn migrate_difficulty(&mut self) {
+        if self.difficulty_v2 {
+            return;
+        }
+        for e in &mut self.entries {
+            e.difficulty = match e.difficulty {
+                0 => 1,
+                1 => 2,
+                2 => 4,
+                3 => 6,
+                4 => 7,
+                other => other,
+            };
+        }
+        self.difficulty_v2 = true;
     }
 
     /// Save to the default path. Creates the parent directory as
@@ -263,6 +300,24 @@ mod tests {
         assert_eq!(back, store);
         assert_eq!(back.by_mode(SavedMode::Play).len(), 1);
         assert_eq!(back.by_mode(SavedMode::Learn).len(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn old_difficulty_scheme_migrates_on_load() {
+        // A store written before the 8-level scale (flag false)
+        // migrates its entries: old Hard (2) becomes new Mạnh (4).
+        let dir = std::env::temp_dir().join("xiangqi-saved-games-migrate");
+        let path = dir.join("saved_games.json");
+        let mut store = SavedGames::default();
+        let mut game = sample_play();
+        game.difficulty = 2;
+        store.add(game);
+        store.difficulty_v2 = false;
+        store.save_to(&path);
+        let back = SavedGames::load_from(&path);
+        assert_eq!(back.entries[0].difficulty, 4);
+        assert!(back.difficulty_v2);
         let _ = std::fs::remove_dir_all(dir);
     }
 

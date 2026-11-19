@@ -202,6 +202,47 @@ fn pawn_attacks_forward_not_diagonal() {
 }
 
 #[test]
+fn attackers_of_lists_the_checking_pieces() {
+    // Hieu, 2026-11-19: the check UI shows which piece gives the
+    // check, so it needs the attackers themselves, not just a yes/no.
+    use xq_core::Color;
+
+    // One rook on the file: the only attacker.
+    let pos = Position::from_fen("4k4/9/9/9/9/9/9/9/4R4/4K4 w - - 0 1").unwrap();
+    assert!(pos.in_check(Color::Black));
+    assert_eq!(pos.attackers_of(sq(4, 9), Color::Red), vec![sq(4, 1)]);
+
+    // Double check: rook on the file + horse on (3, 7) (leg (4, 8)
+    // empty). Both attackers are listed, sliding pieces first.
+    let pos = Position::from_fen("4k4/9/3N5/9/9/9/9/9/4R4/4K4 w - - 0 1").unwrap();
+    assert!(pos.in_check(Color::Black));
+    assert_eq!(
+        pos.attackers_of(sq(4, 9), Color::Red),
+        vec![sq(4, 1), sq(3, 7)]
+    );
+
+    // A rook as screen + a cannon behind it: BOTH attack the king
+    // (the cannon uses the rook as its screen), so both are listed.
+    let pos = Position::from_fen("4k4/9/4R4/9/4C4/9/9/9/9/4K4 w - - 0 1").unwrap();
+    assert!(pos.in_check(Color::Black));
+    assert_eq!(
+        pos.attackers_of(sq(4, 9), Color::Red),
+        vec![sq(4, 7), sq(4, 5)]
+    );
+
+    // A cannon behind TWO pieces does not attack: only the rook in
+    // front is listed (the second rook blocks the cannon's line).
+    let pos = Position::from_fen("4k4/9/4R4/4R4/4C4/9/9/9/9/4K4 w - - 0 1").unwrap();
+    assert!(pos.in_check(Color::Black));
+    assert_eq!(pos.attackers_of(sq(4, 9), Color::Red), vec![sq(4, 7)]);
+
+    // No check: empty list, and `is_attacked` agrees.
+    let pos = Position::startpos();
+    assert!(pos.attackers_of(sq(4, 9), Color::Red).is_empty());
+    assert!(!pos.is_attacked(sq(4, 9), Color::Red));
+}
+
+#[test]
 fn setup_validation_max_counts() {
     use xq_core::board::{max_count, validate_setup, SetupError};
     use xq_core::types::{Color, Piece, PieceKind};

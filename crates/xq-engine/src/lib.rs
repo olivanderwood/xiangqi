@@ -94,11 +94,16 @@ pub struct SearchInfo {
 /// for the same purpose). `margin_cp` bounds how much worse a picked
 /// line may be; `temperature` flattens the weights
 /// (`w = exp((score − best) / temperature)`): a higher temperature
-/// picks bad moves more often.
+/// picks bad moves more often. `blunder_rate` is the fraction of moves
+/// (0.0–1.0) that are a random legal move instead — a real mistake, like
+/// hanging a piece (Hieu, 2026-11-19: picking among near-equal top
+/// lines never blunders, so Easy felt like Hard; the measured top-3
+/// gaps are only 29 cp median best→2nd, 66 cp best→3rd).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Weaken {
     pub margin_cp: i32,
     pub temperature: f64,
+    pub blunder_rate: f64,
 }
 
 /// Difficulty level, shared by both engines. `Elo(x)` is only honoured by

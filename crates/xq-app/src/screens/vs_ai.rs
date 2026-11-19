@@ -23,7 +23,7 @@ use xq_core::eval;
 use xq_core::game::{Game, GameResult};
 use xq_core::search::AnalysisLine;
 use xq_core::types::{Color, Move, PieceKind};
-use xq_engine::{EngineRequest, Level, SharedEngine};
+use xq_engine::{EngineRequest, Level, SharedEngine, Weaken};
 use xq_pikafish::{pick_weighted, GameRng, DIVERSITY_MARGIN_CP, DIVERSITY_PLIES};
 
 /// Fresh per-game seed from the clock.
@@ -474,13 +474,14 @@ impl VsAiState {
         }
     }
 
-    /// (margin_cp, temperature) when this AI move should be picked from
+    /// The level's weakening when this AI move should be picked from
     /// an analysis instead of playing the best move: the §5 diversity
-    /// pick at Master, or the level weakening at Easy/Medium. Takes the
-    /// engine as a parameter so the caller locks once (see
+    /// pick at Master, or the level weakening at the low levels.
+    /// Takes the engine as a parameter so the caller locks once (see
     /// `maybe_trigger_ai` — a second lock would deadlock, and the UI
-    /// thread must never block on the engine).
-    fn pick_config(&self, engine: &dyn xq_engine::Engine) -> Option<(i32, f64)> {
+    /// thread must never block on the engine). The diversity pick
+    /// never blunders.
+    fn pick_config(&self, engine: &dyn xq_engine::Engine) -> Option<Weaken> {
         let level = self.level();
         if level == Level::Master {
             if !self.diversity
@@ -495,9 +496,13 @@ impl VsAiState {
             if pos.in_check(pos.side()) || pos.in_check(pos.side().opposite()) {
                 return None;
             }
-            return Some((DIVERSITY_MARGIN_CP, 10.0));
+            return Some(Weaken {
+                margin_cp: DIVERSITY_MARGIN_CP,
+                temperature: 10.0,
+                blunder_rate: 0.0,
+            });
         }
-        engine.weaken(level).map(|w| (w.margin_cp, w.temperature))
+        engine.weaken(level)
     }
 
     /// Pick the AI's move from an analysis (diversity/weaken path).
@@ -508,7 +513,7 @@ impl VsAiState {
         // be free; if another search started meanwhile, fall back to
         // the best line (the caller does that) instead of blocking.
         let engine = self.engine.try_lock()?;
-        let (margin, temp) = self.pick_config(&**engine)?;
+        let weaken = self.pick_config(&**engine)?;
         let engine_lines: Vec<xq_engine::Line> = lines
             .iter()
             .map(|l| xq_engine::Line {
@@ -519,7 +524,23 @@ impl VsAiState {
             })
             .collect();
         let mut rng = GameRng::for_ply(self.game_seed, self.game.moves.len());
-        pick_weighted(&engine_lines, margin, temp, &mut rng)
+        // Blunder (Hieu, 2026-11-19): on a fraction of turns at the
+        // low levels, play a random legal move instead — a real
+        // mistake, like hanging a piece. The weighted pick alone
+        // never blunders, so Easy felt like Hard.
+        if weaken.blunder_rate > 0.0 && rng.next_f64() < weaken.blunder_rate {
+            let legal = self.game.pos.legal_moves();
+            if !legal.is_empty() {
+                let idx = (rng.next_f64() * legal.len() as f64) as usize;
+                return Some(legal[idx.min(legal.len() - 1)]);
+            }
+        }
+        pick_weighted(
+            &engine_lines,
+            weaken.margin_cp,
+            weaken.temperature,
+            &mut rng,
+        )
     }
 
     fn maybe_trigger_ai(&mut self, worker: &mut crate::ai_worker::AiWorker) {

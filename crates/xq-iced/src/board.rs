@@ -301,6 +301,8 @@ pub enum ArrowColor {
     Blue,
     /// Opponent suggestion.
     Purple,
+    /// A piece giving check (Hieu, 2026-11-19).
+    Red,
 }
 
 impl ArrowColor {
@@ -310,6 +312,7 @@ impl ArrowColor {
         match self {
             ArrowColor::Blue => BLUE,
             ArrowColor::Purple => PURPLE,
+            ArrowColor::Red => RED,
         }
     }
 }
@@ -360,6 +363,37 @@ impl Arrow {
             highlighted: false,
         }
     }
+
+    /// A check arrow (red, solid, full opacity, no badge): from a
+    /// piece giving check to the checked general (Hieu, 2026-11-19).
+    #[must_use]
+    pub fn check(from: Square, to: Square) -> Self {
+        Self {
+            from,
+            to,
+            color: ArrowColor::Red,
+            dashed: false,
+            label: None,
+            highlighted: true,
+        }
+    }
+}
+
+/// Red arrows from every piece giving check to the checked general
+/// (Hieu, 2026-11-19): the check must show *who* is checking, so
+/// the next move can be calculated — block, capture or flee.
+/// Empty when the side to move is not in check.
+#[must_use]
+pub fn check_arrows(pos: &Position) -> Vec<Arrow> {
+    let side = pos.side();
+    if !pos.in_check(side) {
+        return Vec::new();
+    }
+    let king = pos.king_sq(side);
+    pos.attackers_of(king, side.opposite())
+        .into_iter()
+        .map(|from| Arrow::check(from, king))
+        .collect()
 }
 
 /// Everything [`BoardProgram`] needs to draw one frame. Screens
@@ -963,15 +997,27 @@ impl Program<BoardMsg> for BoardProgram {
                 frame.fill(&Path::circle(g.square_point(*sq), 6.0 * scale), BLUE);
             }
         }
-        // Flashing check halo.
+        // Check halo: a filled red glow under the general plus a
+        // pulsing ring around it (Hieu, 2026-11-19: a check must be
+        // unmistakable — the old thin ring went unnoticed once its
+        // 1 s flash ended, and the king's square needs to read at a
+        // glance while the next move is calculated).
         if let Some(sq) = render.check_square {
-            let radius = 30.0 * scale + 4.0 * scale * render.pulse;
-            let alpha = 0.35 + 0.45 * render.pulse;
+            let glow_alpha = 0.18 + 0.22 * render.pulse;
+            frame.fill(
+                &Path::circle(g.square_point(sq), PIECE_RADIUS * scale),
+                Color {
+                    a: glow_alpha,
+                    ..RED
+                },
+            );
+            let radius = 30.0 * scale + 6.0 * scale * render.pulse;
+            let alpha = 0.45 + 0.50 * render.pulse;
             frame.stroke(
                 &Path::circle(g.square_point(sq), radius),
                 Stroke::default()
                     .with_color(Color { a: alpha, ..RED })
-                    .with_width(4.0 * scale),
+                    .with_width(5.0 * scale),
             );
         }
 
@@ -1398,6 +1444,27 @@ mod tests {
         assert!(render.arrows.is_empty());
         assert!(render.check_square.is_none());
         assert!(render.anim.is_none());
+    }
+
+    #[test]
+    fn check_arrows_point_from_attacker_to_king() {
+        // Hieu, 2026-11-19: the check must show *who* is checking.
+        // Black to move, Black king (4, 9) checked by the Red rook
+        // (4, 1): one red arrow, full opacity, from the rook to the
+        // king.
+        use xq_core::types::sq;
+        let pos = Position::from_fen("4k4/9/9/9/9/9/9/9/4R4/4K4 b - - 0 1").expect("check FEN");
+        let arrows = check_arrows(&pos);
+        assert_eq!(arrows.len(), 1);
+        assert_eq!(arrows[0].from, sq(4, 1).unwrap());
+        assert_eq!(arrows[0].to, sq(4, 9).unwrap());
+        assert!(matches!(arrows[0].color, ArrowColor::Red));
+        assert!(arrows[0].highlighted);
+        assert!(arrows[0].label.is_none());
+
+        // No check (startpos): no arrows.
+        let pos = Position::startpos();
+        assert!(check_arrows(&pos).is_empty());
     }
 
     #[test]

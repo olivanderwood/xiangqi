@@ -39,6 +39,14 @@ pub struct LessonProgress {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub difficulty: u8,
+    /// `true` once the difficulty scale has been migrated to the
+    /// 8-level scheme (Hieu, 2026-11-19): old values 0–4 meant
+    /// Easy/Medium/Hard/Master/Custom; the new scale is 0–7
+    /// (Beginner/Easy/Medium/Fairly strong/Strong/Expert/Master/
+    /// Custom). Old files lack this key, so they load as `false`
+    /// and migrate on load (see [`Settings::migrate_difficulty`]).
+    #[serde(default)]
+    pub difficulty_v2: bool,
     pub human_color: Option<String>,
     pub notation: NotationChoice,
     /// UI language (`"vi"` / `"en"`), persisted; applied at startup.
@@ -84,7 +92,8 @@ fn default_engine_threads() -> u32 {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            difficulty: 1,
+            difficulty: 2,
+            difficulty_v2: true,
             human_color: None,
             notation: NotationChoice::Vietnamese,
             language: "vi".to_string(),
@@ -117,6 +126,26 @@ pub fn settings_path() -> PathBuf {
     base.join("xiangqi").join(SETTINGS_FILE)
 }
 
+/// Difficulty index (0..=7) to its engine level: fixed points on the
+/// Pikafish Elo table (`xq_pikafish::levels` anchors) — 0 → 1000,
+/// 1 → 1400, 2 → 1900, 3 → 2200, 4 → 2400, 5 → 2600, 6 → Master,
+/// 7 → the custom Elo from Settings. Shared by the Play screen, the
+/// Practice screen and [`Settings::level`] so the three never drift.
+#[must_use]
+pub fn difficulty_level(difficulty: u8, custom_elo: u16) -> xq_engine::Level {
+    match difficulty {
+        0 => xq_engine::Level::Elo(1000),
+        1 => xq_engine::Level::Elo(1400),
+        2 => xq_engine::Level::Elo(1900),
+        3 => xq_engine::Level::Elo(2200),
+        4 => xq_engine::Level::Elo(2400),
+        5 => xq_engine::Level::Elo(2600),
+        6 => xq_engine::Level::Master,
+        7 => xq_engine::Level::Elo(custom_elo),
+        _ => xq_engine::Level::Elo(1900),
+    }
+}
+
 impl Settings {
     /// Load from the default path ([`settings_path`]); defaults on
     /// a missing or corrupt file.
@@ -129,10 +158,31 @@ impl Settings {
     /// touch the user's real config).
     #[must_use]
     pub fn load_from(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut s: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.migrate_difficulty();
+        s
+    }
+
+    /// Migrate an old-scheme difficulty (0–4) to the 8-level scale:
+    /// 0 → 1 (Dễ), 1 → 2 (Trung bình), 2 → 4 (Mạnh), 3 → 6 (Cao thủ),
+    /// 4 → 7 (Tùy chỉnh). New-scheme files are untouched. Called by
+    /// [`Settings::load_from`]; a fresh default is already new-scheme.
+    pub fn migrate_difficulty(&mut self) {
+        if self.difficulty_v2 {
+            return;
+        }
+        self.difficulty = match self.difficulty {
+            0 => 1,
+            1 => 2,
+            2 => 4,
+            3 => 6,
+            4 => 7,
+            other => other,
+        };
+        self.difficulty_v2 = true;
     }
 
     /// Save to the default path ([`settings_path`]). Creates the
@@ -154,17 +204,11 @@ impl Settings {
         }
     }
 
-    /// The level the settings select (§4): difficulties 0–3 are the
-    /// classic levels, 4 is the custom Elo slider.
+    /// The level the settings select (§4): difficulties 0–6 are fixed
+    /// points on the Pikafish Elo table, 7 is the custom Elo slider.
     #[must_use]
     pub fn level(&self) -> xq_engine::Level {
-        match self.difficulty {
-            0 => xq_engine::Level::Easy,
-            2 => xq_engine::Level::Hard,
-            3 => xq_engine::Level::Master,
-            4 => xq_engine::Level::Elo(self.custom_elo),
-            _ => xq_engine::Level::Medium,
-        }
+        difficulty_level(self.difficulty, self.custom_elo)
     }
 
     /// User-set engine path, if any.
@@ -204,7 +248,7 @@ mod tests {
 
     fn sample_settings() -> Settings {
         let mut s = Settings {
-            difficulty: 4,
+            difficulty: 7,
             custom_elo: 2100,
             language: "en".to_string(),
             notation: NotationChoice::English,
@@ -267,17 +311,49 @@ mod tests {
     }
 
     #[test]
-    fn level_mapping_matches_egui_app() {
-        let mut s = Settings::default();
+    fn level_mapping() {
+        let mut s = Settings {
+            custom_elo: 1900,
+            ..Settings::default()
+        };
         for (d, level) in [
-            (0, xq_engine::Level::Easy),
-            (1, xq_engine::Level::Medium),
-            (2, xq_engine::Level::Hard),
-            (3, xq_engine::Level::Master),
-            (4, xq_engine::Level::Elo(1900)),
+            (0, xq_engine::Level::Elo(1000)),
+            (1, xq_engine::Level::Elo(1400)),
+            (2, xq_engine::Level::Elo(1900)),
+            (3, xq_engine::Level::Elo(2200)),
+            (4, xq_engine::Level::Elo(2400)),
+            (5, xq_engine::Level::Elo(2600)),
+            (6, xq_engine::Level::Master),
+            (7, xq_engine::Level::Elo(1900)),
         ] {
             s.difficulty = d;
             assert_eq!(s.level(), level);
         }
+    }
+
+    #[test]
+    fn old_difficulty_scheme_migrates_on_load() {
+        // A settings file written before the 8-level scale (no
+        // `difficulty_v2` flag) migrates: 0→1, 1→2, 2→4, 3→6, 4→7.
+        let dir =
+            std::env::temp_dir().join(format!("xq-iced-settings-migrate-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        for (old, new) in [(0u8, 1u8), (1, 2), (2, 4), (3, 6), (4, 7)] {
+            let s = Settings {
+                difficulty: old,
+                difficulty_v2: false,
+                ..Settings::default()
+            };
+            let json = serde_json::to_string(&s).expect("serialize");
+            std::fs::write(&path, json).expect("write");
+            let back = Settings::load_from(&path);
+            assert_eq!(
+                back.difficulty, new,
+                "old difficulty {old} must migrate to {new}"
+            );
+            assert!(back.difficulty_v2);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

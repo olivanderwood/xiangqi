@@ -187,9 +187,12 @@ lại trong `xq-pikafish/src/levels.rs` (`pikafish_level`):
 
 | Mức | depth | movetime | Làm yếu |
 |---|---|---|---|
-| Dễ | 3 | 500 ms | chọn trong top 3, biên 150 cp, nhiệt độ 50 |
-| Trung bình | 6 | 1000 ms | chọn trong top 3, biên 80 cp, nhiệt độ 25 |
-| Khó | 12 | 2000 ms | không (đi nước tốt nhất) |
+| Mới chơi | 2 | 500 ms | top 3, biên 300 cp, nhiệt độ 100, sai lầm 30% |
+| Dễ | 3 | 500 ms | top 3, biên 200 cp, nhiệt độ 60, sai lầm 15% |
+| Trung bình | 6 | 1000 ms | top 3, biên 100 cp, nhiệt độ 30, sai lầm 6% |
+| Khá | 9 | 1500 ms | top 3, biên 60 cp, nhiệt độ 20, sai lầm 2% |
+| Mạnh | 12 | 2000 ms | không (đi nước tốt nhất) |
+| Chuyên gia | 16 | 3000 ms | không (đi nước tốt nhất) |
 | Cao thủ | không giới hạn | 5000 ms | không; đa dạng §5 trong 24 nửa nước đầu |
 | Elo(x) | nội suy tuyến tính giữa các mốc | | nội suy theo |
 
@@ -200,13 +203,29 @@ depth 12: 29 ms). Thang NNUE mạnh tới mức Pikafish nông vẫn đi gần
 như đúng. Cơ chế làm yếu dùng chung hàm chọn có trọng số với đa dạng
 (`pick_weighted`, `w = exp((score − best) / temperature)`); nhiệt độ
 cao = hay chọn nước kém hơn. Engine cũ dùng nhiễu điểm với cùng mục
-đích. `Level::Elo(x)` nội suy cả 4 số (depth, movetime, biên, nhiệt độ)
-giữa các mốc 1400/1900/2400/2800; dưới 1400 = Dễ, từ 2800 = Cao thủ.
+đích. `Level::Elo(x)` nội suy cả 5 số (depth, movetime, biên, nhiệt độ,
+tỉ lệ sai lầm) giữa các mốc 1000/1400/1900/2200/2400/2600/2800; dưới
+1000 = mốc thấp nhất, từ 2800 = Cao thủ.
+
+Chọn trong top 3 thôi vẫn CHƯA đủ (Hieu, 2026-11-19: Dễ chơi như
+Khó): đo `measure_top3_gaps` (30 thế khai cuộc) — 3 nước đầu chụm
+rất sát nhau, trung vị chênh lệch nước tốt nhất → nước thứ 2 là 29 cp,
+→ nước thứ 3 là 66 cp — nên chọn yếu chỉ tốn ~10–30 cp/nước và KHÔNG
+BAO GIỜ treo quân; đo `measure_level_matches` cũ: Dễ thắng 1/4 trước
+Trung bình. Một mức chỉ *cảm thấy* yếu hơn khi thỉnh thoảng mắc lỗi
+thật, nên các mức thấp thêm "sai lầm": một tỉ lệ số nước (30%/15%/6%/
+2%) đi một nước hợp lệ ngẫu nhiên thay vì chọn có trọng số
+(`Weaken::blunder_rate`, áp dụng trong `pick_from_lines` của cả 2 app,
+RNG theo (seed, ply) nên chơi lại vẫn ra cùng nước). Bảng cũng tăng từ
+5 lên 8 mức (thêm Mới chơi dưới Dễ, Khá và Chuyên gia ở giữa) để các
+bước giữa các mức nhìn thấy được.
 
 Kiểm chứng thứ bậc (`measure_level_matches`, 4 ván/cặp, cap 40 nửa
 nước, hơn chất ≥ 300 tính thắng, Cao thủ chạy 1000 ms thay vì 5000 ms):
-Dễ thắng 1/4 trước Trung bình; Trung bình thắng 0/4 trước Khó; Khó
-thắng 0/4 trước Cao thủ. Thứ bậc rõ ràng, khoảng cách hợp lý.
+với bảng mới (2026-11-19), mức yếu KHÔNG thắng ván nào — Elo(1000)
+thắng 0/4 trước Elo(1400), Dễ 0/4 trước Trung bình, Trung bình 0/4
+trước Mạnh, Mạnh 0/4 trước Cao thủ (trước khi sửa, Dễ thắng 1/4 trước
+Trung bình). Thứ bậc rõ ràng, khoảng cách hợp lý.
 
 Test §9.3 (`tests/levels_diversity.rs`, Pikafish thật, `#[ignore]`):
 `levels_ordered` — Cao thủ thắng **10/10** trước Dễ (yêu cầu ≥ 9/10;
@@ -401,8 +420,10 @@ trình (file vẫn nằm local, gitignored, không bao giờ chạy trên GitHub
 
 - Đặc tả gốc `~/workspace/user/files/a__c_ta__ky__thua__t_Game_Co___Tu_o__ng_AI__Rust.md`
   (file ngoài repo, không vào commit): §4.4 thay bằng bảng mức Pikafish
-  (Dễ depth 3 + chọn yếu, Trung bình depth 6, Khó depth 12, Cao thủ không
-  giới hạn depth + 5 s/nước), bảng cũ giữ lại làm dự phòng; §4.5 ghi chú
+  (8 mức — Mới chơi depth 2 + sai lầm 30%, Dễ depth 3, Trung bình depth 6,
+  Khá depth 9, Mạnh depth 12, Chuyên gia depth 16, Cao thủ không giới hạn
+  depth + 5 s/nước, Tùy chỉnh theo Elo; xem §20), bảng cũ giữ lại làm dự
+  phòng; §4.5 ghi chú
   ngưỡng chấm khi chạy Pikafish là {15, 50, 120, 250} (thang engine cũ
   {20, 60, 150, 300} chỉ dùng khi chạy AI tích hợp); §9 đổi mục tiêu kích
   thước gói "< 15 MB" thành "< 90 MB" (riêng `pikafish.nnue` đã ~50 MB)

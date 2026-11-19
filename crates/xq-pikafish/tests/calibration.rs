@@ -51,8 +51,9 @@ impl Rng {
 /// 4, 6, 8, 10, 12, 14.
 fn opening_positions() -> Vec<(String, Vec<Move>)> {
     let mut out = Vec::new();
-    for game in 0..5 {
-        let mut rng = Rng(0x1234_5678_9abc_def0u64.wrapping_add(game * 0x9e3779b97f4a7c15));
+    for game in 0..5u64 {
+        let mut rng =
+            Rng(0x1234_5678_9abc_def0u64.wrapping_add(game.wrapping_mul(0x9e3779b97f4a7c15)));
         let mut pos = Position::startpos();
         let mut moves: Vec<Move> = Vec::new();
         for ply in 1..=14 {
@@ -283,7 +284,7 @@ fn measure_depth_timing() {
 
 /// One move at a configured level: best move, or analyze top 3 +
 /// weighted pick when the level weakens (same logic as the app's
-/// `VsAiState::pick_from_lines`).
+/// `VsAiState::pick_from_lines`, including the blunder roll).
 fn level_move(
     engine: &mut PikafishEngine,
     level: Level,
@@ -294,8 +295,24 @@ fn level_move(
     let Some(w) = cfg.weaken else {
         return engine.best_move(req, &mut |_| {});
     };
-    let lines = engine.analyze(req, 3, &mut |_| {})?;
     let mut rng = xq_pikafish::GameRng::for_ply(seed, req.moves.len());
+    // Blunder, like the app: a random legal move on a fraction of
+    // turns at the low levels.
+    if w.blunder_rate > 0.0 && rng.next_f64() < w.blunder_rate {
+        let pos = req.position().expect("request position");
+        let legal = pos.legal_moves();
+        if !legal.is_empty() {
+            let idx = (rng.next_f64() * legal.len() as f64) as usize;
+            let mv = legal[idx.min(legal.len() - 1)];
+            return Ok(xq_engine::Line {
+                mv,
+                score: xq_engine::Score::Cp(0),
+                depth: 0,
+                pv: vec![mv],
+            });
+        }
+    }
+    let lines = engine.analyze(req, 3, &mut |_| {})?;
     match xq_pikafish::pick_weighted(&lines, w.margin_cp, w.temperature, &mut rng) {
         Some(mv) => Ok(lines
             .into_iter()
@@ -316,6 +333,7 @@ fn level_move(
 #[ignore]
 fn measure_level_matches() {
     let pairs = [
+        (Level::Elo(1000), Level::Elo(1400)),
         (Level::Easy, Level::Medium),
         (Level::Medium, Level::Hard),
         (Level::Hard, Level::Master),
