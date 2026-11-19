@@ -610,3 +610,13 @@ là một vấn đề: bài học kết thúc sớm vì nhánh phụ nông.
   2 test mới cho `direction_count` + 3 test cho ô điểm lợi thế).
 - Chưa kiểm bằng mắt: VM thiếu `libxkbcommon-x11.so` nên app không chạy
   được dưới Xvfb — cần Hieu kiểm trên máy thật.
+
+## §18. Mode "Đánh với AI theo thế trận" — ván cờ đầy đủ với AI đi theo sách (Hieu, 2026-11-19)
+
+- **Luồng**: màn chọn bài (Learn-select) thêm nút **"Đánh với AI theo thế trận"** cạnh "Bắt đầu học" (khi đã chọn 1 bài). Bấm → vào màn Đấu với AI, chơi 1 ván đầy đủ tới cuối như bình thường.
+- **Bên chơi**: người chơi cầm bên của bài học (bài Đỏ → cầm Đỏ, bài Đen → cầm Đen, AI đi trước nếu bài Đen). Độ khó lấy theo cài đặt đã lưu (không hiện hộp chọn lúc bắt đầu — bên đã cố định theo bài).
+- **AI đi theo sách**: `xq-book/src/game.rs` (`BookWalker`, mới) — AI đi các nước khai cuộc theo đúng cây sách của bài đó (chọn biến theo weight, cùng RNG xorshift như Tutor, seed theo ván), không gọi engine khi còn trong sách. Hết cây (tới lá) hoặc người chơi đi lệch sách → AI chuyển sang Pikafish (builtin dự phòng) và đánh tiếp tới cuối ván.
+- **Thoát ra thì mất lịch sử**: ván này không bao giờ lưu — không hỏi lưu khi về menu, không có nút "Lưu ván" ở hộp kết quả, không vào "Lịch sử đấu". `needs_save_prompt` = false và `save_current_game` là no-op khi đang ở mode này.
+- **Không chấm điểm kiểu Tutor**: đây là ván cờ thường (gợi ý, ChessDB, hoàn nước vẫn như mode Đấu với AI), chỉ khác ở nước khai cuộc của AI. Tiêu đề màn hình hiện tên thế trận thay vì "Đấu với AI". Hoàn nước có hoàn lại cả vị trí trong cây sách (walker rebuild từ danh sách nước).
+- **Cổng**: fmt OK, clippy sạch, test mới: 3 test `BookWalker` (theo sách / lệch sách / rebuild sau hoàn nước) + 5 test Play (bắt đầu từ bài Đỏ/Đen, AI theo sách rồi về engine, hoàn nước rebuild cây, ván thường xóa book game, không bao giờ lưu) + 2 test Learn-select (chọn book game) + 1 test App (handover chọn bài → Play).
+- Chưa kiểm bằng mắt: cần Hieu mở màn Học, chọn 1 bài, bấm "Đánh với AI theo thế trận" và chơi thử — kiểm AI có đi đúng thế trận không, ván có đánh tới cuối không, thoát ra có mất lịch sử không.

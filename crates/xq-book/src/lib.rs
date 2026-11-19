@@ -1,9 +1,11 @@
 //! `xq-book`: opening book (`openings.json`) + tutor.
 
+pub mod game;
 pub mod schema;
 pub mod tree;
 pub mod tutor;
 
+pub use game::BookWalker;
 pub use schema::{BookFile, BookNode, Lesson, Source};
 pub use tutor::{direction_count, BookHint, LessonSummary, Tutor, TutorEvent};
 

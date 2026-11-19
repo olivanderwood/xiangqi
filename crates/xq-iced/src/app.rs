@@ -432,6 +432,18 @@ impl App {
                             }
                         }
                     }
+                    // Hand the picked lesson to the Play screen for
+                    // a book game (Hieu, 2026-11-19): "Đánh với AI
+                    // theo thế trận".
+                    if screen == Screen::Play {
+                        if let Some(choice) = self.learn_select.take_book_choice() {
+                            self.play.start_book_game(
+                                &choice.lesson_id,
+                                choice.learner_is_red,
+                                &mut self.shared,
+                            );
+                        }
+                    }
                     self.goto(screen);
                     Task::none()
                 }
@@ -842,5 +854,35 @@ mod tests {
         assert_eq!(app.screen, Screen::Home);
         assert!(!app.learn.save_prompt_open());
         assert!(!app.learn.needs_save_prompt(), "lesson reset on exit");
+    }
+
+    #[test]
+    fn learn_select_book_game_hands_the_lesson_to_play() {
+        // Hieu, 2026-11-19: "Đánh với AI theo thế trận" — the
+        // picked lesson starts a book game on the Play screen.
+        use crate::screens::learn_select;
+        use xq_core::types::Color;
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Goto(Screen::LearnSelect));
+        let lesson = app
+            .shared
+            .book
+            .by_learner(Color::Red)
+            .into_iter()
+            .next()
+            .expect("a Red lesson")
+            .clone();
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::SelectLesson(
+            lesson.id.clone(),
+        )));
+        // Selecting only records the choice; StartBookGame records
+        // the pending book choice and navigates, and the App starts
+        // the book game from it (the real UI flow).
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::StartBookGame));
+        let _ = app.update(Message::LearnSelect(learn_select::Msg::Navigate(
+            Screen::Play,
+        )));
+        assert_eq!(app.screen, Screen::Play);
+        assert_eq!(app.play.book_lesson_id(), Some(lesson.id.as_str()));
     }
 }

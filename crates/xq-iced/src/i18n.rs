@@ -115,6 +115,9 @@ pub enum Key {
     CompletedMark,
     IntroTitle,
     StartLesson,
+    /// "Đánh với AI theo thế trận" (Learn select, Hieu 2026-11-19):
+    /// play a full game vs the AI in the picked opening line.
+    PlayLessonVsAi,
     TutorTitle,
     HideHints,
     ShowHints,
@@ -344,6 +347,7 @@ fn t_vi(key: Key) -> &'static str {
         Key::CompletedMark => "✓ Đã hoàn thành",
         Key::IntroTitle => "Giới thiệu bài",
         Key::StartLesson => "Bắt đầu",
+        Key::PlayLessonVsAi => "Đánh với AI theo thế trận",
         Key::TutorTitle => "Gia sư",
         Key::HideHints => "Ẩn gợi ý",
         Key::ShowHints => "Xem gợi ý",
@@ -565,6 +569,7 @@ fn t_en(key: Key) -> &'static str {
         Key::CompletedMark => "✓ Completed",
         Key::IntroTitle => "Lesson intro",
         Key::StartLesson => "Start",
+        Key::PlayLessonVsAi => "Play vs AI in this line",
         Key::TutorTitle => "Tutor",
         Key::HideHints => "Hide hints",
         Key::ShowHints => "Show hints",
@@ -802,6 +807,11 @@ mod tests {
                 Key::LearnSelectSubtitle,
                 "Máy sẽ là đối thủ và gợi ý các nước đi theo khai cuộc.",
                 "The AI plays as your opponent and suggests book moves.",
+            ),
+            (
+                Key::PlayLessonVsAi,
+                "Đánh với AI theo thế trận",
+                "Play vs AI in this line",
             ),
             (Key::GradeBook, "Đúng sách", "Book move"),
             (Key::GradeBest, "Nước tốt nhất", "Best move"),

@@ -8,6 +8,13 @@
 //! Draw / Resign / New game, and the move / capture / check /
 //! checkmate sounds.
 //!
+//! One addition since the port (Hieu, 2026-11-19): the book game
+//! ("Đánh với AI theo thế trận", started from Learn-select). The
+//! human plays the lesson's side and the AI follows the lesson's
+//! tree ([`BookGame`]) while the game is in it, then the engine
+//! takes over for the rest of the game. A book game is never saved:
+//! leaving for the menu discards it.
+//!
 //! # INVARIANT — the piece must land before any computation starts
 //!
 //! A move's slide animation (400 ms) must finish BEFORE the AI,
@@ -45,6 +52,7 @@ use iced::{
     Alignment, Background, Border, Element, Length, Point, Rectangle, Size, Subscription, Task,
     Theme,
 };
+use xq_book::BookWalker;
 use xq_chessdb::{ChessDbError, ChessDbEval};
 use xq_core::analysis::Grade;
 use xq_core::board::Position;
@@ -172,6 +180,18 @@ pub enum StartSide {
 pub enum VsOpponent {
     Ai { human: Color, difficulty: u8 },
     TwoPlayer,
+}
+
+/// A "play vs AI in one opening line" game (Hieu, 2026-11-19):
+/// started from Learn-select's "Đánh với AI theo thế trận", the AI
+/// follows the lesson's tree while the game is in it and falls back
+/// to the engine once the game leaves the book (or the line ends).
+/// The game is never saved: leaving for the menu discards it, so
+/// [`State::needs_save_prompt`] is false and
+/// [`State::save_current_game`] is a no-op while this is set.
+pub struct BookGame {
+    pub lesson_name: String,
+    pub walker: BookWalker,
 }
 
 /// A worker answer, converted from [`AiResponse`] into a `Clone`
@@ -330,6 +350,10 @@ pub struct State {
     grade_req_id: Option<u64>,
     game_seed: u64,
     from_learn: bool,
+    /// The opening-line game, if this game was started from
+    /// Learn-select's "Đánh với AI theo thế trận" (`None` for a
+    /// normal Vs-AI game).
+    book_game: Option<BookGame>,
     auto_hint: bool,
     engine_ready: bool,
     engine_banner: Option<String>,
@@ -497,6 +521,7 @@ impl State {
             grade_req_id: None,
             game_seed: new_seed(),
             from_learn: false,
+            book_game: None,
             auto_hint: false,
             engine_ready: false,
             engine_banner: None,
@@ -851,6 +876,11 @@ impl State {
         if self.game.play(mv).is_err() {
             return;
         }
+        // Book game: follow the played move down the lesson tree
+        // (marks the game out of book when the move is not in it).
+        if let Some(book) = &mut self.book_game {
+            book.walker.advance(&pos_before, mv);
+        }
         if self.from_learn && Some(mover) == self.human_color() {
             self.pending_grade = Some((self.game.start.to_fen(), moves_before, mv));
         }
@@ -953,6 +983,7 @@ impl State {
         self.grade_req_id = None;
         self.auto_hint = false;
         self.from_learn = false;
+        self.book_game = None;
         self.started = true;
         self.show_start_dialog = false;
         shared.settings.human_color = Some(match side {
@@ -1005,9 +1036,74 @@ impl State {
         self.grade_req_id = None;
         self.auto_hint = true;
         self.from_learn = true;
+        self.book_game = None;
         self.flipped = human == Color::Black;
         self.started = true;
         self.show_start_dialog = false;
+    }
+
+    /// Start a "play vs AI in one opening line" game (Hieu,
+    /// 2026-11-19): the human plays the lesson's side from the
+    /// lesson's start position, and the AI follows the lesson's
+    /// tree while the game is in it (see `maybe_trigger_ai`) —
+    /// then the engine takes over for the rest of the game. The
+    /// difficulty is the saved one (no start dialog: the side is
+    /// fixed by the lesson). The game is never saved: leaving for
+    /// the menu discards it. Called by the App when Learn-select
+    /// hands over a "Đánh với AI theo thế trận" pick. An unknown
+    /// lesson id leaves the screen unstarted (the start dialog
+    /// stays open).
+    pub fn start_book_game(&mut self, lesson_id: &str, learner_is_red: bool, shared: &mut Shared) {
+        let _ = learner_is_red; // the book's learner is authoritative (same as Learn::start)
+        let Some(lesson) = shared.book.by_id(lesson_id).cloned() else {
+            return;
+        };
+        let human = lesson.learner.color();
+        let start = lesson
+            .start_fen
+            .as_deref()
+            .map(|f| Position::from_fen(f).expect("lesson start_fen is valid"))
+            .unwrap_or_else(Position::startpos);
+        let difficulty = shared.settings.difficulty;
+        self.game = Game::new(start);
+        self.opponent = VsOpponent::Ai { human, difficulty };
+        self.difficulty = difficulty;
+        self.custom_elo = shared.settings.custom_elo;
+        self.flipped = human == Color::Black;
+        self.ai_thinking = false;
+        self.ai_req_id = None;
+        self.game_seed = new_seed();
+        self.diverse_req_id = None;
+        self.hint_arrows.clear();
+        self.hint_lines.clear();
+        self.hint_req_id = None;
+        self.hint_count = 0;
+        self.hint_for_ply = None;
+        self.hint_pending = false;
+        self.hovered_hint = None;
+        self.review = None;
+        self.last_move = None;
+        self.board.anim = None;
+        self.selected = None;
+        self.check_since = None;
+        self.result_ack = true;
+        self.draw_message = None;
+        self.last_grade = None;
+        self.pending_grade = None;
+        self.grade_req_id = None;
+        self.auto_hint = false;
+        self.from_learn = false;
+        self.saved_this_game = false;
+        self.show_save_prompt = false;
+        self.book_game = Some(BookGame {
+            lesson_name: lesson.name_vi.clone(),
+            walker: BookWalker::new(lesson, self.game_seed),
+        });
+        self.started = true;
+        self.show_start_dialog = false;
+        // The AI may have the first move (a Black lesson): trigger
+        // the book reply at once (no animation is running).
+        self.trigger_work(shared);
     }
 
     // ------------------------------------------------------------------
@@ -1016,9 +1112,14 @@ impl State {
 
     /// Whether leaving for the menu should ask to save first: a
     /// game is in progress (started, moves played, not over) and
-    /// has not been saved already.
+    /// has not been saved already. A book game is never saved
+    /// (Hieu, 2026-11-19): leaving for the menu discards it, so
+    /// there is nothing to ask about.
     #[must_use]
     pub fn needs_save_prompt(&self) -> bool {
+        if self.book_game.is_some() {
+            return false;
+        }
         self.started
             && !self.game.result().is_over()
             && !self.game.moves.is_empty()
@@ -1029,6 +1130,34 @@ impl State {
     /// navigating away when `needs_save_prompt`).
     pub fn show_save_prompt(&mut self) {
         self.show_save_prompt = true;
+    }
+
+    /// The book game's lesson id, if this is a book game.
+    /// Test-only: the App test verifies the Learn-select handover.
+    #[cfg(test)]
+    #[must_use]
+    pub fn book_lesson_id(&self) -> Option<&str> {
+        self.book_game.as_ref().map(|b| b.walker.lesson.id.as_str())
+    }
+
+    /// Whether the book game is still inside the lesson's tree.
+    /// Test-only.
+    #[cfg(test)]
+    #[must_use]
+    pub fn book_in_book(&self) -> bool {
+        self.book_game.as_ref().is_some_and(|b| b.walker.in_book())
+    }
+
+    /// The book replies available at the current position, if this
+    /// is a book game. Test-only: lets a test pick an off-book move
+    /// without re-walking the lesson tree.
+    #[cfg(test)]
+    #[must_use]
+    pub fn book_children(&self) -> Vec<Move> {
+        self.book_game
+            .as_ref()
+            .map(|b| b.walker.children_moves(&self.game.pos))
+            .unwrap_or_default()
     }
 
     /// The human side for the saved entry (`None` in two-player
@@ -1093,8 +1222,12 @@ impl State {
     /// A finished game goes to the history; an unfinished one
     /// becomes the resumable game (replacing any older unfinished
     /// Play entry). Marks the game saved so the prompt / button is
-    /// not offered again for it.
+    /// not offered again for it. A book game is never saved (see
+    /// [`Self::needs_save_prompt`]).
     pub fn save_current_game(&mut self, shared: &mut Shared, finished: bool) {
+        if self.book_game.is_some() {
+            return;
+        }
         let entry = self.to_saved_game(finished);
         if !finished {
             // At most one unfinished Play game is kept (see
@@ -1162,6 +1295,7 @@ impl State {
         self.started = true;
         self.show_start_dialog = false;
         self.show_save_prompt = false;
+        self.book_game = None;
         // A finished game loaded from the store is already in the
         // history — don't offer to save it again (that would
         // duplicate the entry). An unfinished one is the resumable
@@ -1227,6 +1361,12 @@ impl State {
         } else {
             None
         };
+        // Book game: the tree position follows the remaining moves
+        // (an undo past the book-exit point puts the game back in
+        // the book).
+        if let Some(book) = &mut self.book_game {
+            book.walker.rebuild(&self.game.start, &self.game.moves);
+        }
     }
 
     /// Offer a draw: the AI accepts when its own score is at most
@@ -1321,6 +1461,20 @@ impl State {
             || self.game.result().is_over()
             || self.game.pos.side() == human
         {
+            return;
+        }
+        // Book game (Hieu, 2026-11-19): while the game is still in
+        // the lesson's tree, the AI plays a book reply (weighted
+        // pick) — no engine call. Once the game leaves the book (or
+        // the line ends) the engine below takes over for the rest
+        // of the game.
+        let pos = self.game.pos.clone();
+        let book_mv = self
+            .book_game
+            .as_mut()
+            .and_then(|book| book.walker.next_move(&pos));
+        if let Some(mv) = book_mv {
+            self.play(mv, shared, true);
             return;
         }
         let Some(engine) = shared.engine.try_lock() else {
@@ -1705,6 +1859,13 @@ impl State {
             shared.engine_name.clone(),
             if self.engine_ready { Some(GREEN) } else { None },
         );
+        // Book game: the header names the opening line being
+        // played, so the player always knows which formation the
+        // AI is following.
+        let title = match &self.book_game {
+            Some(book) => book.lesson_name.clone(),
+            None => i18n::t(Key::PlayVsAi).to_string(),
+        };
         container(
             row![
                 ghost_button_with_icon(
@@ -1712,7 +1873,7 @@ impl State {
                     Icon::ArrowLeft,
                     Msg::Navigate(Screen::Home)
                 ),
-                text(i18n::t(Key::PlayVsAi))
+                text(title)
                     .size(FONT_SCREEN_TITLE)
                     .font(theme::inter_font_semibold())
                     .width(Length::Fill),
@@ -2247,10 +2408,13 @@ impl State {
                 .spacing(12),
             )
         } else {
-            buttons = buttons.push(secondary_button(
-                i18n::t(Key::SaveGame),
-                Msg::SaveFinishedGame,
-            ));
+            // A book game is never saved: no save button.
+            if self.book_game.is_none() {
+                buttons = buttons.push(secondary_button(
+                    i18n::t(Key::SaveGame),
+                    Msg::SaveFinishedGame,
+                ));
+            }
             container(
                 column![
                     text(i18n::t(Key::ResultTitle)).size(FONT_SCREEN_TITLE),
@@ -2669,5 +2833,187 @@ mod tests {
         assert!(!resumed.game.result().is_over());
         assert_eq!(resumed.game.moves.len(), 0);
         assert_eq!(resumed.game.pos.side(), Color::Red);
+    }
+
+    /// Helpers for the book-game tests (Hieu, 2026-11-19).
+    fn first_red_lesson(shared: &Shared) -> xq_book::Lesson {
+        shared
+            .book
+            .by_learner(Color::Red)
+            .into_iter()
+            .next()
+            .expect("a Red lesson")
+            .clone()
+    }
+
+    fn first_black_lesson(shared: &Shared) -> xq_book::Lesson {
+        shared
+            .book
+            .by_learner(Color::Black)
+            .into_iter()
+            .next()
+            .expect("a Black lesson")
+            .clone()
+    }
+
+    /// Parse a book move string at a position (Chinese first, WXF
+    /// fallback — the same rule the walker uses).
+    fn parse_book_mv(pos: &Position, s: &str) -> Move {
+        use xq_core::notation::{parse_cn, parse_wxf};
+        parse_cn(pos, s)
+            .or_else(|_| parse_wxf(pos, s))
+            .expect("book move parses")
+    }
+
+    /// Advance the clock past the 400 ms slide, so the landing tick
+    /// runs `trigger_work` (the AI's reply, book or engine).
+    fn land(state: &mut State, shared: &mut Shared) {
+        let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
+        let _ = state.update(Msg::Tick(later), shared);
+    }
+
+    #[test]
+    fn book_game_starts_from_the_lesson_and_never_saves() {
+        let mut shared = Shared::new();
+        let lesson = first_red_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, true, &mut shared);
+        assert!(state.started);
+        assert!(!state.show_start_dialog);
+        assert_eq!(state.book_lesson_id(), Some(lesson.id.as_str()));
+        assert!(!state.flipped, "human plays Red");
+        assert!(state.game.moves.is_empty(), "Red to move: no AI move yet");
+        assert!(state.book_in_book());
+        // A move played, game ongoing: a normal game would ask to
+        // save on exit — a book game never does.
+        let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
+        state.play(first, &shared, true);
+        assert!(!state.needs_save_prompt());
+        // Saving is a no-op: nothing is recorded, nothing is marked
+        // saved — the game leaves no history.
+        let before = shared.saved_games.by_mode(SavedMode::Play).len();
+        state.save_current_game(&mut shared, false);
+        assert!(!state.saved_this_game);
+        assert_eq!(shared.saved_games.by_mode(SavedMode::Play).len(), before);
+        // ...and a finished book game is not saved either.
+        state.game.resign(Color::Red);
+        state.save_current_game(&mut shared, true);
+        assert!(!state.saved_this_game);
+        assert_eq!(shared.saved_games.by_mode(SavedMode::Play).len(), before);
+    }
+
+    #[test]
+    fn book_game_black_lesson_ai_opens_from_the_book() {
+        let mut shared = Shared::new();
+        let lesson = first_black_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, false, &mut shared);
+        assert!(state.started);
+        assert!(state.flipped, "human plays Black: board flipped");
+        assert_eq!(state.book_lesson_id(), Some(lesson.id.as_str()));
+        // The AI (Red) has the first move and plays it from the book
+        // at once — `start_book_game` triggers the work.
+        assert_eq!(state.game.moves.len(), 1);
+        let played = state.game.moves[0];
+        let start = state.game.start.clone();
+        let root_children: Vec<Move> = lesson
+            .tree
+            .iter()
+            .map(|n| parse_book_mv(&start, &n.mv))
+            .collect();
+        assert!(!root_children.is_empty());
+        assert!(root_children.contains(&played), "AI opened from the book");
+        assert!(state.book_in_book());
+        assert!(!state.ai_thinking, "no engine call for a book move");
+    }
+
+    #[test]
+    fn book_game_ai_follows_the_line_then_falls_back_to_the_engine() {
+        let mut shared = Shared::new();
+        let lesson = first_red_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, true, &mut shared);
+        // Human plays the book's first move; the AI replies from
+        // the book (no engine call).
+        let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
+        state.play(first, &shared, true);
+        land(&mut state, &mut shared);
+        assert_eq!(state.game.moves.len(), 2, "AI replied");
+        assert!(state.book_in_book());
+        assert!(!state.ai_thinking, "book reply needs no engine");
+        // Human plays a legal move that is NOT in the book: the game
+        // leaves the book and the AI falls back to the engine.
+        let book_moves = state.book_children();
+        let off = state
+            .game
+            .pos
+            .legal_moves()
+            .into_iter()
+            .find(|m| !book_moves.contains(m))
+            .expect("an off-book legal move exists");
+        state.play(off, &shared, true);
+        land(&mut state, &mut shared);
+        assert!(!state.book_in_book(), "off-book move leaves the book");
+        assert!(state.ai_thinking, "engine asked once out of book");
+    }
+
+    #[test]
+    fn book_game_undo_rebuilds_the_tree() {
+        let mut shared = Shared::new();
+        let lesson = first_red_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, true, &mut shared);
+        // Two book rounds: human + AI, human + AI.
+        for _ in 0..2 {
+            let mv = state.book_children()[0];
+            state.play(mv, &shared, true);
+            land(&mut state, &mut shared);
+        }
+        assert_eq!(state.game.moves.len(), 4);
+        assert!(state.book_in_book());
+        // Undo twice: back to the start, still in the book.
+        state.undo();
+        assert_eq!(state.game.moves.len(), 2);
+        assert!(state.book_in_book());
+        state.undo();
+        assert_eq!(state.game.moves.len(), 0);
+        assert!(state.book_in_book());
+        // Leave the book, then undo: back in the book at 2 plies
+        // (the undo takes back the off-book move; the AI's reply
+        // was never played for it).
+        let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
+        state.play(first, &shared, true);
+        land(&mut state, &mut shared);
+        assert_eq!(state.game.moves.len(), 2);
+        let book_moves = state.book_children();
+        let off = state
+            .game
+            .pos
+            .legal_moves()
+            .into_iter()
+            .find(|m| !book_moves.contains(m))
+            .expect("an off-book legal move exists");
+        state.play(off, &shared, true);
+        assert!(!state.book_in_book());
+        state.undo();
+        assert_eq!(state.game.moves.len(), 2);
+        assert!(state.book_in_book());
+    }
+
+    #[test]
+    fn normal_game_clears_the_book_game() {
+        // A normal start (or continue-from-learn / resume) after a
+        // book game must not keep following the old lesson's tree.
+        let mut shared = Shared::new();
+        let lesson = first_red_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, true, &mut shared);
+        assert!(state.book_lesson_id().is_some());
+        state.start(StartSide::Red, 1, &mut shared);
+        assert!(state.book_lesson_id().is_none());
+        // And it behaves like a normal game again: a move played
+        // means the exit prompt is offered.
+        state.play(Move::new(19, 22), &shared, true);
+        assert!(state.needs_save_prompt());
     }
 }

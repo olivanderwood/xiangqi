@@ -5,8 +5,10 @@
 //! label over two large Tiên/Hậu buttons, the lesson list for the
 //! chosen side (name + level stars and a green Check icon when
 //! completed, from the shared embedded book), an intro panel (name,
-//! level, summary — no board preview), and "Bắt đầu học"
-//! bottom-right (only enabled once a lesson is picked).
+//! level, summary — no board preview), and bottom-right two buttons
+//! once a lesson is picked: "Bắt đầu học" (the Tutor lesson) and
+//! "Đánh với AI theo thế trận" (a full game vs the AI in that
+//! opening line — Hieu, 2026-11-19).
 //!
 //! # Lesson handover (integration)
 //!
@@ -14,7 +16,10 @@
 //! the pick as a [`LessonChoice`](super::learn::LessonChoice) and
 //! sends `Navigate(Screen::Learn)`; the coordinator then calls
 //! [`State::take_choice`] and [`super::learn::State::start`] with it
-//! (see `learn.rs` for the contract).
+//! (see `learn.rs` for the contract). [`Msg::StartBookGame`] does
+//! the same for a book game: it stores the pick and sends
+//! `Navigate(Screen::Play)`, and the coordinator hands it to
+//! [`super::play::State::start_book_game`].
 
 use iced::widget::{column, container, row, scrollable, text, Button, Space};
 use iced::{Element, Length, Subscription, Task};
@@ -28,7 +33,8 @@ use crate::theme::{
     RADIUS_10, RED, SPACE_12, SPACE_16, SPACE_24, SPACE_32, SPACE_8, SURFACE2, TEXT, TEXT_DIM,
 };
 use crate::widgets::{
-    card_style, ghost_button_with_icon, header_divider, primary_button_with_icon, HEADER_HEIGHT,
+    card_style, ghost_button_with_icon, header_divider, primary_button_with_icon,
+    secondary_button_with_icon, HEADER_HEIGHT,
 };
 use xq_book::Lesson;
 use xq_core::types::Color;
@@ -43,6 +49,9 @@ pub struct State {
     /// The pick, stored by [`Msg::StartLesson`] for the integration
     /// step to take with [`State::take_choice`].
     pending_choice: Option<LessonChoice>,
+    /// The pick, stored by [`Msg::StartBookGame`] for the
+    /// integration step to take with [`State::take_book_choice`].
+    pending_book_choice: Option<LessonChoice>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +68,9 @@ pub enum Msg {
     SelectLesson(String),
     /// Store the pick and go to the Learn screen.
     StartLesson,
+    /// Store the pick and go to the Play screen for a book game
+    /// (Hieu, 2026-11-19).
+    StartBookGame,
     /// A board interaction on the (non-interactive) preview board.
     Ignored,
 }
@@ -75,6 +87,14 @@ impl State {
     /// never pressed (or the pick was already taken).
     pub fn take_choice(&mut self) -> Option<LessonChoice> {
         self.pending_choice.take()
+    }
+
+    /// Take the stored book-game pick (if any) so the integration
+    /// step can hand it to the Play screen. `None` when "Đánh với
+    /// AI theo thế trận" was never pressed (or the pick was already
+    /// taken).
+    pub fn take_book_choice(&mut self) -> Option<LessonChoice> {
+        self.pending_book_choice.take()
     }
 
     /// `Navigate` / `ShowSettings` / `ShowAbout` are intercepted by
@@ -105,6 +125,19 @@ impl State {
                     learner_is_red: lesson.learner.color() == Color::Red,
                 });
                 Task::done(Msg::Navigate(Screen::Learn))
+            }
+            Msg::StartBookGame => {
+                let Some(id) = self.selected.clone() else {
+                    return Task::none();
+                };
+                let Some(lesson) = shared.book.by_id(&id) else {
+                    return Task::none();
+                };
+                self.pending_book_choice = Some(LessonChoice {
+                    lesson_id: id,
+                    learner_is_red: lesson.learner.color() == Color::Red,
+                });
+                Task::done(Msg::Navigate(Screen::Play))
             }
         }
     }
@@ -377,12 +410,23 @@ impl State {
                 card_col = card_col.push(body);
 
                 // "Bắt đầu học" (mockup: bottom-right, 200 × 48,
-                // gold, BookOpen icon). Disabled-looking until a
-                // lesson is picked — the button simply has no
-                // `on_press` then, so Iced renders it disabled.
+                // gold, BookOpen icon) and "Đánh với AI theo thế
+                // trận" (Hieu, 2026-11-19: a full game vs the AI in
+                // this opening line — secondary, 260 × 48, Maximize
+                // icon, the same "play vs machine" icon as "Chơi
+                // tiếp với máy"). Disabled-looking until a lesson is
+                // picked — the button simply has no `on_press` then,
+                // so Iced renders it disabled.
                 let start_row = if self.selected.is_some() {
                     row![
                         Space::new().width(Length::Fill),
+                        secondary_button_with_icon(
+                            i18n::t(Key::PlayLessonVsAi),
+                            Icon::Maximize,
+                            Msg::StartBookGame
+                        )
+                        .width(Length::Fixed(260.0))
+                        .height(Length::Fixed(48.0)),
                         primary_button_with_icon(
                             i18n::t(Key::StartLesson),
                             Icon::BookOpen,
@@ -391,6 +435,7 @@ impl State {
                         .width(Length::Fixed(200.0))
                         .height(Length::Fixed(48.0)),
                     ]
+                    .spacing(SPACE_12)
                 } else {
                     row![
                         Space::new().width(Length::Fill),
@@ -492,5 +537,33 @@ mod tests {
         assert_eq!(st.selected.as_deref(), Some("some-id"));
         let _ = st.update(Msg::SelectSide(Color::Black), &mut shared);
         assert!(st.selected.is_none());
+    }
+
+    #[test]
+    fn start_book_game_stores_book_choice_for_play() {
+        let mut shared = Shared::new();
+        let mut st = State::new(&shared);
+        assert!(st.take_book_choice().is_none());
+        let _ = st.update(Msg::SelectSide(Color::Red), &mut shared);
+        let lessons = shared.book.by_learner(Color::Red);
+        assert!(!lessons.is_empty(), "a Red lesson exists");
+        let id = lessons[0].id.clone();
+        let _ = st.update(Msg::SelectLesson(id.clone()), &mut shared);
+        let _ = st.update(Msg::StartBookGame, &mut shared);
+        // The book choice is stored; the learn choice is not.
+        let choice = st.take_book_choice().expect("book choice stored");
+        assert_eq!(choice.lesson_id, id);
+        assert!(choice.learner_is_red);
+        assert!(st.take_choice().is_none());
+        // Taking twice yields nothing the second time.
+        assert!(st.take_book_choice().is_none());
+    }
+
+    #[test]
+    fn start_book_game_without_pick_stores_nothing() {
+        let mut shared = Shared::new();
+        let mut st = State::new(&shared);
+        let _ = st.update(Msg::StartBookGame, &mut shared);
+        assert!(st.take_book_choice().is_none());
     }
 }
