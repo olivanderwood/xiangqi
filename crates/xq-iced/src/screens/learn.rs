@@ -679,8 +679,20 @@ impl State {
         if self.game.moves.is_empty() && self.complete.is_none() {
             return None;
         }
+        // A lesson can end in checkmate (a trap leaf, e.g.
+        // "Đen chiếu hết (M1)"): the game is genuinely over and
+        // cannot continue. A repetition draw does not block it —
+        // the handover below restarts the repetition clock.
+        if !self.game.can_continue() {
+            return None;
+        }
         let human = self.learner_color().unwrap_or(SideColor::Red);
-        let game = std::mem::replace(&mut self.game, Game::new(Position::startpos()));
+        let mut game = std::mem::replace(&mut self.game, Game::new(Position::startpos()));
+        // The lesson's book line may repeat a position three times as
+        // a teaching device (Hieu, 2026-11-20: `r-paodau-pao-cung`
+        // ends in `Draw(Repetition)`); the continued game must not
+        // start already drawn, or the Play screen freezes.
+        game.reset_repetition_history();
         Some((game, human))
     }
 
@@ -2196,18 +2208,24 @@ impl State {
             text(i18n::t(Key::EngineScore).replace("{n}", &summary.final_score.to_string()))
                 .size(FONT_BODY),
         );
-        col = col.push(
-            row![
-                primary_button(i18n::t(Key::StopAndSummary), Msg::StopAndSummary),
-                secondary_button_with_icon(
-                    i18n::t(Key::ContinueWithAi),
-                    Icon::Maximize,
-                    Msg::ContinueWithAi
-                ),
-                secondary_button(i18n::t(Key::Close), Msg::HideComplete),
-            ]
-            .spacing(8),
-        );
+        // "Đánh tiếp với AI" only when the finished game can actually
+        // continue: a lesson ending in checkmate (a trap leaf) has no
+        // legal move left, so there is nothing to play on (Hieu,
+        // 2026-11-20). A repetition draw does not hide it — the
+        // handover restarts the repetition clock.
+        let mut buttons = row![primary_button(
+            i18n::t(Key::StopAndSummary),
+            Msg::StopAndSummary
+        )];
+        if self.game.can_continue() {
+            buttons = buttons.push(secondary_button_with_icon(
+                i18n::t(Key::ContinueWithAi),
+                Icon::Maximize,
+                Msg::ContinueWithAi,
+            ));
+        }
+        buttons = buttons.push(secondary_button(i18n::t(Key::Close), Msg::HideComplete));
+        col = col.push(buttons.spacing(8));
         container(col)
             .padding(SPACE_16)
             .width(Length::Fill)
@@ -2352,6 +2370,81 @@ mod tests {
         assert_eq!(st.lesson.as_ref().expect("lesson").id, lesson.id);
         assert!(st.started);
         assert!(st.tutor.is_some());
+    }
+
+    #[test]
+    fn full_lesson_handover_game_is_ongoing() {
+        // Hieu, 2026-11-20: "Chơi tiếp với AI" in Learn mode did
+        // nothing. Play every lesson through the real Learn flow and
+        // check the game handed to Play is still ongoing: if a
+        // lesson's game is already over (mate / repetition), the Play
+        // screen freezes — `board_enabled` and `ai_move_pending`
+        // both require `GameResult::Ongoing`, so neither the AI nor
+        // the human can move.
+        let mut shared = Shared::new();
+        let lessons = shared.book.lessons.clone();
+        assert!(!lessons.is_empty());
+        for lesson in &lessons {
+            let red = lesson.learner.color() == SideColor::Red;
+            let mut st = State::new(&shared);
+            st.start(&lesson.id, red, &mut shared);
+            let mut guard = 0;
+            while st.complete.is_none() && guard < 100 {
+                guard += 1;
+                if st.show_opponent_choice {
+                    st.play_opponent_choice(0, &shared);
+                    continue;
+                }
+                let children = st.children().to_vec();
+                let node = children
+                    .iter()
+                    .find(|n| n.main)
+                    .or_else(|| children.first())
+                    .expect("a book move for the learner");
+                let mv = notation::parse_cn(&st.game.pos, &node.mv).expect("book move parses");
+                st.play_user_move(mv, &shared, false);
+                if st.complete.is_none() {
+                    st.play_opponent(&shared);
+                }
+            }
+            assert!(
+                st.complete.is_some(),
+                "lesson {} did not complete",
+                lesson.id
+            );
+            let moves = st.game.moves.len();
+            let (game, human) = st.take_continue_game().expect("handover");
+            assert_eq!(game.moves.len(), moves);
+            assert_eq!(human, lesson.learner.color());
+            assert!(
+                !game.result().is_over(),
+                "lesson {} ends with the game already over ({:?})",
+                lesson.id,
+                game.result()
+            );
+        }
+    }
+
+    #[test]
+    fn take_continue_game_refuses_a_mated_lesson() {
+        // A lesson ending in checkmate (a trap leaf, e.g. "Đen chiếu
+        // hết (M1)") cannot continue: the handover returns None and
+        // the Learn screen keeps its game.
+        let shared = Shared::new();
+        let mut st = State::new(&shared);
+        let mated =
+            Position::from_fen("4k4/9/2N3N2/4R4/9/9/9/9/9/4K4 b - - 0 1").expect("mate FEN parses");
+        st.game = Game::new(mated);
+        st.complete = Some(LessonSummary {
+            book_moves: 0,
+            total_learner_moves: 0,
+            grades: Vec::new(),
+            final_score: 0,
+            end_note_vi: None,
+        });
+        assert!(st.take_continue_game().is_none());
+        // The lesson game was not taken: still the mated position.
+        assert!(st.game.pos.legal_moves().is_empty());
     }
 
     #[test]

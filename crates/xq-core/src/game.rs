@@ -52,6 +52,7 @@ impl GameResult {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Game {
     pub start: Position,
     pub pos: Position,
@@ -62,6 +63,12 @@ pub struct Game {
     checks: Vec<bool>,
     resigned: Option<Color>,
     agreed_draw: bool,
+    /// First index into `hashes` that counts toward a repetition
+    /// draw. Positions before this are history for display / review /
+    /// undo only. `0` for a normal game; moved to the current
+    /// position by [`Self::reset_repetition_history`] when a studied
+    /// line continues as a real game.
+    repetition_from: usize,
 }
 
 impl Game {
@@ -77,7 +84,33 @@ impl Game {
             checks: Vec::new(),
             resigned: None,
             agreed_draw: false,
+            repetition_from: 0,
         }
+    }
+
+    /// Restart the repetition clock at the current position, keeping
+    /// the move list (display / review / undo). The positions before
+    /// the handover no longer count toward a repetition draw.
+    ///
+    /// A studied book line can repeat a position three times as a
+    /// teaching device (Hieu, 2026-11-20: lesson `r-paodau-pao-cung`
+    /// ends in `Draw(Repetition)`), but that must not freeze the game
+    /// it continues as — the Play screen requires
+    /// `GameResult::Ongoing` before either side may move.
+    pub fn reset_repetition_history(&mut self) {
+        self.repetition_from = self.hashes.len().saturating_sub(1);
+    }
+
+    /// Whether the game can continue as a real game once the
+    /// repetition clock restarts: the side to move has a legal move
+    /// and no non-repetition draw rule applies. A repetition draw
+    /// does not block it — a lesson can end in one and still be
+    /// played on (see `reset_repetition_history`).
+    #[must_use]
+    pub fn can_continue(&self) -> bool {
+        let mut probe = self.clone();
+        probe.reset_repetition_history();
+        !probe.result().is_over()
     }
 
     #[must_use]
@@ -109,6 +142,12 @@ impl Game {
         self.pos.unmake_move(m, u);
         self.hashes.pop();
         self.checks.pop();
+        // The repetition baseline must stay inside the shortened
+        // history; undoing back past it reopens the game (as with a
+        // resignation above), so the counted range just becomes empty.
+        self.repetition_from = self
+            .repetition_from
+            .min(self.hashes.len().saturating_sub(1));
         // Undo also reverses a resignation / agreed draw: taking a
         // move back reopens the game (Hieu, 2026-11-14 — a finished
         // game loaded from the history must still allow undo).
@@ -130,10 +169,16 @@ impl Game {
     /// perpetual-checking colour, if exactly one side qualifies.
     fn perpetual_checker(&self) -> Option<Color> {
         let cur = *self.hashes.last().unwrap();
-        // Previous occurrence of the current hash.
-        let prev = self.hashes[..self.hashes.len() - 1]
+        // Previous occurrence of the current hash, inside the counted
+        // history only (see `reset_repetition_history`): a perpetual
+        // check from the study line must not lose the continued game.
+        let from = self
+            .repetition_from
+            .min(self.hashes.len().saturating_sub(1));
+        let prev = self.hashes[from..self.hashes.len() - 1]
             .iter()
-            .rposition(|&h| h == cur)?;
+            .rposition(|&h| h == cur)?
+            .checked_add(from)?;
         // Moves in the cycle are `moves[prev..]` (hash index i corresponds
         // to the position after move i-1; move index prev..len-1).
         let cycle_moves = &self.moves[prev..];
@@ -201,9 +246,13 @@ impl Game {
                 Color::Black => GameResult::BlackWins(reason),
             };
         }
-        // Threefold repetition.
+        // Threefold repetition, counted from the repetition baseline
+        // only (see `reset_repetition_history`).
         let cur = *self.hashes.last().unwrap();
-        let count = self.hashes.iter().filter(|&&h| h == cur).count();
+        let from = self
+            .repetition_from
+            .min(self.hashes.len().saturating_sub(1));
+        let count = self.hashes[from..].iter().filter(|&&h| h == cur).count();
         if count >= 3 {
             return match self.perpetual_checker() {
                 Some(Color::Red) => GameResult::BlackWins(Reason::PerpetualCheck),

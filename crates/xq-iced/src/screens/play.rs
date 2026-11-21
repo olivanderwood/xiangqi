@@ -2817,6 +2817,50 @@ mod tests {
     }
 
     #[test]
+    fn continue_from_learn_triggers_the_ai() {
+        // Hieu, 2026-11-20: "Chơi tiếp với AI" in Learn mode did
+        // nothing. Reproduce the handover: a lesson game where Red
+        // (the learner) has just moved, so it is Black's (the AI's)
+        // turn.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        let mut game = Game::new(Position::startpos());
+        game.play(Move::new(19, 22)).expect("legal opening move");
+        state.start_from_learn(game, Color::Red);
+        assert!(state.started);
+        assert!(!state.show_start_dialog);
+        // The AI owes a move, so the tick must stay alive...
+        assert!(state.ai_move_pending());
+        // ...and a tick must send the AI request.
+        let _ = state.update(Msg::Tick(Instant::now()), &mut shared);
+        assert!(state.ai_thinking, "tick did not start the AI move");
+        assert!(state.ai_req_id.is_some());
+    }
+
+    #[test]
+    fn continue_from_learn_human_turn_then_ai_replies() {
+        // The other handover case: the lesson ended on the human's
+        // turn. The human moves, and the AI must reply.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        let mut game = Game::new(Position::startpos());
+        game.play(Move::new(19, 22)).expect("legal opening move");
+        game.play(Move::new(82, 65)).expect("legal opening move");
+        state.start_from_learn(game, Color::Red);
+        assert!(!state.ai_move_pending());
+        // Red pawn a4→a5 (sq 27→36): legal, one step forward.
+        state.play_move(Move::new(27, 36), &mut shared, true);
+        // The slide is still running, so the work waits for the
+        // landing (Hieu's invariant): no AI request yet...
+        assert!(!state.ai_thinking);
+        // ...but once the piece lands (a tick 500 ms later), the
+        // AI must reply.
+        let landed = Instant::now() + std::time::Duration::from_millis(500);
+        let _ = state.update(Msg::Tick(landed), &mut shared);
+        assert!(state.ai_thinking, "AI did not reply to the human move");
+    }
+
+    #[test]
     fn undo_returns_to_the_human_turn() {
         let mut shared = Shared::new();
         let mut state = State::new(&shared);

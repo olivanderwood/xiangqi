@@ -356,3 +356,63 @@ fn undo_after_resign_reopens_the_game() {
     assert_eq!(game.result(), GameResult::Ongoing);
     assert_eq!(game.moves.len(), 1);
 }
+
+#[test]
+fn repetition_draw_resets_at_the_handover() {
+    // Hieu, 2026-11-20: lesson `r-paodau-pao-cung` ends in
+    // `Draw(Repetition)`, so "Chơi tiếp với AI" handed Play a game
+    // that was already over and the board froze. The handover must
+    // restart the repetition clock at the current position.
+    let mut game = Game::new(Position::startpos());
+    // Both horses shuffle out and back: 4 plies return to startpos.
+    let cycle = [
+        Move::new(sq(1, 0), sq(2, 2)),
+        Move::new(sq(1, 9), sq(2, 7)),
+        Move::new(sq(2, 2), sq(1, 0)),
+        Move::new(sq(2, 7), sq(1, 9)),
+    ];
+    for _ in 0..2 {
+        for &m in &cycle {
+            game.play(m).expect("legal");
+        }
+    }
+    assert_eq!(game.result(), GameResult::Draw(Reason::Repetition));
+    // The handover restarts the clock: the same position counts once.
+    assert!(
+        game.can_continue(),
+        "repetition must not block the handover"
+    );
+    game.reset_repetition_history();
+    assert_eq!(game.result(), GameResult::Ongoing);
+    // ...and the clock still works: two more cycles draw again.
+    for _ in 0..2 {
+        for &m in &cycle {
+            game.play(m).expect("legal");
+        }
+    }
+    assert_eq!(game.result(), GameResult::Draw(Reason::Repetition));
+    // Undoing all the way back must not panic and reopens the game.
+    while game.undo().is_some() {}
+    assert_eq!(game.result(), GameResult::Ongoing);
+    assert!(game.moves.is_empty());
+}
+
+#[test]
+fn can_continue_blocks_a_genuinely_finished_game() {
+    use xq_core::types::Color;
+    // Checkmate: Black king on e9, Red rook checking on the file,
+    // both escape squares covered by Red horses — no legal move, so
+    // the lesson cannot continue as a Vs-AI game.
+    let mated =
+        Position::from_fen("4k4/9/2N3N2/4R4/9/9/9/9/9/4K4 b - - 0 1").expect("mate FEN parses");
+    let game = Game::new(mated);
+    assert!(matches!(game.result(), GameResult::RedWins(_)));
+    assert!(!game.can_continue());
+    // A resignation is equally final: the reset only touches the
+    // repetition clock.
+    let mut resigned = Game::new(Position::startpos());
+    resigned.resign(Color::Red);
+    assert!(!resigned.can_continue());
+    // A fresh game can always continue.
+    assert!(Game::new(Position::startpos()).can_continue());
+}

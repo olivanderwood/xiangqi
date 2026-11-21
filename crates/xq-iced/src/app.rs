@@ -510,11 +510,13 @@ impl App {
                 learn::Msg::ContinueWithAi => {
                     // "Chơi tiếp với máy": the finished lesson's game
                     // continues as a Vs-AI game (egui `ContinueWithAi`
-                    // → `start_from_learn`, §6.5).
+                    // → `start_from_learn`, §6.5). No handover when
+                    // the lesson ended in checkmate: stay on the
+                    // Learn screen with the complete dialog open.
                     if let Some((game, human)) = self.learn.take_continue_game() {
                         self.play.start_from_learn(game, human);
+                        self.goto(Screen::Play);
                     }
-                    self.goto(Screen::Play);
                     Task::none()
                 }
                 other => self

@@ -1280,7 +1280,12 @@ impl XiangqiApp {
                     if primary_button(ui, i18n::t(Key::StopAndSummary)).clicked() {
                         to_summary = true;
                     }
-                    if secondary_button(ui, i18n::t(Key::ContinueWithAi)).clicked() {
+                    // Only when the finished game can actually
+                    // continue: a lesson ending in checkmate (a trap
+                    // leaf) has no legal move left (Hieu, 2026-11-20).
+                    if self.learn.game.can_continue()
+                        && secondary_button(ui, i18n::t(Key::ContinueWithAi)).clicked()
+                    {
                         to_vs_ai = true;
                     }
                 });
@@ -1293,6 +1298,11 @@ impl XiangqiApp {
             for m in &self.learn.game.moves {
                 let _ = game.play(*m);
             }
+            // Same handover rule as the Iced app: a book line may
+            // repeat a position three times as a teaching device, and
+            // the continued game must not start already drawn (Hieu,
+            // 2026-11-20).
+            game.reset_repetition_history();
             let diff = self.learn.continue_difficulty;
             self.vs_ai.start_from_learn(game, human);
             self.vs_ai.opponent = crate::screens::vs_ai::VsOpponent::Ai {
