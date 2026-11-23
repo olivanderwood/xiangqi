@@ -19,12 +19,15 @@
 //!
 //! An opt-in mode from the start dialog: on the human's turn the
 //! clock runs per move — no move before 1 minute of thinking, and
-//! the game is lost on time at 1'30" without a move. The rule lives
-//! in [`xq_core::focus`] (pure in the elapsed time) and the timeout
-//! in [`Game::timeout`](xq_core::game::Game::timeout); this screen
-//! owns the turn clock (`focus_turn_start`), gates the board on it,
-//! and shows the countdown in the side panel. Review time still
-//! counts: the clock is never reset by opening the review.
+//! the game is lost on time at 1'30" without a move. The first move
+//! is exempt when the human plays Red: the opening move needs no
+//! thinking time, so the clock starts on the human's second turn.
+//! The rule lives in [`xq_core::focus`] (pure in the elapsed time)
+//! and the timeout in [`Game::timeout`](xq_core::game::Game::timeout);
+//! this screen owns the turn clock (`focus_turn_start`), gates the
+//! board on it, and shows the countdown in the side panel. Review
+//! time still counts: the clock is never reset by opening the
+//! review.
 //!
 //! # INVARIANT — the piece must land before any computation starts
 //!
@@ -851,12 +854,23 @@ impl State {
     /// Whether the focus clock should be ticking: focus mode on, a
     /// game running, and the human to move. The tick keeps running
     /// in review mode too — review time counts as thinking time, so
-    /// hiding in the review cannot dodge the timeout.
+    /// hiding in the review cannot dodge the timeout. The first move
+    /// is exempt when the human plays Red (Hieu, 2026-11-23): the
+    /// opening move needs no thinking time.
     fn focus_clock_running(&self) -> bool {
         self.focus
             && self.started
             && self.game.result() == GameResult::Ongoing
             && matches!(self.human_color(), Some(human) if self.game.pos.side() == human)
+            && !self.first_move_exempt()
+    }
+
+    /// Whether the current turn skips focus mode: the first move of
+    /// the game, when the human plays Red. Only Red's opening move
+    /// is exempt — a Black human's first turn (after the AI's
+    /// opening move) still runs the clock.
+    fn first_move_exempt(&self) -> bool {
+        self.game.moves.is_empty() && matches!(self.human_color(), Some(Color::Red))
     }
 
     /// Start (or keep) the focus clock for the current human turn,
@@ -3363,6 +3377,10 @@ mod tests {
         };
         state.started = true;
         state.focus = true;
+        // Past the opening: two plies played, so this is a normal
+        // (not first-move-exempt) human turn.
+        state.game.play(Move::new(19, 22)).expect("legal");
+        state.game.play(Move::new(82, 65)).expect("legal");
 
         // Before the clock is armed the board is open — the tick
         // arms it within 16 ms of the turn starting.
@@ -3398,6 +3416,10 @@ mod tests {
         };
         state.started = true;
         state.focus = true;
+        // Past the opening: two plies played, so this is a normal
+        // (not first-move-exempt) human turn.
+        state.game.play(Move::new(19, 22)).expect("legal");
+        state.game.play(Move::new(82, 65)).expect("legal");
 
         state.refresh_focus_clock(Instant::now());
         assert!(state.focus_turn_start.is_some());
@@ -3433,6 +3455,10 @@ mod tests {
         };
         state.started = true;
         state.focus = true;
+        // Past the opening: two plies played, so this is a normal
+        // (not first-move-exempt) human turn.
+        state.game.play(Move::new(19, 22)).expect("legal");
+        state.game.play(Move::new(82, 65)).expect("legal");
 
         state.focus_turn_start = Some(Instant::now() - Duration::from_secs(89));
         state.check_focus_timeout(Instant::now());
@@ -3455,7 +3481,15 @@ mod tests {
         state.start_focus = true;
         state.start(StartSide::Red, 2, &mut shared);
         assert!(state.focus);
-        // Human is Red and Red moves first: the clock starts at once.
+        // Human is Red: the first move is exempt, so no clock and
+        // no countdown on the opening move (Hieu, 2026-11-23).
+        assert!(state.focus_turn_start.is_none());
+        assert!(!state.focus_clock_running());
+        assert!(state.board_enabled());
+        // After the opening move and the AI's reply, the clock runs
+        // on the human's second turn.
+        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(82, 65), &shared, true);
         assert!(state.focus_turn_start.is_some());
         assert!(state.focus_clock_running());
 
@@ -3463,5 +3497,36 @@ mod tests {
         state.start(StartSide::TwoPlayer, 2, &mut shared);
         assert!(!state.focus);
         assert!(state.focus_turn_start.is_none());
+    }
+
+    #[test]
+    fn focus_skips_the_first_move_for_red() {
+        // Hieu, 2026-11-23: the first move is exempt from focus mode
+        // when the human plays Red — no 1-minute wait, no countdown,
+        // and no timeout on the opening move.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start_focus = true;
+        state.start(StartSide::Red, 2, &mut shared);
+        assert!(state.focus);
+        assert!(!state.focus_clock_running());
+        assert!(state.focus_turn_start.is_none());
+        assert!(state.focus_clock_el().is_none());
+        assert!(state.board_enabled());
+        // Even a stale clock start cannot time the opening move out:
+        // the exemption gates the timeout check itself.
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(100));
+        state.check_focus_timeout(Instant::now());
+        assert_eq!(state.game.result(), GameResult::Ongoing);
+
+        // A Black human's first turn is NOT exempt: the AI has
+        // already opened, so the clock runs.
+        let mut state = State::new(&shared);
+        state.start_focus = true;
+        state.start(StartSide::Black, 2, &mut shared);
+        assert!(state.focus);
+        state.play(Move::new(19, 22), &shared, true);
+        assert!(state.focus_clock_running());
+        assert!(state.focus_turn_start.is_some());
     }
 }
