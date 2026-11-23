@@ -13,6 +13,8 @@ pub enum Reason {
     InsufficientMaterial,
     Resign,
     Agreement,
+    /// Ran out of time on a move (focus mode, see [`crate::focus`]).
+    Timeout,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -37,10 +39,12 @@ impl GameResult {
             GameResult::RedWins(Reason::Checkmate) => "Đỏ thắng — chiếu hết",
             GameResult::RedWins(Reason::Stalemate) => "Đỏ thắng — Đen hết nước",
             GameResult::RedWins(Reason::PerpetualCheck) => "Đỏ thắng — Đen chiếu dai",
+            GameResult::RedWins(Reason::Timeout) => "Đỏ thắng — Đen hết giờ",
             GameResult::RedWins(_) => "Đỏ thắng",
             GameResult::BlackWins(Reason::Checkmate) => "Đen thắng — chiếu hết",
             GameResult::BlackWins(Reason::Stalemate) => "Đen thắng — Đỏ hết nước",
             GameResult::BlackWins(Reason::PerpetualCheck) => "Đen thắng — Đỏ chiếu dai",
+            GameResult::BlackWins(Reason::Timeout) => "Đen thắng — Đỏ hết giờ",
             GameResult::BlackWins(_) => "Đen thắng",
             GameResult::Draw(Reason::Repetition) => "Hòa — lặp nước",
             GameResult::Draw(Reason::PerpetualCheck) => "Hòa — lặp nước",
@@ -63,6 +67,9 @@ pub struct Game {
     checks: Vec<bool>,
     resigned: Option<Color>,
     agreed_draw: bool,
+    /// The side that ran out of time (focus mode). Like a
+    /// resignation: set once, cleared by [`Self::undo`].
+    timed_out: Option<Color>,
     /// First index into `hashes` that counts toward a repetition
     /// draw. Positions before this are history for display / review /
     /// undo only. `0` for a normal game; moved to the current
@@ -84,6 +91,7 @@ impl Game {
             checks: Vec::new(),
             resigned: None,
             agreed_draw: false,
+            timed_out: None,
             repetition_from: 0,
         }
     }
@@ -153,11 +161,17 @@ impl Game {
         // game loaded from the history must still allow undo).
         self.resigned = None;
         self.agreed_draw = false;
+        self.timed_out = None;
         Some(m)
     }
 
     pub fn resign(&mut self, c: Color) {
         self.resigned = Some(c);
+    }
+
+    /// Lose on time (focus mode): `c` ran out of time on a move.
+    pub fn timeout(&mut self, c: Color) {
+        self.timed_out = Some(c);
     }
 
     pub fn agree_draw(&mut self) {
@@ -233,6 +247,12 @@ impl Game {
         if self.agreed_draw {
             return GameResult::Draw(Reason::Agreement);
         }
+        if let Some(c) = self.timed_out {
+            return match c {
+                Color::Red => GameResult::BlackWins(Reason::Timeout),
+                Color::Black => GameResult::RedWins(Reason::Timeout),
+            };
+        }
         // No legal moves: checkmate or stalemate (both lose in Xiangqi).
         if self.pos.legal_moves().is_empty() {
             let winner = self.pos.side().opposite();
@@ -279,5 +299,23 @@ impl Game {
             return GameResult::Draw(Reason::InsufficientMaterial);
         }
         GameResult::Ongoing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_loses_and_undo_reopens() {
+        let mut game = Game::new(Position::startpos());
+        game.timeout(Color::Red);
+        assert_eq!(game.result(), GameResult::BlackWins(Reason::Timeout));
+        assert_eq!(game.result().describe_vi(), "Đen thắng — Đỏ hết giờ");
+        // A move back reopens the game, like a resignation.
+        let mv = game.pos.legal_moves()[0];
+        game.play(mv).expect("legal move");
+        game.undo();
+        assert_eq!(game.result(), GameResult::Ongoing);
     }
 }

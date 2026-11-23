@@ -4,6 +4,7 @@ pub mod analysis;
 pub mod board;
 pub mod eval;
 pub mod eval_params;
+pub mod focus;
 pub mod game;
 pub mod movegen;
 pub mod notation;

@@ -15,6 +15,17 @@
 //! takes over for the rest of the game. A book game is never saved:
 //! leaving for the menu discards it.
 //!
+//! # Focus mode (Hieu, 2026-11-23)
+//!
+//! An opt-in mode from the start dialog: on the human's turn the
+//! clock runs per move — no move before 1 minute of thinking, and
+//! the game is lost on time at 1'30" without a move. The rule lives
+//! in [`xq_core::focus`] (pure in the elapsed time) and the timeout
+//! in [`Game::timeout`](xq_core::game::Game::timeout); this screen
+//! owns the turn clock (`focus_turn_start`), gates the board on it,
+//! and shows the countdown in the side panel. Review time still
+//! counts: the clock is never reset by opening the review.
+//!
 //! # INVARIANT — the piece must land before any computation starts
 //!
 //! A move's slide animation (400 ms) must finish BEFORE the AI,
@@ -47,7 +58,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text, Column, Stack};
+use iced::widget::{column, container, mouse_area, row, scrollable, text, toggler, Column, Stack};
 use iced::{
     Alignment, Background, Border, Element, Length, Point, Rectangle, Size, Subscription, Task,
     Theme,
@@ -57,6 +68,7 @@ use xq_chessdb::{ChessDbError, ChessDbEval};
 use xq_core::analysis::Grade;
 use xq_core::board::Position;
 use xq_core::eval;
+use xq_core::focus;
 use xq_core::game::{Game, GameResult};
 use xq_core::search::AnalysisLine;
 use xq_core::types::{Color, Move};
@@ -307,6 +319,14 @@ pub struct State {
     show_start_dialog: bool,
     start_side: StartSide,
     start_difficulty: u8,
+    /// Focus mode for this game (picked in the start dialog).
+    focus: bool,
+    /// Focus-mode choice in the start dialog, remembered from the
+    /// last game in this session.
+    start_focus: bool,
+    /// When the current human turn began, in focus mode (`None`
+    /// when the clock is not running).
+    focus_turn_start: Option<Instant>,
     board: BoardState,
     /// Whether the board is flipped (Black at the bottom). Auto-set
     /// when the human plays Black; the Flip button toggles it
@@ -399,6 +419,8 @@ pub enum Msg {
     StartDialogSide(StartSide),
     /// Start-dialog: pick a difficulty.
     StartDialogDifficulty(u8),
+    /// Start-dialog: toggle focus mode.
+    StartDialogFocus(bool),
     /// Start-dialog: start the game.
     StartGame,
     /// Start-dialog: cancel (back to the menu when no game started).
@@ -493,6 +515,9 @@ impl State {
             show_start_dialog: true,
             start_side,
             start_difficulty,
+            focus: false,
+            start_focus: false,
+            focus_turn_start: None,
             board: BoardState::default(),
             flipped: false,
             selected: None,
@@ -556,6 +581,8 @@ impl State {
                         play_sound(&shared.sound, sound);
                     }
                 }
+                self.refresh_focus_clock(now);
+                self.check_focus_timeout(now);
                 self.trigger_work(shared);
                 self.check_engine_fallback(shared);
                 Task::none()
@@ -591,6 +618,10 @@ impl State {
             }
             Msg::StartDialogDifficulty(d) => {
                 self.start_difficulty = d;
+                Task::none()
+            }
+            Msg::StartDialogFocus(on) => {
+                self.start_focus = on;
                 Task::none()
             }
             Msg::StartGame => {
@@ -740,8 +771,9 @@ impl State {
 
     /// Iced `subscription`: the AI bridge and the ChessDB bridge
     /// always run; the tick only runs while a piece is sliding, the
-    /// check halo is flashing, or the AI still owes a move (see
-    /// [`Self::ai_move_pending`]). (The engine-install bridge
+    /// check halo is flashing, the AI still owes a move (see
+    /// [`Self::ai_move_pending`]), or the focus clock is running on
+    /// the human's turn. (The engine-install bridge
     /// lives on `App`, not here — `App` forwards its outcome as
     /// `Msg::EngineInstalled` / `Msg::EngineUnavailable`.)
     pub fn subscription(&self) -> Subscription<Msg> {
@@ -750,7 +782,11 @@ impl State {
             self.chessdb.subscription().map(chessdb_bridge_msg),
             iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
-        if self.board.is_animating() || self.check_flash_active() || self.ai_move_pending() {
+        if self.board.is_animating()
+            || self.check_flash_active()
+            || self.ai_move_pending()
+            || self.focus_clock_running()
+        {
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
@@ -791,10 +827,105 @@ impl State {
             && self.review.is_none()
             && self.game.result() == GameResult::Ongoing
             && !self.ai_thinking
+            && self.focus_can_move()
             && match self.opponent {
                 VsOpponent::Ai { human, .. } => self.game.pos.side() == human,
                 VsOpponent::TwoPlayer => true,
             }
+    }
+
+    /// Whether the focus clock allows a move right now: outside
+    /// focus mode, or before the human's turn starts, the clock
+    /// imposes nothing — the 1-minute wait only applies once the
+    /// turn clock is running.
+    fn focus_can_move(&self) -> bool {
+        if !self.focus {
+            return true;
+        }
+        match self.focus_turn_start {
+            None => true,
+            Some(since) => focus::can_move(since.elapsed()),
+        }
+    }
+
+    /// Whether the focus clock should be ticking: focus mode on, a
+    /// game running, and the human to move. The tick keeps running
+    /// in review mode too — review time counts as thinking time, so
+    /// hiding in the review cannot dodge the timeout.
+    fn focus_clock_running(&self) -> bool {
+        self.focus
+            && self.started
+            && self.game.result() == GameResult::Ongoing
+            && matches!(self.human_color(), Some(human) if self.game.pos.side() == human)
+    }
+
+    /// Start (or keep) the focus clock for the current human turn,
+    /// clear it when the turn passes. Idempotent: called from the
+    /// tick, from [`Self::play`] (the clock starts the moment the
+    /// AI's move lands, not when its slide finishes), and from the
+    /// game-start / undo / resume paths. Opening the review does
+    /// not touch the clock — review time still counts.
+    fn refresh_focus_clock(&mut self, now: Instant) {
+        if self.focus_clock_running() {
+            if self.focus_turn_start.is_none() {
+                self.focus_turn_start = Some(now);
+            }
+        } else if self.review.is_none() {
+            self.focus_turn_start = None;
+        }
+    }
+
+    /// Lose on time when the human's focus turn has run out (Hieu,
+    /// 2026-11-23: 1'30" without a move loses). A no-op outside
+    /// focus mode, before the clock starts, or once the game is
+    /// already over.
+    fn check_focus_timeout(&mut self, now: Instant) {
+        let Some(human) = self.human_color() else {
+            return;
+        };
+        if !self.focus_clock_running() {
+            return;
+        }
+        let Some(since) = self.focus_turn_start else {
+            return;
+        };
+        if focus::timed_out(now.saturating_duration_since(since)) {
+            self.game.timeout(human);
+            self.focus_turn_start = None;
+            self.result_ack = false;
+        }
+    }
+
+    /// The focus countdown line for the side panel (`None` when the
+    /// clock is not running): gold while waiting out the 1-minute
+    /// minimum, red in the last 10 seconds before the timeout.
+    fn focus_clock_el(&self) -> Option<Element<'_, Msg>> {
+        if !self.focus_clock_running() {
+            return None;
+        }
+        let elapsed = self.focus_turn_start?.elapsed();
+        let (label, urgent) = if elapsed < focus::FOCUS_MIN_THINK {
+            (
+                i18n::t(Key::FocusWait)
+                    .replace("{s}", &focus::fmt_mmss(focus::wait_remaining(elapsed))),
+                false,
+            )
+        } else {
+            let left = focus::move_remaining(elapsed);
+            (
+                i18n::t(Key::FocusLeft).replace("{s}", &focus::fmt_mmss(left)),
+                left <= Duration::from_secs(10),
+            )
+        };
+        Some(
+            text(label)
+                .size(FONT_BODY)
+                .font(theme::inter_font_semibold())
+                .style(move |_: &Theme| text::Style {
+                    color: Some(if urgent { RED } else { GOLD }),
+                })
+                .into(),
+        )
     }
 
     /// Which colour may be moved by the human right now.
@@ -922,6 +1053,9 @@ impl State {
         } else {
             play_sound(&shared.sound, sound);
         }
+        // The side to move just changed: (re)start the focus clock
+        // for the new turn, or clear it when it is the AI's turn.
+        self.refresh_focus_clock(Instant::now());
     }
 
     /// Play a move from the board / hint list, then start the work
@@ -987,6 +1121,12 @@ impl State {
         self.book_game = None;
         self.started = true;
         self.show_start_dialog = false;
+        // Focus mode is picked in the start dialog; two-player
+        // games have no clock. The clock starts at once when the
+        // human moves first.
+        self.focus = self.start_focus && !matches!(side, StartSide::TwoPlayer);
+        self.focus_turn_start = None;
+        self.refresh_focus_clock(Instant::now());
         shared.settings.human_color = Some(match side {
             StartSide::Red => "red".to_string(),
             StartSide::Black => "black".to_string(),
@@ -1039,6 +1179,8 @@ impl State {
         self.from_learn = true;
         self.book_game = None;
         self.flipped = human == Color::Black;
+        self.focus = false;
+        self.focus_turn_start = None;
         self.started = true;
         self.show_start_dialog = false;
     }
@@ -1100,6 +1242,8 @@ impl State {
             lesson_name: lesson.name_vi.clone(),
             walker: BookWalker::new(lesson, self.game_seed),
         });
+        self.focus = false;
+        self.focus_turn_start = None;
         self.started = true;
         self.show_start_dialog = false;
         // The AI may have the first move (a Black lesson): trigger
@@ -1318,6 +1462,10 @@ impl State {
         self.grade_req_id = None;
         self.draw_message = None;
         self.game_seed = new_seed();
+        // A resumed game never carries focus mode (it is not stored
+        // with the saved game): the clock stays off.
+        self.focus = false;
+        self.focus_turn_start = None;
         self.trigger_work(shared);
     }
 
@@ -1368,6 +1516,9 @@ impl State {
         if let Some(book) = &mut self.book_game {
             book.walker.rebuild(&self.game.start, &self.game.moves);
         }
+        // Back on the human's turn, the focus clock restarts from
+        // zero — the undone thinking time does not carry over.
+        self.refresh_focus_clock(Instant::now());
     }
 
     /// Offer a draw: the AI accepts when its own score is at most
@@ -1824,6 +1975,7 @@ impl State {
             Some("two-player") => StartSide::TwoPlayer,
             _ => StartSide::Red,
         };
+        self.start_focus = self.focus;
         self.show_start_dialog = true;
     }
 
@@ -2014,6 +2166,14 @@ impl State {
             text(self.status_text()).size(FONT_BODY)
         };
         let mut col = column![status_el].spacing(SPACE_16).width(Length::Fill);
+
+        // Focus-mode countdown (Hieu, 2026-11-23): the per-move
+        // clock, right under the status line so it reads at a
+        // glance — gold while waiting out the 1-minute minimum, red
+        // in the last 10 seconds.
+        if let Some(clock_el) = self.focus_clock_el() {
+            col = col.push(clock_el);
+        }
 
         // Opponent + player cards (mockup page 2: 44 px piece disc,
         // Semibold 16 name, 13 px Medium subtitle, status chip;
@@ -2396,6 +2556,21 @@ impl State {
                     None => column![].spacing(0),
                 },
                 row![side_col, diff_col].spacing(crate::theme::SPACE_16),
+                // Focus mode (Hieu, 2026-11-23): a per-move clock —
+                // think at least 1 minute, lose on time at 1'30".
+                // Two-player games have no clock, so the row hides
+                // when that side is picked.
+                if self.start_side == StartSide::TwoPlayer {
+                    column![].spacing(0)
+                } else {
+                    column![
+                        toggler(self.start_focus)
+                            .label(i18n::t(Key::FocusMode))
+                            .on_toggle(Msg::StartDialogFocus),
+                        text(i18n::t(Key::FocusModeHint)).size(FONT_CAPTION),
+                    ]
+                    .spacing(crate::theme::SPACE_8)
+                },
                 row![
                     primary_button_with_icon(i18n::t(Key::Start), Icon::Plus, Msg::StartGame)
                         .width(Length::Fill)
@@ -3173,5 +3348,120 @@ mod tests {
         // means the exit prompt is offered.
         state.play(Move::new(19, 22), &shared, true);
         assert!(state.needs_save_prompt());
+    }
+
+    #[test]
+    fn focus_clock_blocks_moves_before_one_minute() {
+        // Hieu, 2026-11-23: in focus mode the board takes no move
+        // before 1 minute of thinking on the human's turn.
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+        state.focus = true;
+
+        // Before the clock is armed the board is open — the tick
+        // arms it within 16 ms of the turn starting.
+        assert!(state.board_enabled());
+        state.refresh_focus_clock(Instant::now());
+        assert!(state.focus_clock_running());
+
+        // 30 s in: locked; 59 s in: still locked.
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(30));
+        assert!(!state.board_enabled());
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(59));
+        assert!(!state.board_enabled());
+        // 60 s in: the move is allowed.
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(60));
+        assert!(state.board_enabled());
+        // Focus off: the clock imposes nothing.
+        state.focus = false;
+        state.focus_turn_start = Some(Instant::now());
+        assert!(state.board_enabled());
+    }
+
+    #[test]
+    fn focus_clock_follows_the_turn() {
+        // The clock starts on the human's turn, clears on the AI's
+        // turn, and restarts from zero after an undo — the undone
+        // thinking time does not carry over.
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+        state.focus = true;
+
+        state.refresh_focus_clock(Instant::now());
+        assert!(state.focus_turn_start.is_some());
+        let started_at = state.focus_turn_start.unwrap();
+        // A second refresh does not restart the clock.
+        state.refresh_focus_clock(Instant::now());
+        assert_eq!(state.focus_turn_start, Some(started_at));
+
+        // After the human's move it is the AI's turn: cleared.
+        let mv = state.game.pos.legal_moves()[0];
+        state.game.play(mv).expect("legal move");
+        state.refresh_focus_clock(Instant::now());
+        assert!(state.focus_turn_start.is_none());
+
+        // Undo back to the human's turn: restarts from zero.
+        state.game.undo();
+        state.refresh_focus_clock(Instant::now());
+        assert!(state.focus_turn_start.is_some());
+    }
+
+    #[test]
+    fn focus_timeout_loses_the_game() {
+        // Hieu, 2026-11-23: 1'30" without a move on the human's
+        // turn loses the game on time.
+        use xq_core::game::Reason;
+
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+        state.focus = true;
+
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(89));
+        state.check_focus_timeout(Instant::now());
+        assert_eq!(state.game.result(), GameResult::Ongoing);
+
+        state.focus_turn_start = Some(Instant::now() - Duration::from_secs(90));
+        state.check_focus_timeout(Instant::now());
+        assert_eq!(state.game.result(), GameResult::BlackWins(Reason::Timeout));
+        assert!(state.game.result().describe_vi().contains("hết giờ"));
+        // The board locks once the game is over.
+        assert!(!state.board_enabled());
+    }
+
+    #[test]
+    fn start_dialog_focus_enables_the_clock() {
+        // The start dialog's focus toggle carries into the game —
+        // except two-player games, which never get a clock.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start_focus = true;
+        state.start(StartSide::Red, 2, &mut shared);
+        assert!(state.focus);
+        // Human is Red and Red moves first: the clock starts at once.
+        assert!(state.focus_turn_start.is_some());
+        assert!(state.focus_clock_running());
+
+        state.start_focus = true;
+        state.start(StartSide::TwoPlayer, 2, &mut shared);
+        assert!(!state.focus);
+        assert!(state.focus_turn_start.is_none());
     }
 }
