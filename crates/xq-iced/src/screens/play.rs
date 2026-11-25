@@ -233,6 +233,7 @@ pub enum AiEvent {
         req_id: u64,
         grade: Grade,
         best: Option<Move>,
+        played_score_cp: i32,
         explanation: String,
     },
 }
@@ -257,11 +258,13 @@ impl From<AiResponse> for AiEvent {
                 req_id,
                 grade,
                 best,
+                played_score_cp,
                 explanation,
             } => AiEvent::Graded {
                 req_id,
                 grade,
                 best,
+                played_score_cp,
                 explanation,
             },
         }
@@ -365,6 +368,21 @@ pub struct State {
     check_since: Option<Instant>,
     last_grade: Option<(Grade, String)>,
     pending_grade: Option<(String, Vec<Move>, Move)>,
+    /// Engine evaluation of a position, as Red-perspective
+    /// centipawns keyed by ply: the search-based score for the
+    /// advantage chip (Hieu, 2026-11-25 — the static eval cannot see
+    /// tactics, so a capture that hangs the rook still showed an
+    /// advantage). May lag one ply behind while the AI is thinking
+    /// or the grade is running; a search score is still far more
+    /// honest than the static eval.
+    eval_score: Option<(usize, i32)>,
+    /// In-flight chip evaluation: its `req_id` and the ply it is
+    /// for. Dropped on arrival when the game has moved on.
+    eval_req_id: Option<u64>,
+    eval_for_ply: Option<usize>,
+    /// Ply the in-flight grade describes (the post-move ply), so its
+    /// played-move score can feed the chip when it arrives.
+    grade_for_ply: Option<usize>,
     /// Sound owed to the landing of the sliding piece (Hieu,
     /// 2026-11-15: the sound plays when the piece is placed down,
     /// not when it is picked up). `None` when nothing is owed — a
@@ -545,6 +563,10 @@ impl State {
             check_since: None,
             last_grade: None,
             pending_grade: None,
+            eval_score: None,
+            eval_req_id: None,
+            eval_for_ply: None,
+            grade_for_ply: None,
             pending_sound: None,
             grade_req_id: None,
             game_seed: new_seed(),
@@ -851,6 +873,54 @@ impl State {
         }
     }
 
+    /// Score for the advantage chip, in Red's perspective: the
+    /// latest engine evaluation when one exists, else the static
+    /// eval. Review always uses the static eval of the reviewed
+    /// position — the stored engine score belongs to the live game,
+    /// not to the reviewed ply. The engine value comes from scores
+    /// the engine already computed (the AI's search, the grade, the
+    /// book, or — two-player only — a dedicated analysis), never
+    /// from a search that would delay the AI's reply.
+    fn chip_score(&self) -> i32 {
+        if self.review.is_some() {
+            return score_red(&self.display_pos());
+        }
+        if let Some((_, red)) = self.eval_score {
+            return red;
+        }
+        score_red(&self.display_pos())
+    }
+
+    /// An engine/book score from the mover's perspective, as the
+    /// Red-perspective chip value: a mover's score already is Red's
+    /// when the mover is Red, and flips when the mover is Black.
+    fn red_from_mover_score(mover_score_cp: i32, mover: Color) -> i32 {
+        if mover == Color::Red {
+            mover_score_cp
+        } else {
+            -mover_score_cp
+        }
+    }
+
+    /// Record an engine evaluation for `ply` (Red's perspective),
+    /// unless a newer ply is already stored.
+    fn store_eval(&mut self, ply: usize, red: i32) {
+        if self.eval_score.is_none_or(|(p, _)| ply >= p) {
+            self.eval_score = Some((ply, red));
+        }
+    }
+
+    /// Drop the chip evaluation and any in-flight eval/grade
+    /// bookkeeping: a new game, a resume, or an undo makes the
+    /// stored ply meaningless. Called wherever `grade_req_id` is
+    /// cleared for the same reason.
+    fn clear_eval(&mut self) {
+        self.eval_score = None;
+        self.eval_req_id = None;
+        self.eval_for_ply = None;
+        self.grade_for_ply = None;
+    }
+
     /// Whether the focus clock should be ticking: focus mode on, a
     /// game running, and the human to move. The tick keeps running
     /// in review mode too — review time counts as thinking time, so
@@ -1027,6 +1097,17 @@ impl State {
         if let Some(book) = &mut self.book_game {
             book.walker.advance(&pos_before, mv);
         }
+        // Book game: the played move's stored book score is a search
+        // score (Pikafish is the book) — feed the chip with it. No
+        // engine call is made for book moves, so this is the only
+        // search-based value available here (Hieu, 2026-11-25).
+        if let Some(book) = &self.book_game {
+            if !book.walker.out_of_book {
+                if let Some(cp) = book.walker.current_score() {
+                    self.store_eval(self.game.moves.len(), Self::red_from_mover_score(cp, mover));
+                }
+            }
+        }
         if self.from_learn && Some(mover) == self.human_color() {
             self.pending_grade = Some((self.game.start.to_fen(), moves_before, mv));
         }
@@ -1130,6 +1211,7 @@ impl State {
         self.last_grade = None;
         self.pending_grade = None;
         self.grade_req_id = None;
+        self.clear_eval();
         self.auto_hint = false;
         self.from_learn = false;
         self.book_game = None;
@@ -1189,6 +1271,7 @@ impl State {
         self.last_grade = None;
         self.pending_grade = None;
         self.grade_req_id = None;
+        self.clear_eval();
         self.auto_hint = true;
         self.from_learn = true;
         self.book_game = None;
@@ -1248,6 +1331,7 @@ impl State {
         self.last_grade = None;
         self.pending_grade = None;
         self.grade_req_id = None;
+        self.clear_eval();
         self.auto_hint = false;
         self.from_learn = false;
         self.saved_this_game = false;
@@ -1474,6 +1558,7 @@ impl State {
         self.last_grade = None;
         self.pending_grade = None;
         self.grade_req_id = None;
+        self.clear_eval();
         self.draw_message = None;
         self.game_seed = new_seed();
         // A resumed game never carries focus mode (it is not stored
@@ -1494,6 +1579,7 @@ impl State {
         }
         self.pending_grade = None;
         self.grade_req_id = None;
+        self.clear_eval();
         let steps = match self.opponent {
             VsOpponent::Ai { .. } => 2,
             VsOpponent::TwoPlayer => 1,
@@ -1613,6 +1699,7 @@ impl State {
         // Grade AFTER the AI's request, so the grade never delays
         // the AI's reply (Hieu, 2026-11-12).
         self.maybe_send_grade();
+        self.maybe_eval_position(shared);
         self.maybe_auto_hint(shared);
         if self.hint_pending {
             self.hint_pending = false;
@@ -1686,10 +1773,51 @@ impl State {
         };
         let req_id = self.alloc_req_id();
         self.grade_req_id = Some(req_id);
+        self.grade_for_ply = Some(moves.len() + 1);
         let _ = self.ai_tx.send(AiRequest::GradeMove {
             start_fen,
             moves,
             mv,
+            req_id,
+        });
+    }
+
+    /// Send a chip evaluation for the current position (Hieu,
+    /// 2026-11-25): the advantage chip must show a search score,
+    /// not the static eval. TWO-PLAYER ONLY. In AI games the chip is
+    /// fed by scores the engine already computed (the AI's search,
+    /// the grade, the book) — a separate analysis here would occupy
+    /// the single engine and delay the AI's reply (it broke
+    /// `book_game_ai_follows_the_line_then_falls_back_to_the_engine`
+    /// in the gate: the AI trigger deferred while the analysis ran).
+    /// In two-player games the engine is idle, so the analysis is
+    /// free. Never blocks: a busy engine defers the trigger to the
+    /// next tick, like the AI trigger.
+    fn maybe_eval_position(&mut self, shared: &Shared) {
+        if !matches!(self.opponent, VsOpponent::TwoPlayer) {
+            return;
+        }
+        if !self.started || self.game.result().is_over() || self.review.is_some() {
+            return;
+        }
+        if self.eval_req_id.is_some() {
+            return;
+        }
+        let ply = self.game.moves.len();
+        if self.eval_score.is_some_and(|(p, _)| p == ply) {
+            return;
+        }
+        let Some(engine) = shared.engine.try_lock() else {
+            return;
+        };
+        let limits = engine.grade_limits();
+        drop(engine);
+        let req_id = self.alloc_req_id();
+        self.eval_req_id = Some(req_id);
+        self.eval_for_ply = Some(ply);
+        let _ = self.ai_tx.send(AiRequest::Analyze {
+            req: EngineRequest::new(self.game.start.to_fen(), self.game.moves.clone(), limits),
+            top_n: 1,
             req_id,
         });
     }
@@ -1846,30 +1974,68 @@ impl State {
                     self.ai_depth = depth;
                 }
             }
-            AiEvent::BestMove { req_id, mv, .. } => {
+            AiEvent::BestMove { req_id, mv, score } => {
                 if !response_is_current(req_id, self.ai_req_id) {
                     return;
                 }
                 self.ai_thinking = false;
                 self.ai_req_id = None;
                 self.ai_depth = 0;
+                // The search score is the root value from the AI's
+                // perspective, so the post-move position value from
+                // the human's perspective is its negation: feed the
+                // chip with it — no extra engine work (Hieu,
+                // 2026-11-25).
+                let mover = self.game.pos.side();
                 self.play(mv, shared, true);
+                self.store_eval(
+                    self.game.moves.len(),
+                    Self::red_from_mover_score(score, mover),
+                );
                 self.trigger_work(shared);
             }
             AiEvent::Analysis { req_id, lines } => {
                 let is_diverse = response_is_current(req_id, self.diverse_req_id);
                 let is_hint = response_is_current(req_id, self.hint_req_id);
-                if !is_diverse && !is_hint {
+                let is_eval = response_is_current(req_id, self.eval_req_id);
+                if !is_diverse && !is_hint && !is_eval {
                     return;
                 }
-                if is_diverse {
+                if is_eval {
+                    self.eval_req_id = None;
+                    if let (Some(for_ply), Some(first)) = (self.eval_for_ply.take(), lines.first())
+                    {
+                        // The line score is the side-to-move's view of
+                        // the analysed position: convert to Red's
+                        // perspective for the chip.
+                        let analysed_side = position_at(&self.game, for_ply).side();
+                        self.store_eval(
+                            for_ply,
+                            Self::red_from_mover_score(first.score, analysed_side),
+                        );
+                    }
+                } else if is_diverse {
                     self.diverse_req_id = None;
                     self.ai_req_id = None;
                     self.ai_thinking = false;
                     self.ai_depth = 0;
                     let picked = self.pick_from_lines(&lines, shared);
                     if let Some(mv) = picked.or_else(|| lines.first().map(|l| l.mv)) {
+                        // The picked move's own line score is its
+                        // post-move value from the AI's perspective
+                        // (the best line's score only describes the
+                        // position when the best move is played). A
+                        // blunder pick has no line: then no value is
+                        // stored — a stale chip beats a wrong one.
+                        let mover = self.game.pos.side();
+                        let line_score = lines.iter().find(|l| l.mv == mv).map(|l| l.score);
                         self.play(mv, shared, true);
+                        if let Some(score) = line_score {
+                            self.store_eval(
+                                self.game.moves.len(),
+                                Self::red_from_mover_score(score, mover),
+                            );
+                        }
                         self.trigger_work(shared);
                     }
                     return;
@@ -1886,6 +2052,7 @@ impl State {
                 req_id,
                 grade,
                 explanation,
+                played_score_cp,
                 ..
             } => {
                 if !response_is_current(req_id, self.grade_req_id) {
@@ -1893,6 +2060,15 @@ impl State {
                 }
                 self.grade_req_id = None;
                 self.last_grade = Some((grade, explanation));
+                // The played move's search score is the post-move
+                // position value from the mover's perspective: feed
+                // the chip with it, so the score turns honest as soon
+                // as the grade arrives — before the AI even replies
+                // (Hieu, 2026-11-25).
+                if let Some(for_ply) = self.grade_for_ply.take() {
+                    let mover = position_at(&self.game, for_ply.saturating_sub(1)).side();
+                    self.store_eval(for_ply, Self::red_from_mover_score(played_score_cp, mover));
+                }
             }
         }
         self.check_engine_fallback(shared);
@@ -2253,8 +2429,9 @@ impl State {
         ));
 
         // Advantage chip (from the human's perspective in AI games,
-        // Red's in two-player mode).
-        let human_score = perspective_score(score_red(display_pos), self.human_color());
+        // Red's in two-player mode): the engine's search score when
+        // one exists (Hieu, 2026-11-25), not the static eval.
+        let human_score = perspective_score(self.chip_score(), self.human_color());
         col = col.push(
             row![
                 text(i18n::t(Key::AdvantageScore)).size(FONT_BODY),
@@ -3528,5 +3705,291 @@ mod tests {
         state.play(Move::new(19, 22), &shared, true);
         assert!(state.focus_clock_running());
         assert!(state.focus_turn_start.is_some());
+    }
+
+    /// The blunder that motivated the engine-score chip (Hieu,
+    /// 2026-11-25): Red rook takes the horse, which the static eval
+    /// calls a clear win — but the Black rook recaptures at once.
+    /// FEN: Red K e1, R e5, C a3; Black k e10, r e9, n e7; Red to move.
+    /// The capture is Rook e5xe7, sq(4,4) -> sq(4,6).
+    fn blunder_fen() -> Position {
+        Position::from_fen("4k4/4r4/9/4n4/9/4R4/9/C8/9/4K4 w - - 0 1").expect("test fen")
+    }
+
+    #[test]
+    fn eval_chip_uses_engine_score_after_a_blunder_capture() {
+        // Hieu, 2026-11-25: after the capture the chip showed an
+        // advantage from the static eval, although the move hangs the
+        // rook. The grade's played-move score must feed the chip, so
+        // the score turns honest as soon as the grade arrives.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(blunder_fen());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+
+        let mv = Move::new(40, 58);
+        assert!(state.game.pos.legal_moves().contains(&mv));
+        state.game.play(mv).expect("legal");
+        // No engine score yet: the chip falls back to the static
+        // eval, which calls the capture a win for Red.
+        assert!(
+            state.chip_score() > 150,
+            "static eval should call the capture a win, got {}",
+            state.chip_score()
+        );
+
+        // The grade arrives: the engine says the played move is
+        // losing for Red (the rook is recaptured).
+        state.grade_req_id = Some(7);
+        state.grade_for_ply = Some(1);
+        state.handle_ai(
+            AiEvent::Graded {
+                req_id: 7,
+                grade: Grade::Blunder,
+                best: None,
+                played_score_cp: -320,
+                explanation: String::new(),
+            },
+            &mut shared,
+        );
+        assert_eq!(state.last_grade, Some((Grade::Blunder, String::new())));
+        assert_eq!(state.chip_score(), -320);
+    }
+
+    #[test]
+    fn eval_analysis_response_updates_the_chip() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+
+        // Red to move: the line score is already Red's perspective.
+        let mv = state.game.pos.legal_moves()[0];
+        state.eval_req_id = Some(9);
+        state.eval_for_ply = Some(0);
+        state.handle_ai(
+            AiEvent::Analysis {
+                req_id: 9,
+                lines: vec![AnalysisLine {
+                    mv,
+                    score: 120,
+                    depth: 6,
+                    pv: vec![],
+                    tags: vec![],
+                }],
+            },
+            &mut shared,
+        );
+        assert_eq!(state.eval_req_id, None);
+        assert_eq!(state.eval_score, Some((0, 120)));
+        assert_eq!(state.chip_score(), 120);
+
+        // Black to move: the line score is Black's perspective, so
+        // the chip flips it to Red's.
+        state.game.play(mv).expect("legal");
+        state.eval_req_id = Some(10);
+        state.eval_for_ply = Some(1);
+        let mv2 = state.game.pos.legal_moves()[0];
+        state.handle_ai(
+            AiEvent::Analysis {
+                req_id: 10,
+                lines: vec![AnalysisLine {
+                    mv: mv2,
+                    score: 80,
+                    depth: 6,
+                    pv: vec![],
+                    tags: vec![],
+                }],
+            },
+            &mut shared,
+        );
+        assert_eq!(state.eval_score, Some((1, -80)));
+        assert_eq!(state.chip_score(), -80);
+    }
+
+    #[test]
+    fn stale_eval_responses_are_ignored() {
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+
+        // A response for another request is dropped entirely.
+        let mv = state.game.pos.legal_moves()[0];
+        state.eval_req_id = Some(9);
+        state.eval_for_ply = Some(0);
+        state.handle_ai(
+            AiEvent::Analysis {
+                req_id: 99,
+                lines: vec![AnalysisLine {
+                    mv,
+                    score: 500,
+                    depth: 6,
+                    pv: vec![],
+                    tags: vec![],
+                }],
+            },
+            &mut shared,
+        );
+        assert_eq!(state.eval_score, None);
+        assert_eq!(state.eval_req_id, Some(9));
+
+        // A response for an older ply never overwrites a newer score.
+        state.eval_score = Some((2, -50));
+        state.handle_ai(
+            AiEvent::Analysis {
+                req_id: 9,
+                lines: vec![AnalysisLine {
+                    mv,
+                    score: 500,
+                    depth: 6,
+                    pv: vec![],
+                    tags: vec![],
+                }],
+            },
+            &mut shared,
+        );
+        assert_eq!(state.eval_score, Some((2, -50)));
+        assert_eq!(state.eval_req_id, None);
+
+        // Same for a late grade for an older ply.
+        state.grade_req_id = Some(11);
+        state.grade_for_ply = Some(1);
+        state.handle_ai(
+            AiEvent::Graded {
+                req_id: 11,
+                grade: Grade::Good,
+                best: None,
+                played_score_cp: 300,
+                explanation: String::new(),
+            },
+            &mut shared,
+        );
+        assert_eq!(state.eval_score, Some((2, -50)));
+    }
+
+    #[test]
+    fn eval_analysis_runs_only_in_two_player_games() {
+        // Hieu, 2026-11-25 (gate): in AI games a separate eval
+        // analysis occupies the single engine and delays the AI's
+        // reply — it broke `book_game_ai_follows_the_line...`, where
+        // the AI trigger deferred while the analysis ran. The chip
+        // in AI games is fed by scores the engine already computed
+        // instead. In two-player games the engine is idle, so the
+        // analysis is free.
+        let shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Black,
+            difficulty: 2,
+        };
+        state.started = true;
+        state.maybe_eval_position(&shared);
+        assert_eq!(state.eval_req_id, None);
+        let mv = state.game.pos.legal_moves()[0];
+        state.game.play(mv).expect("legal");
+        state.maybe_eval_position(&shared);
+        assert_eq!(state.eval_req_id, None, "no eval analysis in AI games");
+        // Two-player: the engine is idle, so the analysis runs.
+        state.opponent = VsOpponent::TwoPlayer;
+        state.maybe_eval_position(&shared);
+        assert!(state.eval_req_id.is_some());
+        assert_eq!(state.eval_for_ply, Some(1));
+    }
+
+    #[test]
+    fn ai_search_score_feeds_the_chip() {
+        // Hieu, 2026-11-25: the chip must show a search score with
+        // no extra engine work — the AI's own search score is the
+        // post-move position value from the AI's perspective.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 2,
+        };
+        state.started = true;
+        state.game.play(Move::new(19, 22)).expect("legal");
+        state.ai_thinking = true;
+        state.ai_req_id = Some(5);
+        // The AI (Black) replies; its search score is from Black's
+        // perspective, so the Red-perspective chip flips it.
+        state.handle_ai(
+            AiEvent::BestMove {
+                req_id: 5,
+                mv: Move::new(82, 65),
+                score: 120,
+            },
+            &mut shared,
+        );
+        assert_eq!(state.game.moves.len(), 2);
+        assert_eq!(state.eval_score, Some((2, -120)));
+        assert_eq!(state.chip_score(), -120);
+    }
+
+    #[test]
+    fn diverse_pick_score_feeds_the_chip() {
+        // Same rule for the diversity/weaken path: the picked move's
+        // own line score describes the played position — not the best
+        // line's score, which belongs to a move that was not played.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.game = Game::new(startpos());
+        state.opponent = VsOpponent::Ai {
+            human: Color::Red,
+            difficulty: 4,
+        };
+        state.started = true;
+        state.game.play(Move::new(19, 22)).expect("legal");
+        state.ai_thinking = true;
+        state.ai_req_id = Some(6);
+        state.diverse_req_id = Some(6);
+        state.handle_ai(
+            AiEvent::Analysis {
+                req_id: 6,
+                lines: vec![AnalysisLine {
+                    mv: Move::new(82, 65),
+                    score: 90,
+                    depth: 6,
+                    pv: vec![],
+                    tags: vec![],
+                }],
+            },
+            &mut shared,
+        );
+        assert_eq!(state.game.moves.len(), 2);
+        assert_eq!(state.eval_score, Some((2, -90)));
+        assert_eq!(state.chip_score(), -90);
+    }
+
+    #[test]
+    fn book_move_feeds_the_chip_from_the_book_score() {
+        // Hieu, 2026-11-25: no engine call is made for book moves,
+        // so the stored book score is the only search-based value
+        // for the chip in a book game (Pikafish is the book).
+        let mut shared = Shared::new();
+        let lesson = first_red_lesson(&shared);
+        let mut state = State::new(&shared);
+        state.start_book_game(&lesson.id, true, &mut shared);
+        let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
+        let expected = lesson.tree[0].score_cp.unwrap_or(0);
+        state.play(first, &shared, true);
+        assert_eq!(state.game.moves.len(), 1);
+        assert_eq!(state.eval_score, Some((1, expected)));
+        assert_eq!(state.chip_score(), expected);
     }
 }

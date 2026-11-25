@@ -77,12 +77,16 @@ pub enum AiResponse {
         lines: Vec<AnalysisLine>,
     },
     /// The grade for a `GradeMove` request: the grade itself, the
-    /// engine's best move at that position (for "nước đúng"), and the
+    /// engine's best move at that position (for "nước đúng"), the
+    /// played move's search score from the mover's perspective
+    /// (`played_score_cp`, centipawns — the UI turns it into the
+    /// post-move position value for the advantage chip), and the
     /// explanation.
     Graded {
         req_id: u64,
         grade: Grade,
         best: Option<xq_core::types::Move>,
+        played_score_cp: i32,
         explanation: String,
     },
 }
@@ -274,6 +278,7 @@ fn run_grade_on(
         req_id,
         grade,
         best: Some(best.mv),
+        played_score_cp: mv_cp,
         explanation,
     });
     Ok(())
@@ -639,6 +644,64 @@ mod tests {
                 );
                 let best = best.expect("a best move");
                 assert!(pos.legal_moves().contains(&best));
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not answer within 10 s"
+            );
+        }
+    }
+
+    #[test]
+    fn grade_sees_the_recapture_after_a_blunder_capture() {
+        // Hieu, 2026-11-25: the static eval calls Rook-takes-Horse a
+        // clear win, but the Black rook recaptures at once — the
+        // engine grade must see that, or the advantage chip (fed by
+        // the grade) would keep showing an advantage after a blunder.
+        use xq_core::eval;
+        use xq_core::types::Move;
+        let fen = "4k4/4r4/9/4n4/9/4R4/9/C8/9/4K4 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test fen");
+        let mv = Move::new(40, 58);
+        assert!(pos.legal_moves().contains(&mv));
+        // Static eval after the capture: clearly good for Red (up a
+        // horse). `eval` is the side-to-move's view, and Black is to
+        // move after the capture, so flip it.
+        let after = Position::from_fen("4k4/4r4/9/4R4/9/9/9/C8/9/4K4 b - - 0 1").expect("test fen");
+        let static_red = -eval::eval(&after);
+        assert!(
+            static_red > 150,
+            "static eval should call the capture a win, got {static_red}"
+        );
+        // The engine grade of the same move must see the recapture.
+        let mut w = test_worker();
+        let req_id = w.alloc_req_id();
+        w.tx.send(AiRequest::GradeMove {
+            start_fen: pos.to_fen(),
+            moves: Vec::new(),
+            mv,
+            req_id,
+        })
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(AiResponse::Graded {
+                req_id: got,
+                grade,
+                played_score_cp,
+                ..
+            }) = w.rx.recv_timeout(std::time::Duration::from_millis(50))
+            {
+                assert_eq!(got, req_id);
+                assert!(
+                    matches!(grade, Grade::Inaccurate | Grade::Blunder),
+                    "capture should grade badly, got {grade:?}"
+                );
+                assert!(
+                    played_score_cp < -100,
+                    "played move should be losing for Red, got {played_score_cp}"
+                );
                 return;
             }
             assert!(

@@ -70,6 +70,15 @@ impl BookWalker {
             .unwrap_or(&self.lesson.tree)
     }
 
+    /// Score of the current node (`BookNode::score_cp`): the value
+    /// of the position after the move that reached this node, from
+    /// that move's mover's perspective. `None` at the root (no move
+    /// played yet) or when the node stores no score.
+    #[must_use]
+    pub fn current_score(&self) -> Option<i32> {
+        node_at(&self.lesson.tree, &self.node_path).and_then(|n| n.score_cp)
+    }
+
     /// Parse one book move at a position (Chinese first, WXF
     /// fallback — §5.4 sources use both; same as the Tutor's).
     fn parse_book_mv(pos: &Position, s: &str) -> Option<Move> {
