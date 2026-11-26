@@ -169,10 +169,15 @@ function onEngineLine(line) {
   }
   if (line === 'uciok' && phase === 'uci') {
     // Deferred: never ccall from inside the output callback (see `defer`).
-    // Hash 64 MB: same as the desktop app's default. Do NOT touch
-    // Threads: this build is single-threaded and has no thread pool.
+    // Hash 16 MB (not the desktop app's 64 MB): the engine runs
+    // inside a browser tab next to the 57 MB app WASM, and on iOS
+    // Safari the tab is killed when its memory grows too far
+    // ("A problem repeatedly occurred", Hieu 2026-11-26) — 16 MB
+    // is plenty for the movetime-limited searches this app sends.
+    // Do NOT touch Threads: this build is single-threaded and has
+    // no thread pool.
     defer(() => {
-      sendToEngine('setoption name Hash value 64');
+      sendToEngine('setoption name Hash value 16');
       sendToEngine('isready');
     });
     phase = 'wait-ready';
