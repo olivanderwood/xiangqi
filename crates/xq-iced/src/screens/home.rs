@@ -11,8 +11,10 @@
 //! buttons, side by side in the footer row next to the version line
 //! (the mockup shows only "Cài đặt" — About is kept for parity).
 
-use iced::widget::{column, container, row, text, Space};
-use iced::{Background, Border, Color, Element, Length, Subscription, Task, Theme};
+use iced::widget::{column, container, row, scrollable, text, Space};
+use iced::{
+    Alignment, Background, Border, Color, Element, Length, Size, Subscription, Task, Theme,
+};
 
 use crate::app::{Screen, Shared};
 use crate::i18n::{self, Key};
@@ -22,14 +24,28 @@ use crate::theme::{
     RED_PIECE, SPACE_16, SPACE_24, SPACE_32, SPACE_8, TEXT_DIM,
 };
 use crate::widgets::{
-    card_style, primary_button_with_icon, secondary_button, secondary_button_with_icon,
+    card_style, is_narrow, primary_button_with_icon, secondary_button, secondary_button_with_icon,
 };
 
 /// Home screen state: the screen is stateless (everything it shows
-/// comes from `Shared`); the struct exists so the module follows the
-/// same contract as the other screens.
-#[derive(Default)]
-pub struct State;
+/// comes from `Shared`) except the window size, tracked so the
+/// three cards can stack vertically on a narrow (mobile) window
+/// instead of squeezing into one row.
+pub struct State {
+    /// Current window size (forwarded from `App` via
+    /// `Msg::WindowResized`, seeded 1280 × 800 like the other
+    /// screens — see `App::window`). Visible inside the crate for
+    /// the App forwarding test.
+    pub(crate) window: Size,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            window: Size::new(1280.0, 800.0),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Msg {
@@ -39,10 +55,18 @@ pub enum Msg {
     ShowSettings,
     /// Open the About dialog (intercepted by `App::update`).
     ShowAbout,
+    /// The window was resized: the cards follow it.
+    WindowResized(Size),
 }
 
 /// One 80 px piece disc from the mockup title block (piece
 /// background, double ring in the piece's colour, 44 px CJK glyph).
+/// NOTE: the centring here must be `align_x`/`align_y`, NOT
+/// `center_x(Length::Fill)`/`center_y(Length::Fill)` — those set the
+/// size to Fill, overwriting the Fixed 80/72 px sizes (Hieu,
+/// 2026-11-26: at 390 px the discs vanished entirely — Fill height
+/// inside the scrolling home collapses to 0 — and at 1280 px they
+/// blew up into giant panels).
 fn piece_disc(glyph: &str, color: Color) -> Element<'_, Msg> {
     let inner = container(
         text(glyph)
@@ -52,8 +76,8 @@ fn piece_disc(glyph: &str, color: Color) -> Element<'_, Msg> {
     )
     .width(Length::Fixed(72.0))
     .height(Length::Fixed(72.0))
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
     .style(move |_: &Theme| container::Style {
         background: Some(Background::Color(PIECE_BG)),
         border: Border {
@@ -66,8 +90,8 @@ fn piece_disc(glyph: &str, color: Color) -> Element<'_, Msg> {
     container(inner)
         .width(Length::Fixed(80.0))
         .height(Length::Fixed(80.0))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
         .style(move |_: &Theme| container::Style {
             background: Some(Background::Color(PIECE_BG)),
             border: Border {
@@ -119,10 +143,13 @@ fn home_card<'a>(
 }
 
 impl State {
-    /// Create the (stateless) home screen.
+    /// Create the home screen (window seeded 1280 × 800, like the
+    /// other screens — the real size arrives via `WindowResized`).
     #[must_use]
     pub fn new(_shared: &Shared) -> Self {
-        Self
+        Self {
+            window: Size::new(1280.0, 800.0),
+        }
     }
 
     /// `Navigate` / `ShowSettings` / `ShowAbout` are intercepted by
@@ -134,7 +161,18 @@ impl State {
     pub fn update(&mut self, msg: Msg, _shared: &mut Shared) -> Task<Msg> {
         match msg {
             Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout => Task::none(),
+            Msg::WindowResized(size) => {
+                self.window = size;
+                Task::none()
+            }
         }
+    }
+
+    /// The home screen has no background work: the window size
+    /// arrives from `App` (`Message::WindowResized`), not from a
+    /// subscription of its own — see `App::window`.
+    pub fn subscription(&self) -> Subscription<Msg> {
+        Subscription::none()
     }
 
     /// The home screen: title block, three cards in a row, footer.
@@ -154,39 +192,48 @@ impl State {
         ]
         .align_x(iced::Alignment::Center);
 
-        let cards = row![
-            home_card(
-                Icon::Maximize,
-                i18n::t(Key::PlayVsAi),
-                i18n::t(Key::HomePlayDesc),
-                primary_button_with_icon(
-                    i18n::t(Key::NewGame),
-                    Icon::Plus,
-                    Msg::Navigate(Screen::Play)
-                ),
+        let card_play = home_card(
+            Icon::Maximize,
+            i18n::t(Key::PlayVsAi),
+            i18n::t(Key::HomePlayDesc),
+            primary_button_with_icon(
+                i18n::t(Key::NewGame),
+                Icon::Plus,
+                Msg::Navigate(Screen::Play),
             ),
-            home_card(
+        );
+        let card_learn = home_card(
+            Icon::BookOpen,
+            i18n::t(Key::LearnOpenings),
+            i18n::t(Key::HomeLearnDesc),
+            secondary_button_with_icon(
+                i18n::t(Key::HomeLearnButton),
                 Icon::BookOpen,
-                i18n::t(Key::LearnOpenings),
-                i18n::t(Key::HomeLearnDesc),
-                secondary_button_with_icon(
-                    i18n::t(Key::HomeLearnButton),
-                    Icon::BookOpen,
-                    Msg::Navigate(Screen::LearnSelect)
-                ),
+                Msg::Navigate(Screen::LearnSelect),
             ),
-            home_card(
+        );
+        let card_practice = home_card(
+            Icon::Target,
+            i18n::t(Key::PracticeTitle),
+            i18n::t(Key::HomePracticeDesc),
+            secondary_button_with_icon(
+                i18n::t(Key::HomePracticeButton),
                 Icon::Target,
-                i18n::t(Key::PracticeTitle),
-                i18n::t(Key::HomePracticeDesc),
-                secondary_button_with_icon(
-                    i18n::t(Key::HomePracticeButton),
-                    Icon::Target,
-                    Msg::Navigate(Screen::Practice)
-                ),
+                Msg::Navigate(Screen::Practice),
             ),
-        ]
-        .spacing(SPACE_24);
+        );
+        // Narrow (mobile): the three cards stack vertically —
+        // side by side each would get ~110 px at a 390 px phone
+        // width (Hieu, 2026-11-26: responsive vỡ trên mobile).
+        let cards: Element<'_, Msg> = if is_narrow(self.window) {
+            column![card_play, card_learn, card_practice]
+                .spacing(SPACE_24)
+                .into()
+        } else {
+            row![card_play, card_learn, card_practice]
+                .spacing(SPACE_24)
+                .into()
+        };
 
         let footer = row![
             secondary_button_with_icon(
@@ -210,6 +257,14 @@ impl State {
             .align_x(iced::Alignment::Center)
             .width(Length::Fill);
 
+        if is_narrow(self.window) {
+            // Stacked cards + title + footer are taller than a
+            // phone viewport, so the whole home scrolls.
+            return scrollable(container(content).width(Length::Fill).padding(SPACE_16))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        }
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -217,10 +272,5 @@ impl State {
             .center_y(Length::Fill)
             .padding(SPACE_32)
             .into()
-    }
-
-    /// The home screen has no background work.
-    pub fn subscription(&self) -> Subscription<Msg> {
-        Subscription::none()
     }
 }

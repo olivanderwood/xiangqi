@@ -96,8 +96,8 @@ impl SavedGame {
     /// replaces an entry with the same id rather than duplicating.
     #[must_use]
     pub fn new_id(mode: SavedMode) -> String {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let ms = crate::time::SystemTime::now()
+            .duration_since(crate::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         format!("{}-{ms}", mode.as_str())
@@ -106,8 +106,8 @@ impl SavedGame {
     /// Current unix time in seconds.
     #[must_use]
     pub fn now_unix() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        crate::time::SystemTime::now()
+            .duration_since(crate::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
     }

@@ -15,3 +15,13 @@ engine/*
 # RECOGNIZE_VERSION.toml is the pin and IS committed.
 recognize/*
 !recognize/RECOGNIZE_VERSION.toml
+# PWA spike (2026-11-26): Trunk output (rebuilt by `trunk build`)
+# and the downloaded Pikafish-WASM engine files (51,6 MB — see
+# crates/xq-iced/assets/engine-wasm/INTEGRATION.md §1 for the
+# download URLs). The worker glue (`pikafish-worker.js`) and
+# INTEGRATION.md ARE committed; only the three downloaded files
+# below are ignored.
+crates/xq-iced/dist/
+crates/xq-iced/assets/engine-wasm/pikafish.js
+crates/xq-iced/assets/engine-wasm/pikafish.wasm
+crates/xq-iced/assets/engine-wasm/pikafish.data

@@ -32,7 +32,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::time::Instant;
 
 /// Maximum search ply (also the size of the killer table).
 const MAX_PLY: usize = 128;

@@ -19,6 +19,8 @@ mod chessdb_panel;
 mod chessdb_worker;
 mod engine_log;
 mod engine_manager;
+#[cfg(target_arch = "wasm32")]
+mod engine_wasm;
 mod helpers;
 mod i18n;
 mod icons;
@@ -27,11 +29,17 @@ mod screens;
 mod settings;
 mod sound;
 mod theme;
+mod time;
 mod widgets;
 
 pub use app::{App, Message, Screen, Shared};
 
 fn main() -> iced::Result {
+    // PWA only: log Rust panics to the browser console (see
+    // Cargo.toml — the release profile aborts on panic, which would
+    // otherwise surface only as `RuntimeError: unreachable`).
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
     iced::application(App::new, App::update, App::view)
         .subscription(App::subscription)
         .theme(|_: &App| theme::custom_theme())
@@ -46,7 +54,16 @@ fn main() -> iced::Result {
         .default_font(theme::inter_font())
         .window(iced::window::Settings {
             size: iced::Size::new(1280.0, 800.0),
+            // Desktop only: the 1100 px minimum is a real window
+            // constraint there. On the web (PWA) winit applies it
+            // to the canvas, so a 390 px phone would render a
+            // 1100 px-wide app and overflow horizontally (Hieu,
+            // 2026-11-26: responsive vỡ trên mobile) — no minimum
+            // there; the screens stack below 760 px instead.
+            #[cfg(not(target_arch = "wasm32"))]
             min_size: Some(iced::Size::new(1100.0, 720.0)),
+            #[cfg(target_arch = "wasm32")]
+            min_size: None,
             ..Default::default()
         })
         .run()

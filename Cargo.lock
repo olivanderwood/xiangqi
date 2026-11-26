@@ -992,6 +992,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2015,8 +2025,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -6320,6 +6332,7 @@ dependencies = [
  "thiserror 2.0.21",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal 27.0.4",
  "wgpu-types 27.0.1",
@@ -6339,6 +6352,15 @@ name = "wgpu-core-deps-emscripten"
 version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b06ac3444a95b0813ecfd81ddb2774b66220b264b3e2031152a4a29fda4da6b5"
+dependencies = [
+ "wgpu-hal 27.0.4",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "27.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b1027dcf3b027a877e44819df7ceb0e2e98578830f8cd34cd6c3c7c2a7a50b7"
 dependencies = [
  "wgpu-hal 27.0.4",
 ]
@@ -7105,6 +7127,7 @@ dependencies = [
 name = "xq-book"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "rand 0.8.8",
  "serde",
  "serde_json",
@@ -7120,8 +7143,10 @@ version = "0.1.0"
 name = "xq-core"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "proptest",
  "rand 0.8.8",
+ "wasmtimer",
 ]
 
 [[package]]
@@ -7136,6 +7161,7 @@ name = "xq-iced"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "console_error_panic_hook",
  "dirs",
  "iced",
  "image",
@@ -7144,6 +7170,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "wasm-bindgen",
+ "wasmtimer",
+ "web-sys",
  "xq-book",
  "xq-chessdb",
  "xq-core",

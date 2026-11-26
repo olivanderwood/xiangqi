@@ -108,8 +108,8 @@ impl EngineLog {
 }
 
 fn timestamp() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = crate::time::SystemTime::now()
+        .duration_since(crate::time::UNIX_EPOCH)
         .unwrap_or_default();
     // Seconds since epoch + millis: simple, no chrono dependency.
     format!("{}.{:03}", now.as_secs(), now.subsec_millis())

@@ -45,6 +45,9 @@ use xq_chessdb::ChessDbEval;
 use xq_core::board::Position;
 use xq_core::notation;
 
+/// Desktop only: the bridge subscription. On wasm the panel has no
+/// subscription (see `subscription`).
+#[cfg(not(target_arch = "wasm32"))]
 use crate::bridge;
 use crate::chessdb_worker::{
     response_is_current, ChessDbRequest, ChessDbResponse, ChessDbView, ChessDbWorker,
@@ -65,6 +68,10 @@ pub enum ChessDbPanelMsg {
 
 /// The ChessDB section: one worker + per-FEN cache (in the worker) +
 /// the `req_id` of the evaluation currently waited for.
+/// (On wasm `bridge_id`, `tx`, `rx` and `next_req_id` are never read
+/// — no worker thread, no subscription — but the struct is the same
+/// on both targets.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct ChessDbPanel {
     /// Whether the win/draw/loss rates are shown. Learn shows only
     /// the score chip + best move, no "%" (Hieu, 2026-11-12); Play
@@ -121,7 +128,26 @@ impl ChessDbPanel {
     /// costs one string compare and a position change costs one HTTP
     /// call (cached per FEN in the worker). Only call this when the
     /// board is NOT animating (see the module docs).
+    ///
+    /// wasm32: ChessDB has no sockets there (and no worker thread),
+    /// so the section reports unavailable at once instead of
+    /// waiting forever on a request nobody answers.
     pub fn request(&mut self, fen: &str) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.last_fen = Some(fen.to_string());
+            self.view = ChessDbView::Unavailable("ChessDB không khả dụng trên bản web".to_string());
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.request_desktop(fen);
+        }
+    }
+
+    /// The desktop `request` (see above).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_desktop(&mut self, fen: &str) {
         if self.last_fen.as_deref() == Some(fen) {
             return;
         }
@@ -165,7 +191,16 @@ impl ChessDbPanel {
     /// this panel's own `bridge_id` — two panels must never share
     /// an id, or iced keeps only the first forwarder thread (see
     /// [`ChessDbPanel::new`]).
+    ///
+    /// wasm32: no subscription — the bridge's forwarder thread
+    /// panics on wasm, and the worker never answers there anyway
+    /// (see `request`).
     pub fn subscription(&self) -> Subscription<ChessDbPanelMsg> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Subscription::none();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         bridge::from_mpsc(self.bridge_id, Arc::clone(&self.rx)).map(ChessDbPanelMsg::Response)
     }
 

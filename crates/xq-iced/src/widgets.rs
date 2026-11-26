@@ -62,6 +62,25 @@ pub const PANEL_WIDTH: f32 = 380.0;
 /// surface background, 1 px divider underneath).
 pub const HEADER_HEIGHT: f32 = 64.0;
 
+/// Width below which the app switches to the stacked (mobile)
+/// layout: the board takes the full content width and the side
+/// panel goes underneath it, instead of sitting beside it. Below
+/// this width the horizontal budget in [`board_size_for_window`]
+/// (24 px padding + 24 px gap + 380 px panel minimum) leaves
+/// almost nothing for the board — at a 390 px phone width the
+/// board collapsed to ~1 px (Hieu, 2026-11-26: responsive vỡ
+/// trên mobile). 760 px keeps the stacked layout for phones in
+/// either orientation while tablets and small laptops keep the
+/// side-by-side layout.
+pub const NARROW_WIDTH: f32 = 760.0;
+
+/// Whether `window` uses the stacked (mobile) layout — see
+/// [`NARROW_WIDTH`].
+#[must_use]
+pub fn is_narrow(window: Size) -> bool {
+    window.width < NARROW_WIDTH
+}
+
 /// The board's display size for a window, from the mockup's
 /// responsive rule (`scale = min(w / 592, h / 656)`, DESIGN-iced.md
 /// §1): the board takes whatever the window leaves after the
@@ -79,9 +98,18 @@ pub const HEADER_HEIGHT: f32 = 64.0;
 /// size their board container with this AND convert drop points
 /// with the same size, so clicks keep mapping to the right square
 /// at any window size (see the play / learn / practice screens).
+///
+/// On a narrow window ([`is_narrow`]) the panel goes below the
+/// board instead of beside it, so nothing is reserved for it
+/// horizontally: the board takes the full content width (minus the
+/// 24 px padding on each side).
 #[must_use]
 pub fn board_size_for_window(window: Size) -> Size {
-    let avail_w = (window.width - SPACE_24 * 2.0 - SPACE_24 - PANEL_WIDTH).max(1.0);
+    let avail_w = if is_narrow(window) {
+        (window.width - SPACE_24 * 2.0).max(1.0)
+    } else {
+        (window.width - SPACE_24 * 2.0 - SPACE_24 - PANEL_WIDTH).max(1.0)
+    };
     let avail_h = (window.height - HEADER_HEIGHT - 1.0 - SPACE_16 * 2.0).max(1.0);
     let scale = (avail_w / BOARD_WIDTH).min(avail_h / BOARD_HEIGHT);
     Size::new(BOARD_WIDTH * scale, BOARD_HEIGHT * scale)
@@ -540,6 +568,24 @@ mod tests {
         );
         // Aspect ratio preserved.
         assert!((size.width / size.height - 592.0 / 656.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn board_size_for_window_uses_full_width_on_a_narrow_phone() {
+        // iPhone portrait 390 x 844: the panel goes below the board,
+        // so nothing is reserved for it — the board takes the full
+        // content width (390 - 48 = 342 px), not ~1 px as the old
+        // horizontal budget produced (390 - 48 - 24 - 380 < 0).
+        let size = board_size_for_window(Size::new(390.0, 844.0));
+        assert!((size.width - 342.0).abs() < 0.1, "width {size:?}");
+        assert!(
+            (size.height - 656.0 * 342.0 / 592.0).abs() < 0.1,
+            "height {size:?}"
+        );
+        assert!((size.width / size.height - 592.0 / 656.0).abs() < 1e-4);
+        // The breakpoint itself: 759 is narrow, 760 is not.
+        assert!(is_narrow(Size::new(759.0, 844.0)));
+        assert!(!is_narrow(Size::new(760.0, 844.0)));
     }
 
     #[test]

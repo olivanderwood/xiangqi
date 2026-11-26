@@ -35,10 +35,12 @@
 //! `sq = rank * 9 + file`, rank 0 = Red's back rank, exactly as in
 //! `xq-core`.
 
-use std::time::{Duration, Instant};
+use crate::time::Instant;
+use std::time::Duration;
 
 use iced::alignment::Vertical;
 use iced::mouse::{self, Button, Cursor};
+use iced::touch;
 use iced::widget::canvas::{
     gradient::{Gradient, Linear},
     Action, Canvas, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
@@ -788,6 +790,11 @@ pub struct DragState {
     press_pos: Option<Point>,
     dragged: bool,
     last_hover: Option<Square>,
+    /// The finger driving the current drag (`None` for mouse input).
+    /// A second finger never hijacks an in-progress drag: its
+    /// `FingerMoved`/`FingerLifted` events are ignored until the
+    /// first finger lifts.
+    active_touch: Option<touch::Finger>,
 }
 
 impl DragState {
@@ -816,6 +823,84 @@ impl BoardProgram {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    /// Window-coordinate touch position → widget-local, or `None`
+    /// when the touch is outside this canvas.
+    fn touch_local(bounds: Rectangle, position: Point) -> Option<Point> {
+        if !bounds.contains(position) {
+            return None;
+        }
+        Some(Point::new(position.x - bounds.x, position.y - bounds.y))
+    }
+
+    /// Press logic shared by mouse and touch: a press on a piece
+    /// reports `DragStarted` (and arms the drag when the piece may
+    /// be dragged); a press on an empty square reports
+    /// `SquareClicked`.
+    fn press(&self, state: &mut DragState, g: &Geom, pos: Point) -> Option<Action<BoardMsg>> {
+        let sq = g.square_at(pos)?;
+        if let Some(piece) = self.render.position.piece_at(sq) {
+            // Only the draggable colour's pieces lift and
+            // follow the pointer. Pressing any other piece
+            // still reports `DragStarted`, so the screen can
+            // capture with the selected piece on a click —
+            // the piece just never lifts.
+            if self.render.draggable.is_some_and(|c| piece.color == c) {
+                state.drag_sq = Some(sq);
+                state.drag_pos = Some(pos);
+                state.press_pos = Some(pos);
+                state.dragged = false;
+            }
+            return Some(Action::publish(BoardMsg::DragStarted(sq)));
+        }
+        Some(Action::publish(BoardMsg::SquareClicked(sq)))
+    }
+
+    /// Pointer-move logic shared by mouse and touch: past the
+    /// 4 px drag threshold the press becomes a drag and the piece
+    /// lifts; otherwise only hover tracking runs.
+    fn move_to(&self, state: &mut DragState, g: &Geom, pos: Point) -> Option<Action<BoardMsg>> {
+        if state.drag_sq.is_some() {
+            if let Some(press) = state.press_pos {
+                let dx = pos.x - press.x;
+                let dy = pos.y - press.y;
+                if dx * dx + dy * dy > 16.0 {
+                    state.dragged = true;
+                }
+            }
+            state.drag_pos = Some(pos);
+            return Some(Action::publish(BoardMsg::DragMoved(pos)));
+        }
+        // Hover tracking (only fires when the square changes).
+        let hover = g.square_at(pos);
+        if hover != state.last_hover {
+            state.last_hover = hover;
+            return Some(Action::publish(BoardMsg::HoverSquare(hover)));
+        }
+        None
+    }
+
+    /// Release logic shared by mouse and touch (`pos` is `None`
+    /// when the pointer lifted outside the canvas).
+    fn release(&self, state: &mut DragState, pos: Option<Point>) -> Option<Action<BoardMsg>> {
+        let from = state.drag_sq.take()?;
+        state.drag_pos = None;
+        state.press_pos = None;
+        let was_dragged = std::mem::take(&mut state.dragged);
+        if was_dragged {
+            if let Some(pos) = pos {
+                return Some(Action::publish(BoardMsg::DragEnded(pos)));
+            }
+            return Some(Action::request_redraw());
+        }
+        // A plain click on a piece was already reported as
+        // DragStarted (the screen selects on that); a click
+        // that started on a piece but ended elsewhere without
+        // moving is a no-op here. A click on an empty square
+        // was reported as SquareClicked on press.
+        let _ = from;
+        None
     }
 }
 
@@ -1101,62 +1186,56 @@ impl Program<BoardMsg> for BoardProgram {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
                 let pos = cursor.position_in(bounds)?;
-                let sq = g.square_at(pos)?;
-                if let Some(piece) = self.render.position.piece_at(sq) {
-                    // Only the draggable colour's pieces lift and
-                    // follow the cursor. Pressing any other piece
-                    // still reports `DragStarted`, so the screen can
-                    // capture with the selected piece on a click —
-                    // the piece just never lifts.
-                    if self.render.draggable.is_some_and(|c| piece.color == c) {
-                        state.drag_sq = Some(sq);
-                        state.drag_pos = Some(pos);
-                        state.press_pos = Some(pos);
-                        state.dragged = false;
-                    }
-                    return Some(Action::publish(BoardMsg::DragStarted(sq)));
-                }
-                Some(Action::publish(BoardMsg::SquareClicked(sq)))
+                self.press(state, &g, pos)
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let pos = cursor.position_in(bounds)?;
-                if state.drag_sq.is_some() {
-                    if let Some(press) = state.press_pos {
-                        let dx = pos.x - press.x;
-                        let dy = pos.y - press.y;
-                        if dx * dx + dy * dy > 16.0 {
-                            state.dragged = true;
-                        }
-                    }
-                    state.drag_pos = Some(pos);
-                    return Some(Action::publish(BoardMsg::DragMoved(pos)));
-                }
-                // Hover tracking (only fires when the square changes).
-                let hover = g.square_at(pos);
-                if hover != state.last_hover {
-                    state.last_hover = hover;
-                    return Some(Action::publish(BoardMsg::HoverSquare(hover)));
-                }
-                None
+                self.move_to(state, &g, pos)
             }
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
-                let from = state.drag_sq.take()?;
+                self.release(state, cursor.position_in(bounds))
+            }
+            // Touch (Hieu, 2026-11-26): on iPhone the board never
+            // responded — taps on pieces did nothing while the
+            // buttons worked. `iced_winit` delivers touch as
+            // `Event::Touch`, not as mouse events, and this program
+            // only matched `Event::Mouse` (the built-in buttons do
+            // handle `FingerPressed`, which is why they worked).
+            // Mirror the mouse arms with the touch position, which
+            // is in window coordinates (unlike the cursor, which is
+            // already widget-local).
+            Event::Touch(touch::Event::FingerPressed { id, position }) => {
+                if state.active_touch.is_some() || state.drag_sq.is_some() {
+                    return None;
+                }
+                let pos = Self::touch_local(bounds, *position)?;
+                state.active_touch = Some(*id);
+                self.press(state, &g, pos)
+            }
+            Event::Touch(touch::Event::FingerMoved { id, position }) => {
+                if state.active_touch != Some(*id) {
+                    return None;
+                }
+                let pos = Self::touch_local(bounds, *position)?;
+                self.move_to(state, &g, pos)
+            }
+            Event::Touch(touch::Event::FingerLifted { id, position }) => {
+                if state.active_touch != Some(*id) {
+                    return None;
+                }
+                state.active_touch = None;
+                self.release(state, Self::touch_local(bounds, *position))
+            }
+            Event::Touch(touch::Event::FingerLost { id, .. }) => {
+                if state.active_touch != Some(*id) {
+                    return None;
+                }
+                state.active_touch = None;
+                state.drag_sq = None;
                 state.drag_pos = None;
                 state.press_pos = None;
-                let was_dragged = std::mem::take(&mut state.dragged);
-                if was_dragged {
-                    if let Some(pos) = cursor.position_in(bounds) {
-                        return Some(Action::publish(BoardMsg::DragEnded(pos)));
-                    }
-                    return Some(Action::request_redraw());
-                }
-                // A plain click on a piece was already reported as
-                // DragStarted (the screen selects on that); a click
-                // that started on a piece but ended elsewhere without
-                // moving is a no-op here. A click on an empty square
-                // was reported as SquareClicked on press.
-                let _ = from;
-                None
+                state.dragged = false;
+                Some(Action::request_redraw())
             }
             _ => None,
         }
@@ -1573,5 +1652,110 @@ mod tests {
         assert!(action.is_none());
         assert_eq!(state.drag_sq, None);
         assert!(!state.lifted());
+    }
+
+    #[test]
+    fn touch_press_selects_and_drags_like_mouse() {
+        // Hieu, 2026-11-26: on iPhone a tap on a piece did nothing
+        // while buttons worked — the program only matched
+        // `Event::Mouse`. A touch press / move / lift must behave
+        // exactly like the mouse sequence. Touch positions are in
+        // window coordinates; the test bounds sit at the origin, so
+        // they double as widget-local coordinates. No mouse cursor
+        // is available during touch input.
+        let mut render = BoardRender::new(Position::startpos());
+        render.draggable = Some(SideColor::Red);
+        let program = BoardProgram::new(render);
+        let mut state = DragState::default();
+        let bounds = bounds_1x();
+        let finger = touch::Finger(0);
+
+        let action = program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerPressed {
+                id: finger,
+                position: Point::new(40.0, 616.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert!(action.is_some());
+        assert_eq!(state.drag_sq, Some(0));
+        assert!(!state.dragged);
+        assert!(!state.lifted());
+
+        // A second finger never hijacks the drag.
+        let ignored = program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerMoved {
+                id: touch::Finger(1),
+                position: Point::new(300.0, 300.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert!(ignored.is_none());
+        assert!(!state.dragged);
+
+        // Moving the first finger past the threshold lifts the piece.
+        program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerMoved {
+                id: finger,
+                position: Point::new(50.0, 616.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert!(state.dragged);
+        assert!(state.lifted());
+
+        // Lift clears the drag.
+        program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerLifted {
+                id: finger,
+                position: Point::new(50.0, 616.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert_eq!(state.drag_sq, None);
+        assert!(!state.lifted());
+    }
+
+    #[test]
+    fn touch_press_on_empty_square_and_outside_board() {
+        let render = BoardRender::new(Position::startpos());
+        let program = BoardProgram::new(render);
+        let mut state = DragState::default();
+        let bounds = bounds_1x();
+        let finger = touch::Finger(0);
+
+        // Empty square (centre of the board, no piece): reports a
+        // click, arms no drag.
+        let action = program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerPressed {
+                id: finger,
+                position: Point::new(296.0, 328.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert!(action.is_some());
+        assert_eq!(state.drag_sq, None);
+
+        // Outside the canvas entirely: ignored.
+        let action = program.update(
+            &mut state,
+            &Event::Touch(touch::Event::FingerPressed {
+                id: finger,
+                position: Point::new(700.0, 700.0),
+            }),
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert!(action.is_none());
     }
 }

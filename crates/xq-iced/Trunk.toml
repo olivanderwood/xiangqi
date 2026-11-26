@@ -1,0 +1,8 @@
+# Trunk config for the PWA build (run `trunk build --release` from
+# crates/xq-iced/). `public_url = "./"` keeps the built index.html's
+# asset links relative, so the site works under the /xiangqi/ project
+# path on GitHub Pages — the first deploy (2026-11-26) used absolute
+# links (`/xiangqi-iced-...`) which 404'd on the project site and had
+# to be fixed by hand-editing dist/index.html.
+[build]
+public_url = "./"

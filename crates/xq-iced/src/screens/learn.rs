@@ -39,9 +39,10 @@
 //! Until the coordinator adds those two lines in `App::update`, this
 //! screen starts with no lesson and shows "Không tìm thấy bài học."
 
+use crate::time::Instant;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iced::widget::{column, container, mouse_area, row, scrollable, text, Space, Stack};
 use iced::{Color, Element, Length, Point, Rectangle, Size, Subscription, Task, Theme};
@@ -56,7 +57,11 @@ use xq_core::notation;
 use xq_core::types::{Color as SideColor, Move};
 use xq_engine::{EngineRequest, Level, StopHandle};
 
-use crate::ai_worker::{response_is_current, AiRequest, AiResponse, AiWorker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ai_worker::AiWorker;
+#[cfg(target_arch = "wasm32")]
+use crate::ai_worker::WasmAiWorker;
+use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
 use crate::app::{Screen, Shared};
 use crate::board::{Arrow, BoardMsg, BoardProgram, BoardRender, BoardState, Geom, Square};
 use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
@@ -72,7 +77,7 @@ use crate::theme::{
 };
 use crate::widgets::{
     advantage_chip, board_size_for_window, card_style, disabled_button_with_icon,
-    ghost_button_with_icon, header_divider, primary_button, primary_button_with_icon,
+    ghost_button_with_icon, header_divider, is_narrow, primary_button, primary_button_with_icon,
     secondary_button, secondary_button_with_icon, section_title, side_card, status_chip,
     HEADER_HEIGHT,
 };
@@ -384,23 +389,44 @@ pub struct State {
     ai_rx: Arc<Mutex<Receiver<AiResponse>>>,
     ai_stop: StopHandle,
     next_req_id: u64,
+    /// wasm32 only: the Pikafish-WASM driver (no worker thread
+    /// there). Taken out of the worker at construction; the tick
+    /// handler pumps it and drains `ai_rx` (see `subscription`).
+    #[cfg(target_arch = "wasm32")]
+    ai_pump: crate::ai_worker::WasmEngineDriver,
     rng_state: u64,
     /// When the screen was created (drives the check-halo pulse).
     boot: Instant,
-    /// Current window size (tracked via `Msg::WindowResized`, seeded
-    /// with the default 1280 × 800): the board's display size comes
+    /// Current window size (forwarded from `App` via
+    /// `Msg::WindowResized`, seeded with the default 1280 × 800 —
+    /// see `App::window`): the board's display size comes
     /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)).
-    window: Size,
+    /// Visible inside the crate for the App forwarding test.
+    pub(crate) window: Size,
 }
 
 impl State {
     /// Create the learn screen (no lesson yet — see [`State::start`]).
     #[must_use]
     pub fn new(shared: &Shared) -> Self {
-        // Destructure the worker to take its receiver out for the
-        // bridge (see `bridge.rs`): the forwarder thread is the
-        // receiver's only consumer while bridged.
-        let AiWorker { tx, rx, stop, .. } = AiWorker::new(shared.engine.clone());
+        // Move the worker's channels out for the bridge (see
+        // `bridge.rs`): the forwarder thread is the receiver's only
+        // consumer while bridged.
+        //
+        // wasm32: take the driver out FIRST (before the channels
+        // are moved out below — a partial move would make the worker
+        // unusable).
+        #[cfg(target_arch = "wasm32")]
+        let mut worker = WasmAiWorker::new(shared.engine.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let worker = AiWorker::new(shared.engine.clone());
+        #[cfg(target_arch = "wasm32")]
+        let ai_pump = worker
+            .take_driver()
+            .expect("wasm worker always carries a driver");
+        let tx = worker.tx;
+        let rx = worker.rx;
+        let stop = worker.stop;
         let now = Instant::now();
         Self {
             lesson: None,
@@ -442,6 +468,8 @@ impl State {
             ai_rx: Arc::new(Mutex::new(rx)),
             ai_stop: stop,
             next_req_id: 1,
+            #[cfg(target_arch = "wasm32")]
+            ai_pump,
             rng_state: 0x9E37_79B9_7F4A_7C15,
             boot: now,
             window: Size::new(1280.0, 800.0),
@@ -1494,6 +1522,17 @@ impl State {
                     }
                 }
                 self.settle(shared);
+                // wasm32: no worker thread and no bridge — the tick
+                // pumps the worker synchronously and drains its
+                // answers into the normal `Msg::OpponentAiMove`
+                // handling.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.ai_pump.pump();
+                    for resp in self.drain_ai_responses() {
+                        let _ = self.update(map_ai_response(resp), shared);
+                    }
+                }
                 Task::none()
             }
             Msg::Board(board_msg) => {
@@ -1619,33 +1658,39 @@ impl State {
         };
         // Header (mockup pages 4/5): 64 px surface bar — ghost "Quay
         // lại", 20 px Semibold title, chips for the lesson, the
-        // learner's side and the engine, ghost "Cài đặt".
+        // learner's side and the engine, ghost "Cài đặt". Narrow
+        // (mobile): the chips do not fit at 390 px, so they are left
+        // out — the panel below the board shows the same lesson and
+        // engine status.
+        let mut header_row = row![
+            ghost_button_with_icon(
+                i18n::t(Key::BackToMenu),
+                Icon::ArrowLeft,
+                Msg::Navigate(Screen::Home)
+            ),
+            text(i18n::t(Key::LearnOpenings))
+                .size(FONT_SCREEN_TITLE)
+                .font(theme::inter_font_semibold())
+                .width(Length::Fill),
+        ];
+        if !is_narrow(self.window) {
+            // No i18n label keys exist for the mockup's
+            // "Khai cuộc: …" / "Bạn: …" prefixes (and i18n.rs is
+            // out of scope here), so the chips show the values
+            // alone: the lesson name and the learner's side.
+            header_row = header_row.push(status_chip(lesson.name_vi.clone(), None, TEXT_DIM));
+            header_row = header_row.push(status_chip(side_text.to_string(), None, TEXT_DIM));
+            header_row = header_row.push(status_chip(shared.engine_name.clone(), None, TEXT_DIM));
+        }
+        header_row = header_row.push(ghost_button_with_icon(
+            i18n::t(Key::Settings),
+            Icon::SlidersHorizontal,
+            Msg::ShowSettings,
+        ));
         let header = container(
-            row![
-                ghost_button_with_icon(
-                    i18n::t(Key::BackToMenu),
-                    Icon::ArrowLeft,
-                    Msg::Navigate(Screen::Home)
-                ),
-                text(i18n::t(Key::LearnOpenings))
-                    .size(FONT_SCREEN_TITLE)
-                    .font(theme::inter_font_semibold())
-                    .width(Length::Fill),
-                // No i18n label keys exist for the mockup's
-                // "Khai cuộc: …" / "Bạn: …" prefixes (and i18n.rs is
-                // out of scope here), so the chips show the values
-                // alone: the lesson name and the learner's side.
-                status_chip(lesson.name_vi.clone(), None, TEXT_DIM),
-                status_chip(side_text.to_string(), None, TEXT_DIM),
-                status_chip(shared.engine_name.clone(), None, TEXT_DIM),
-                ghost_button_with_icon(
-                    i18n::t(Key::Settings),
-                    Icon::SlidersHorizontal,
-                    Msg::ShowSettings
-                ),
-            ]
-            .spacing(SPACE_16)
-            .align_y(iced::Alignment::Center),
+            header_row
+                .spacing(SPACE_16)
+                .align_y(iced::Alignment::Center),
         )
         .padding(iced::Padding {
             top: 0.0,
@@ -1667,30 +1712,63 @@ impl State {
         let board_el = self.board_view(&pos);
         let panel = self.panel_view(lesson, &pos, shared);
 
-        let base: Element<'_, Msg> = container(
-            column![
-                header,
-                header_divider(),
-                container(
-                    row![board_el, panel,]
-                        .spacing(SPACE_24)
+        let base: Element<'_, Msg> = if is_narrow(self.window) {
+            // Stacked (mobile): board on top, panel below,
+            // scrolling vertically — same reason as Play.
+            scrollable(
+                column![
+                    header,
+                    header_divider(),
+                    container(board_el)
+                        .padding(iced::Padding {
+                            top: SPACE_16,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
                         .width(Length::Fill)
-                        .align_y(iced::Alignment::Start),
-                )
-                .padding(iced::Padding {
-                    top: SPACE_16,
-                    right: SPACE_24,
-                    bottom: SPACE_16,
-                    left: SPACE_24,
-                })
-                .width(Length::Fill)
-                .height(Length::Fill),
-            ]
-            .spacing(0),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+                        .center_x(Length::Fill),
+                    container(panel)
+                        .padding(iced::Padding {
+                            top: 0.0,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
+                        .width(Length::Fill),
+                ]
+                .spacing(0)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            container(
+                column![
+                    header,
+                    header_divider(),
+                    container(
+                        row![board_el, panel,]
+                            .spacing(SPACE_24)
+                            .width(Length::Fill)
+                            .align_y(iced::Alignment::Start),
+                    )
+                    .padding(iced::Padding {
+                        top: SPACE_16,
+                        right: SPACE_24,
+                        bottom: SPACE_16,
+                        left: SPACE_24,
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                ]
+                .spacing(0),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        };
         // Exit save prompt: a full-screen overlay, NOT a card inside
         // the panel — the panel is a scrollable, so a card at its top
         // is scrolled out of view once the lesson is under way and
@@ -2271,13 +2349,50 @@ impl State {
     pub fn subscription(&self) -> Subscription<Msg> {
         let mut subs = vec![
             self.chessdb.subscription().map(map_chessdb_msg),
+            // wasm32: no AI bridge — its forwarder thread panics on
+            // wasm; the tick below pumps the worker and drains the
+            // answers instead (see `Msg::Tick`).
+            #[cfg(not(target_arch = "wasm32"))]
             crate::bridge::from_mpsc("ai-learn", Arc::clone(&self.ai_rx)).map(map_ai_response),
-            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
-        if self.needs_tick() {
+        if self.needs_tick() || self.ai_work_pending_wasm() {
+            // `iced::time::every` yields `wasmtimer::std::Instant` — the
+            // same type the screens keep (`crate::time::Instant`),
+            // so the tick instant passes straight through.
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
+    }
+
+    /// wasm32 only: the opponent's AI move may be outstanding
+    /// (request sent, pump not run yet). The tick is what pumps the
+    /// worker and drains the answer, so it must stay alive while a
+    /// request is in flight. Desktop always returns `false`
+    /// (answers arrive via the bridge, not the tick).
+    #[cfg(target_arch = "wasm32")]
+    fn ai_work_pending_wasm(&self) -> bool {
+        self.opponent_ai_req.is_some()
+    }
+
+    /// Desktop: see `ai_work_pending_wasm` (wasm only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ai_work_pending_wasm(&self) -> bool {
+        false
+    }
+
+    /// wasm32 only: drain the AI worker's answers (already pumped
+    /// by `ai_pump.pump`) without holding the lock while handling
+    /// them.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_ai_responses(&self) -> Vec<AiResponse> {
+        let Ok(rx) = self.ai_rx.lock() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Ok(resp) = rx.try_recv() {
+            out.push(resp);
+        }
+        out
     }
 }
 

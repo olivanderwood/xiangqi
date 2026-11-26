@@ -43,6 +43,14 @@
 //!   `&'static str` per worker (`"ai"`, `"chessdb"`, …) and return
 //!   the same bridge from `subscription()` on every call — do not
 //!   mint a fresh id per frame.
+//! - **Never subscribe to a bridge on wasm32.** The recipe's stream
+//!   spawns a forwarder thread (`std::thread::spawn` panics on
+//!   wasm). On wasm the screens drain their channels from the tick
+//!   handler instead (the AI `WasmAiWorker` in `ai_worker.rs`; the
+//!   ChessDB panel answers "unavailable" at once), and the
+//!   Pikafish-install bridge does not exist there (`App` has no
+//!   install receiver on wasm). `from_mpsc` still compiles for
+//!   wasm — it just must never be subscribed to there.
 //! - **The bridged receiver has exactly one consumer: the
 //!   forwarder thread.** The thread holds the `Mutex` across the
 //!   blocking `recv()` (a std `Receiver` is `Send` but not `Sync`,
@@ -79,12 +87,20 @@
 use std::hash::Hash;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+/// Desktop only: the forwarder thread's retry sleep.
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use iced::advanced::subscription::{from_recipe, EventStream, Hasher, Recipe};
+/// Desktop only: the forwarder thread's stream machinery. On wasm
+/// `stream()` is an empty stream and these are unused.
+#[cfg(not(target_arch = "wasm32"))]
 use iced::futures::future;
+#[cfg(not(target_arch = "wasm32"))]
 use iced::futures::stream::BoxStream;
-use iced::{stream, Subscription};
+#[cfg(not(target_arch = "wasm32"))]
+use iced::stream;
+use iced::Subscription;
 
 /// Items the forwarder buffers before the UI consumes them. Worker
 /// answers arrive in small bursts (`Info` lines, then the final
@@ -126,6 +142,10 @@ where
 
 /// The [`Recipe`] behind [`from_mpsc`]: it owns the shared receiver
 /// and spawns the forwarder thread when its stream starts.
+///
+/// The `allow(dead_code)` is for wasm, where the fields exist only
+/// so `from_mpsc` keeps compiling (`stream()` yields nothing there).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct MpscRecipe<T> {
     id: &'static str,
     rx: Arc<Mutex<Receiver<T>>>,
@@ -143,6 +163,25 @@ where
         self.id.hash(state);
     }
 
+    /// wasm32: never subscribed to (see the module docs — the
+    /// forwarder thread would panic there), so this is a stream
+    /// that yields nothing. It only exists so the crate still
+    /// compiles for wasm. The return type is spelled out instead
+    /// of the `BoxStream` alias: the trait's `BoxStream` is
+    /// `iced_futures`' platform one (`LocalBoxStream`, not `Send`,
+    /// on wasm), while `iced::futures::stream::BoxStream` is the
+    /// `futures` crate's (always `Send`) — the two only agree on
+    /// native targets.
+    #[cfg(target_arch = "wasm32")]
+    fn stream(
+        self: Box<Self>,
+        _input: EventStream,
+    ) -> std::pin::Pin<Box<dyn iced::futures::Stream<Item = Self::Output> + 'static>> {
+        let _ = self;
+        Box::pin(iced::futures::stream::empty())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn stream(self: Box<Self>, _input: EventStream) -> BoxStream<'static, Self::Output> {
         let rx = self.rx;
         let buffer = self.buffer;
@@ -163,6 +202,8 @@ where
 /// Forwarder thread body: blocking-receive from the std channel and
 /// push each item into the async channel. Exits when the worker's
 /// sender is gone or the subscription side has closed.
+/// Desktop only (wasm has no forwarder thread).
+#[cfg(not(target_arch = "wasm32"))]
 fn forward<T>(rx: Arc<Mutex<Receiver<T>>>, mut sender: iced::futures::channel::mpsc::Sender<T>)
 where
     T: Send,

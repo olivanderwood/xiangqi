@@ -45,12 +45,15 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use iced::widget::Stack;
-use iced::{Element, Length, Subscription, Task};
+use iced::{Element, Length, Size, Subscription, Task};
 use xq_book::Book;
 use xq_engine::{shared_engine, BuiltinEngine, SharedEngine};
 
 use crate::bridge;
 use crate::engine_log::EngineLog;
+#[cfg(target_arch = "wasm32")]
+use crate::engine_manager::EngineEvent;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::engine_manager::{self, EngineEvent};
 use crate::i18n;
 use crate::screens::{
@@ -162,6 +165,16 @@ impl Shared {
 /// The top-level application state.
 pub struct App {
     screen: Screen,
+    /// Current window size, owned here — not by the screens. A
+    /// screen's own resize subscription only starts when the screen
+    /// becomes visible, and on web it can deliver a stale size at
+    /// that moment (Hieu, 2026-11-26: Play rendered the wide branch
+    /// at 390 px — small centred board, panel clipped away — because
+    /// its `window` was never the true size). This subscription runs
+    /// from boot, so it always carries the true size, and every
+    /// screen gets it forwarded (see `Message::WindowResized`),
+    /// visible or not. Seeded 1280 × 800 like the screens.
+    window: Size,
     shared: Shared,
     home: home::State,
     play: play::State,
@@ -222,6 +235,10 @@ pub enum Message {
     EngineUnavailable(String),
     /// The embedded CJK subset font finished loading (boot task).
     FontLoaded(Result<(), iced::font::Error>),
+    /// The window was resized: stored here and forwarded to every
+    /// screen that tracks it (home / play / learn / practice), so no
+    /// screen ever lays out from a stale size — see `App::window`.
+    WindowResized(Size),
 }
 
 impl App {
@@ -232,6 +249,13 @@ impl App {
     /// install, so there is exactly one install receiver.
     pub fn new() -> (Self, Task<Message>) {
         let shared = Shared::new();
+        // wasm32: no Pikafish pre-warm — there is no subprocess on
+        // wasm, and the install bridge's forwarder thread would
+        // panic there. The engine on wasm is Pikafish-WASM, started
+        // by each screen's `WasmAiWorker` (see `ai_worker.rs`); Play
+        // marks itself ready from the driver's handshake, so no
+        // install receiver exists and no boot banner is sent.
+        #[cfg(not(target_arch = "wasm32"))]
         let install_rx = Some(Arc::new(Mutex::new(engine_manager::spawn_install(
             shared.engine.clone(),
             shared.settings.pikafish_path(),
@@ -239,8 +263,11 @@ impl App {
             shared.settings.engine_hash_mb,
             shared.settings.level(),
         ))));
+        #[cfg(target_arch = "wasm32")]
+        let install_rx = None;
         let app = Self {
             screen: Screen::Home,
+            window: Size::new(1280.0, 800.0),
             home: home::State::new(&shared),
             play: play::State::new(&shared),
             learn_select: learn_select::State::new(&shared),
@@ -252,11 +279,9 @@ impl App {
             dialog: None,
             install_rx,
         };
-        (
-            app,
-            iced::Task::batch([theme::load_cjk_font(), theme::load_inter_fonts()])
-                .map(Message::FontLoaded),
-        )
+        let boot = iced::Task::batch([theme::load_cjk_font(), theme::load_inter_fonts()])
+            .map(Message::FontLoaded);
+        (app, boot)
     }
 
     /// Go to a screen, closing any open dialog (dialogs are transient
@@ -285,6 +310,28 @@ impl App {
             Message::Goto(screen) => {
                 self.goto(screen);
                 Task::none()
+            }
+            Message::WindowResized(size) => {
+                // Owned here (see `App::window`): store it and forward
+                // it to every screen that lays out from it, visible or
+                // not, so a screen never renders from its seeded size
+                // after navigation. The forwards are plain size stores
+                // (each returns `Task::none()`).
+                self.window = size;
+                Task::batch([
+                    self.home
+                        .update(home::Msg::WindowResized(size), &mut self.shared)
+                        .map(Message::Home),
+                    self.play
+                        .update(play::Msg::WindowResized(size), &mut self.shared)
+                        .map(Message::Play),
+                    self.learn
+                        .update(learn::Msg::WindowResized(size), &mut self.shared)
+                        .map(Message::Learn),
+                    self.practice
+                        .update(practice::Msg::WindowResized(size), &mut self.shared)
+                        .map(Message::Practice),
+                ])
             }
             Message::ShowSettings => {
                 self.open_settings();
@@ -326,17 +373,28 @@ impl App {
                 // `install_rx` like the startup pre-warm. Only
                 // when no install is running — the `None` guard is
                 // what keeps two installs from ever running at once.
-                if self.install_rx.is_none() {
-                    let level = self.shared.settings.level();
-                    self.install_rx = Some(Arc::new(Mutex::new(engine_manager::spawn_install(
-                        self.shared.engine.clone(),
-                        self.shared.settings.pikafish_path(),
-                        self.shared.settings.engine_threads,
-                        self.shared.settings.engine_hash_mb,
-                        level,
-                    ))));
+                //
+                // wasm32: there is no install to retry — the web
+                // build runs Pikafish-WASM, started by each
+                // screen's `WasmAiWorker` (recreated when the
+                // screen is re-entered). A no-op.
+                #[cfg(target_arch = "wasm32")]
+                return Task::none();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if self.install_rx.is_none() {
+                        let level = self.shared.settings.level();
+                        self.install_rx =
+                            Some(Arc::new(Mutex::new(engine_manager::spawn_install(
+                                self.shared.engine.clone(),
+                                self.shared.settings.pikafish_path(),
+                                self.shared.settings.engine_threads,
+                                self.shared.settings.engine_hash_mb,
+                                level,
+                            ))));
+                    }
+                    Task::none()
                 }
-                Task::none()
             }
             Message::Dialog(settings_dialog::Msg::Close) => {
                 self.dialog = None;
@@ -360,6 +418,10 @@ impl App {
                     self.open_about();
                     Task::none()
                 }
+                home::Msg::WindowResized(size) => self
+                    .home
+                    .update(home::Msg::WindowResized(size), &mut self.shared)
+                    .map(Message::Home),
             },
             Message::Play(msg) => match msg {
                 play::Msg::Navigate(screen) => {
@@ -709,6 +771,13 @@ impl App {
             Screen::History => Subscription::none(),
         };
         let mut subs = vec![screen];
+        // The window size is owned here (see `App::window`): this
+        // subscription runs from boot, so it always carries the true
+        // size. The screens do NOT subscribe to resizes themselves —
+        // a screen's own subscription only starts when the screen
+        // becomes visible, and on web it can deliver a stale size at
+        // that moment.
+        subs.push(iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)));
         if let Some(rx) = &self.install_rx {
             subs.push(
                 bridge::from_mpsc("engine-install", Arc::clone(rx)).map(engine_install_bridge_msg),
@@ -734,6 +803,24 @@ fn engine_install_bridge_msg(ev: EngineEvent) -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_resize_is_forwarded_to_every_screen() {
+        // Regression (Hieu, 2026-11-26): on the phone Play rendered
+        // the wide branch — small centred board, panel clipped away —
+        // because its `window` was never the true size; a screen's own
+        // resize subscription only starts when the screen becomes
+        // visible. App owns the size and forwards it to every screen,
+        // visible or not, so navigation can never show a stale layout.
+        let (mut app, _) = App::new();
+        assert_eq!(app.window, Size::new(1280.0, 800.0));
+        let _ = app.update(Message::WindowResized(Size::new(390.0, 844.0)));
+        assert_eq!(app.window, Size::new(390.0, 844.0));
+        assert_eq!(app.home.window, Size::new(390.0, 844.0));
+        assert_eq!(app.play.window, Size::new(390.0, 844.0));
+        assert_eq!(app.learn.window, Size::new(390.0, 844.0));
+        assert_eq!(app.practice.window, Size::new(390.0, 844.0));
+    }
 
     #[test]
     fn prewarm_starts_at_startup_and_retry_is_blocked_while_running() {

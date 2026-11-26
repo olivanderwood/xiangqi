@@ -1,5 +1,7 @@
 //! `xq-core`: Xiangqi rules + AI engine. No UI dependencies.
 
+mod time;
+
 pub mod analysis;
 pub mod board;
 pub mod eval;

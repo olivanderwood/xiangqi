@@ -14,11 +14,18 @@
 //! shows the section as unavailable — the game itself never depends
 //! on ChessDB.
 
+/// Desktop only: the worker thread's per-FEN cache.
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use xq_chessdb::{ChessDbClient, ChessDbError, ChessDbEval};
+#[cfg(not(target_arch = "wasm32"))]
+use xq_chessdb::ChessDbClient;
+use xq_chessdb::{ChessDbError, ChessDbEval};
 
 /// Requests to the ChessDB worker.
+/// (On wasm the `Evaluate` variant is never constructed — there is
+/// no worker thread — but the type is part of the panel's API.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug)]
 pub enum ChessDbRequest {
     /// Evaluate one position (FEN, project N/B convention — the same
@@ -44,6 +51,9 @@ pub fn response_is_current(resp_req_id: u64, current: Option<u64>) -> bool {
 }
 
 /// What the ChessDB section shows right now.
+/// (On wasm `Loading` is never constructed — `request` answers
+/// `Unavailable` at once — but the type is part of the panel's API.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Clone, Debug)]
 pub enum ChessDbView {
     /// No position has been asked about yet.
@@ -60,6 +70,7 @@ pub enum ChessDbView {
 }
 
 /// A fixed worker thread driving one ChessDB client + cache.
+/// (wasm32: no thread — see `new`.)
 pub struct ChessDbWorker {
     pub tx: Sender<ChessDbRequest>,
     pub rx: Receiver<ChessDbResponse>,
@@ -67,10 +78,17 @@ pub struct ChessDbWorker {
 
 impl ChessDbWorker {
     /// Spawn the worker thread.
+    ///
+    /// wasm32: no thread — `std::thread::spawn` panics on wasm, and
+    /// the network client has no sockets there anyway. The channels
+    /// are still created (the panel owns them), but nothing ever
+    /// answers: the panel reports ChessDB as unavailable on wasm
+    /// instead of waiting (see `chessdb_panel.rs`).
     #[must_use]
     pub fn new() -> Self {
         let (req_tx, req_rx) = channel::<ChessDbRequest>();
         let (res_tx, res_rx) = channel::<ChessDbResponse>();
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             let client = ChessDbClient::new();
             let mut cache: HashMap<String, ChessDbEval> = HashMap::new();
@@ -102,6 +120,10 @@ impl ChessDbWorker {
                 let _ = res_tx.send(ChessDbResponse::Evaluated { req_id, result });
             }
         });
+        // wasm32: the worker ends are never read (no thread, no
+        // network) — keep the names used so the build stays quiet.
+        #[cfg(target_arch = "wasm32")]
+        let _ = (req_rx, res_tx);
         Self {
             tx: req_tx,
             rx: res_rx,

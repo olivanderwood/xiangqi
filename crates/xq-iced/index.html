@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
+  <title>Cờ Tướng AI</title>
+  <meta
+    name="description"
+    content="Chơi Cờ Tướng với AI, học khai cuộc và tự luyện tập — chạy offline trên trình duyệt."
+  />
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#17191d" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <!-- iOS: install to home screen, standalone, dark status bar. -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta
+    name="apple-mobile-web-app-status-bar-style"
+    content="black-translucent"
+  />
+  <meta name="apple-mobile-web-app-title" content="Cờ Tướng" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <!-- Trunk: build the `xiangqi-iced` bin to WASM, and copy the PWA
+       files into `dist/` (manifest + worker at the root so their
+       scope is `./`; icons as a directory). -->
+  <link data-trunk rel="rust" href="Cargo.toml" data-bin="xiangqi-iced" />
+  <link data-trunk rel="copy-file" href="assets/pwa/manifest.webmanifest" />
+  <link data-trunk rel="copy-file" href="assets/pwa/sw.js" />
+  <link data-trunk rel="copy-dir" href="assets/pwa/icons" />
+  <!-- Pikafish-WASM engine (INTEGRATION.md in assets/engine-wasm):
+       the worker + its 3 files must stay co-located under
+       `dist/engine-wasm/` (the worker does `importScripts('pikafish.js')`
+       and Emscripten fetches `pikafish.data` relative to it). The
+       51.6 MB `.data` file is gitignored — `trunk build` only copies
+       what is on disk, so a fresh checkout must re-download the
+       three engine files first (URLs in assets/engine-wasm/INTEGRATION.md §1). -->
+  <link data-trunk rel="copy-dir" href="assets/engine-wasm" />
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #17191d;
+      overscroll-behavior: none;
+    }
+    canvas {
+      display: block;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <noscript>Cờ Tướng AI cần bật JavaScript để chạy.</noscript>
+  <script>
+    // Offline support: the service worker caches the app shell
+    // (HTML / JS / WASM / icons) after the first visit, so the game
+    // opens without a network. Registration failure (e.g. plain
+    // `http://` on a non-localhost host, or a browser without SW
+    // support) only disables offline — the game itself still loads.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("sw.js")
+          .catch((err) =>
+            console.warn("Service worker registration failed:", err),
+          );
+      });
+    }
+  </script>
+</body>
+</html>

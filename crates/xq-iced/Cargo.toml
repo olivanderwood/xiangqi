@@ -15,7 +15,6 @@ xq-book = { path = "../xq-book" }
 xq-engine = { path = "../xq-engine" }
 xq-pikafish = { path = "../xq-pikafish" }
 xq-chessdb = { path = "../xq-chessdb" }
-xq-recognize = { path = "../xq-recognize" }
 # Iced 0.14, pinned (see docs/SPIKE-iced.md §5: 0.14 is the last
 # release before 1.0, which will break the API once). `tokio` is
 # needed for `time::every`; `canvas` draws the board.
@@ -27,7 +26,9 @@ rfd = "0.15"
 # Clipboard image paste (practice screen): `arboard` reads the
 # system clipboard; `image` encodes the pasted RGBA pixels to PNG
 # so they feed the same image-load path as a picked file.
-arboard = "3"
+# Desktop only (see below): `arboard` has no
+# wasm32-unknown-unknown target — the paste button and Ctrl+V are
+# hidden on wasm, and the paste task is a no-op there.
 image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -36,3 +37,50 @@ dirs = "6"
 # Needed by `engine_manager.rs` (copied from xq-app): total RAM
 # decides the default Pikafish hash size.
 sysinfo = "0.33"
+
+# wasm32 (PWA spike, 2026-11-26): the ONNX recognizer cannot build
+# for wasm (`ort` has no wasm32-unknown-unknown target), so the
+# whole crate is desktop-only — `screens/practice.rs` stubs the
+# recognition types and reports "not recognised" on wasm instead.
+# Everything else in this crate already compiles for wasm32
+# (verified by `cargo check --target wasm32-unknown-unknown`):
+# `xq-pikafish` / `xq-chessdb` compile (their process/socket calls
+# fail at run time on wasm, and the app's fallbacks cover that —
+# builtin engine, ChessDB "unavailable"), as do `dirs`, `sysinfo`,
+# `rodio` and `rfd`. What must never RUN on wasm is
+# `std::thread::spawn` (it panics there): the AI worker runs via
+# the `WasmAiWorker` (`ai_worker.rs`, driving Pikafish-WASM in a Web
+# Worker through `engine_wasm.rs`), the ChessDB worker
+# and the Pikafish install run threadless (`chessdb_worker.rs`,
+# `engine_manager.rs`), and the `bridge` forwarder thread is never
+# subscribed to on wasm (screens drain the channels from the tick
+# handler instead).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+xq-recognize = { path = "../xq-recognize" }
+# `arboard` has no wasm32-unknown-unknown target.
+arboard = "3"
+
+# wasm32 only: the `webgl` feature (iced 0.14 → `wgpu/webgl`) gives
+# the WebGL2 fallback when the browser has no WebGPU (iOS Safari
+# only gained WebGPU in iOS 26). The renderer requests
+# `Backends::all()`, so WebGPU is still tried first. This
+# target-specific entry replaces the generic `iced` entry above for
+# wasm builds (same version, one extra feature).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image", "svg", "webgl"] }
+# Pikafish-WASM bridge (`engine_wasm.rs`): spawns the engine Web
+# Worker and talks to it with `postMessage`. Only used from
+# wasm32-gated code, so the desktop build is untouched.
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Worker", "MessageEvent", "console"] }
+# Panic messages in the browser console (the release profile uses
+# `panic = "abort"`, which would otherwise surface only as
+# `RuntimeError: unreachable`). Invaluable when debugging the PWA
+# on a phone, where there is no debugger attached.
+console_error_panic_hook = "0.1"
+# Wasm-safe clock (`crate::time`): `std::time::Instant` /
+# `SystemTime` panic on wasm32-unknown-unknown. `wasmtimer` is
+# already a transitive dependency via iced (and is what
+# `iced::time::every` yields), so the tick instant passes through
+# to the screens unchanged.
+wasmtimer = "0.4"

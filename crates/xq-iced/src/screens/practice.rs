@@ -59,9 +59,10 @@
 //!   with `grade_limits()`, so the UI never locks the engine to
 //!   grade. Both are kept as-is.
 
+use crate::time::Instant;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iced::alignment::Vertical;
 use iced::mouse::{self, Cursor};
@@ -72,7 +73,9 @@ use iced::widget::text::Alignment as TextAlignment;
 use iced::widget::{
     column, container, mouse_area, radio, row, scrollable, slider, text, text_input, Button, Column,
 };
-use iced::{Element, Length, Pixels, Point, Rectangle, Renderer, Size, Subscription, Task, Theme};
+use iced::{
+    Alignment, Element, Length, Pixels, Point, Rectangle, Renderer, Size, Subscription, Task, Theme,
+};
 use xq_chessdb::{ChessDbError, ChessDbEval};
 use xq_core::analysis::Grade;
 use xq_core::board::Position;
@@ -81,9 +84,32 @@ use xq_core::notation;
 use xq_core::types::{file_of, rank_of, sq, Color, Move, Piece, PieceKind};
 use xq_engine::{EngineRequest, Level};
 
-use crate::ai_worker::{response_is_current, AiRequest, AiResponse, AiWorker};
+/// Board-recognition types. Desktop: the real `xq-recognize` crate
+/// (ONNX). wasm32: the crate cannot build there (`ort` has no
+/// wasm32-unknown-unknown target), so the grid / calibration are
+/// local stubs with the same shape — recognition always reports
+/// "not recognised" (see `recognize_board_image`) and the user sets
+/// the position up by hand in the editor.
+#[cfg(not(target_arch = "wasm32"))]
+use xq_recognize::{BoardCalibration, Grid};
+#[cfg(target_arch = "wasm32")]
+type Grid = [[Option<Piece>; 9]; 10];
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // stub shape only; recognition never runs on wasm
+struct BoardCalibration {
+    corners: [(f32, f32); 4],
+    pawn: (f32, f32),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ai_worker::AiWorker;
+#[cfg(target_arch = "wasm32")]
+use crate::ai_worker::WasmAiWorker;
+use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
 use crate::app::{Screen, Shared};
 use crate::board::{Arrow, BoardMsg, BoardProgram, BoardRender, BoardState, Geom, Square};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::bridge;
 use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
 use crate::chessdb_worker::{ChessDbResponse, ChessDbView};
@@ -98,8 +124,8 @@ use crate::theme::{
 };
 use crate::widgets::{
     advantage_chip, board_size_for_window, card_style, ghost_button_with_icon, header_divider,
-    primary_button, primary_button_with_icon, secondary_button, secondary_button_with_icon,
-    section_title, HEADER_HEIGHT,
+    is_narrow, primary_button, primary_button_with_icon, secondary_button,
+    secondary_button_with_icon, section_title, HEADER_HEIGHT,
 };
 
 /// How long an engine suggestion / grade may take before the screen
@@ -158,6 +184,9 @@ pub enum PracticeSource {
 /// re-encode as PNG. The board in a photo is often sideways —
 /// trying the four orientations is what lets a rotated photo
 /// recognise at all.
+///
+/// Desktop only: the only caller is the desktop recognition path.
+#[cfg(not(target_arch = "wasm32"))]
 fn rotate_image(bytes: &[u8], degrees: u32) -> Option<Vec<u8>> {
     let img = image::load_from_memory(bytes).ok()?;
     let rotated = match degrees {
@@ -179,19 +208,22 @@ fn rotate_image(bytes: &[u8], degrees: u32) -> Option<Vec<u8>> {
 /// `cal` is the board calibration (4 corners + centre pawn) when
 /// the user tapped it; without it the board is estimated from the
 /// detections (best-effort).
+///
+/// Desktop only: the ONNX recognizer does not build for wasm.
+#[cfg(not(target_arch = "wasm32"))]
 fn recognise_orientation(
     bytes: &[u8],
     paths: &xq_recognize::ModelPaths,
     lib: Option<&std::path::Path>,
-    cal: Option<xq_recognize::BoardCalibration>,
-) -> Option<xq_recognize::Grid> {
+    cal: Option<BoardCalibration>,
+) -> Option<Grid> {
     // Physical pipeline (photos of a real board).
-    let physical: Option<xq_recognize::Grid> = (|| {
+    let physical: Option<Grid> = (|| {
         let mut r = xq_recognize::Recognizer::load(paths, lib).ok()?;
         r.recognize_grid(bytes, cal.as_ref()).ok()
     })();
     // Screenshot pipeline (a digital board).
-    let screenshot: Option<xq_recognize::Grid> = (|| {
+    let screenshot: Option<Grid> = (|| {
         let mut r = xq_recognize::screenshot::ScreenshotRecognizer::load(paths, lib).ok()?;
         r.recognize_grid(bytes, cal.as_ref()).ok()
     })();
@@ -230,10 +262,15 @@ fn recognise_orientation(
 /// the detections (best-effort); the editor is the safety net. The
 /// grid may be partial (a general missing or a piece on a wrong
 /// square): the editor holds it as-is and the user fixes it.
+///
+/// Desktop only: the ONNX recognizer does not build for wasm —
+/// the wasm stub below always reports "not recognised", and the
+/// same editor fallback applies.
+#[cfg(not(target_arch = "wasm32"))]
 async fn recognize_board_image(
     bytes: Arc<[u8]>,
-    cal: Option<xq_recognize::BoardCalibration>,
-) -> Result<xq_recognize::Grid, String> {
+    cal: Option<BoardCalibration>,
+) -> Result<Grid, String> {
     let Some(dir) = xq_recognize::find_models_dir() else {
         return Err(i18n::t(Key::PracticeImageNotRecognized).to_string());
     };
@@ -251,7 +288,7 @@ async fn recognize_board_image(
     } else {
         &[0, 90, 180, 270]
     };
-    let mut best: Option<xq_recognize::Grid> = None;
+    let mut best: Option<Grid> = None;
     let mut best_valid = false;
     for degrees in degrees {
         let rotated = match rotate_image(&bytes, *degrees) {
@@ -284,6 +321,64 @@ async fn recognize_board_image(
         }
     }
     best.ok_or_else(|| i18n::t(Key::PracticeImageNotRecognized).to_string())
+}
+
+/// wasm32: photo recognition is unavailable (the ONNX recognizer
+/// does not build for wasm), so every photo reports "not
+/// recognised" — the existing message already points the user at
+/// the board editor below to set the position up by hand.
+#[cfg(target_arch = "wasm32")]
+async fn recognize_board_image(
+    bytes: Arc<[u8]>,
+    cal: Option<BoardCalibration>,
+) -> Result<Grid, String> {
+    let _ = (bytes, cal);
+    Err(i18n::t(Key::PracticeImageNotRecognized).to_string())
+}
+
+/// Read the clipboard image (desktop: `arboard`) and encode it to
+/// PNG, so it feeds the same load path as a picked file. Runs as a
+/// `Task` so a slow clipboard or a big screenshot does not block
+/// the UI.
+///
+/// wasm32: no clipboard access (`arboard` has no wasm target) —
+/// a no-op. The paste button and Ctrl+V are hidden there, so this
+/// is unreachable on wasm; it only exists so `Msg::PasteImage`
+/// keeps compiling.
+#[cfg(not(target_arch = "wasm32"))]
+fn paste_image_task() -> Task<Msg> {
+    Task::perform(
+        async {
+            let png = (|| {
+                let mut clipboard = arboard::Clipboard::new().ok()?;
+                let img = clipboard.get_image().ok()?;
+                let buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                    img.width as u32,
+                    img.height as u32,
+                    img.bytes.into_owned(),
+                )?;
+                let dyn_img = image::DynamicImage::ImageRgba8(buf);
+                let mut png = Vec::new();
+                dyn_img
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .ok()?;
+                Some(png)
+            })();
+            match png {
+                Some(bytes) => Msg::ClipboardImageDone(Some((
+                    i18n::t(Key::PracticeClipboardImageName).to_string(),
+                    Arc::from(bytes.as_slice()),
+                ))),
+                None => Msg::ClipboardImageDone(None),
+            }
+        },
+        |msg| msg,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn paste_image_task() -> Task<Msg> {
+    Task::none()
 }
 
 /// Where the current suggestions came from.
@@ -364,7 +459,7 @@ pub struct State {
     cal_points: Vec<(f32, f32)>,
     /// The calibration applied to the last recognition (kept so a
     /// re-run after editing points reuses it).
-    cal_applied: Option<xq_recognize::BoardCalibration>,
+    cal_applied: Option<BoardCalibration>,
     /// A file is being dragged over the window (setup, image
     /// source): the drop zone highlights until it is dropped or
     /// leaves.
@@ -422,7 +517,13 @@ pub struct State {
     /// move grades (`GradeMove`). Its receiver is bridged to a
     /// subscription (see `subscription()`); the worker itself is
     /// kept so `update` can send requests and allocate `req_id`s.
+    #[cfg(not(target_arch = "wasm32"))]
     worker: AiWorker,
+    /// wasm32 only: the AI worker is the WASM one (Pikafish in a
+    /// Web Worker); the screen keeps the whole worker and pumps it
+    /// from its tick handler.
+    #[cfg(target_arch = "wasm32")]
+    worker: WasmAiWorker,
     /// The worker's response receiver, shared with the bridge
     /// subscription. Taken out of `worker` at construction (see
     /// `State::new`): the bridge's forwarder thread is the
@@ -439,10 +540,12 @@ pub struct State {
     /// Which suggestion row the mouse is over (`None` = none); its
     /// arrow draws at full opacity, the rest at 38% (DESIGN-iced.md §1).
     hover_suggest: Option<usize>,
-    /// Current window size (tracked via `Msg::WindowResized`, seeded
-    /// with the default 1280 × 800): the board's display size comes
+    /// Current window size (forwarded from `App` via
+    /// `Msg::WindowResized`, seeded with the default 1280 × 800 —
+    /// see `App::window`): the board's display size comes
     /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)).
-    window: Size,
+    /// Visible inside the crate for the App forwarding test.
+    pub(crate) window: Size,
 }
 
 /// i18n key for a `Grade` label.
@@ -585,7 +688,7 @@ pub enum Msg {
     /// The background board recognition finished: `Ok(position)` when
     /// a position was read from the photo, `Err(message)` when it
     /// could not be (no model, no pieces, invalid position).
-    ImageRecognized(Result<xq_recognize::Grid, String>),
+    ImageRecognized(Result<Grid, String>),
     /// Enter board calibration: the user taps the photo's 4 board
     /// corners (top-left, top-right, bottom-right, bottom-left) and
     /// the centre pawn, so the grid is mapped exactly instead of
@@ -783,6 +886,9 @@ impl State {
         // field, so it cannot be destructured; swap the receiver out
         // for a dummy channel instead. The worker thread sends its
         // answers to the real receiver; the dummy is never read.
+        #[cfg(target_arch = "wasm32")]
+        let mut worker = WasmAiWorker::new(shared.engine.clone());
+        #[cfg(not(target_arch = "wasm32"))]
         let mut worker = AiWorker::new(shared.engine.clone());
         let (_dummy_tx, dummy_rx) = channel::<AiResponse>();
         let real_rx = std::mem::replace(&mut worker.rx, dummy_rx);
@@ -972,7 +1078,13 @@ impl State {
                             .await;
                         match picked {
                             Some(handle) => {
+                                // wasm32: rfd's web `FileHandle`
+                                // has no path — the file name is all
+                                // there is (the bytes are what matter).
+                                #[cfg(not(target_arch = "wasm32"))]
                                 let path = handle.path().display().to_string();
+                                #[cfg(target_arch = "wasm32")]
+                                let path = handle.file_name();
                                 let bytes: Arc<[u8]> = Arc::from(handle.read().await);
                                 Msg::ImageDialogDone(Some((path, bytes)))
                             }
@@ -1045,7 +1157,7 @@ impl State {
                 if self.cal_points.len() < 5 {
                     return Task::none();
                 }
-                let cal = xq_recognize::BoardCalibration {
+                let cal = BoardCalibration {
                     corners: [
                         self.cal_points[0],
                         self.cal_points[1],
@@ -1099,42 +1211,7 @@ impl State {
                 self.drop_hover = hovering;
                 Task::none()
             }
-            Msg::PasteImage => {
-                // Read the clipboard image (arboard) and encode it
-                // to PNG, so it feeds the same load path as a picked
-                // file. Runs as a `Task` so a slow clipboard or a
-                // big screenshot does not block the UI.
-                Task::perform(
-                    async {
-                        let png = (|| {
-                            let mut clipboard = arboard::Clipboard::new().ok()?;
-                            let img = clipboard.get_image().ok()?;
-                            let buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
-                                img.width as u32,
-                                img.height as u32,
-                                img.bytes.into_owned(),
-                            )?;
-                            let dyn_img = image::DynamicImage::ImageRgba8(buf);
-                            let mut png = Vec::new();
-                            dyn_img
-                                .write_to(
-                                    &mut std::io::Cursor::new(&mut png),
-                                    image::ImageFormat::Png,
-                                )
-                                .ok()?;
-                            Some(png)
-                        })();
-                        match png {
-                            Some(bytes) => Msg::ClipboardImageDone(Some((
-                                i18n::t(Key::PracticeClipboardImageName).to_string(),
-                                Arc::from(bytes.as_slice()),
-                            ))),
-                            None => Msg::ClipboardImageDone(None),
-                        }
-                    },
-                    |msg| msg,
-                )
-            }
+            Msg::PasteImage => paste_image_task(),
             Msg::EditorPaletteSelected(piece) => {
                 self.editor_selected = piece;
                 Task::none()
@@ -1206,6 +1283,37 @@ impl State {
                     self.maybe_suggest(shared, now);
                 }
                 self.check_timeouts(now);
+                // wasm32: no worker thread and no bridge — the tick
+                // pumps the worker synchronously and drains its
+                // answers into the normal `Msg::AiAnalysis` /
+                // `Msg::AiGraded` handling.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.worker.pump();
+                    for resp in self.drain_ai_responses() {
+                        match resp {
+                            AiResponse::Analysis { req_id, lines } => {
+                                let _ = self.update(Msg::AiAnalysis { req_id, lines }, shared);
+                            }
+                            AiResponse::Graded {
+                                req_id,
+                                grade,
+                                best,
+                                ..
+                            } => {
+                                let _ = self.update(
+                                    Msg::AiGraded {
+                                        req_id,
+                                        grade,
+                                        best,
+                                    },
+                                    shared,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Task::none()
             }
             Msg::ChessDbEvaluated { req_id, result } => {
@@ -1740,7 +1848,7 @@ impl State {
     /// square): the editor holds it as-is and the user fixes it
     /// before starting the game. The side to move defaults to Red
     /// — the user picks it in the recognised step.
-    fn editor_from_grid(&mut self, grid: &xq_recognize::Grid) {
+    fn editor_from_grid(&mut self, grid: &Grid) {
         self.editor_board = [None; 90];
         for (r, row) in grid.iter().enumerate() {
             for (c, piece) in row.iter().enumerate() {
@@ -1985,8 +2093,11 @@ impl State {
         )
         .width(Length::Fill)
         .height(Length::Fixed(56.0))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        // NOTE: `align_*`, not `center_*(Length::Fill)` — the latter
+        // would overwrite the Fixed 56 px height with Fill (same
+        // pitfall as `piece_disc` in home.rs, Hieu 2026-11-26).
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
         .style(move |_: &Theme| container::Style {
             background: Some(iced::Background::Color(if hover {
                 theme::SURFACE2
@@ -2008,12 +2119,23 @@ impl State {
     /// is not displayed — see the module docs), and set the position
     /// up by hand in the board editor below.
     fn view_setup_image(&self) -> Element<'_, Msg> {
+        // wasm32: no clipboard paste (`arboard` has no wasm
+        // target) — the paste button is hidden there.
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut buttons = row![primary_button(
+            i18n::t(Key::PracticePickImage),
+            Msg::PickImage
+        )]
+        .spacing(8);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            buttons = buttons.push(secondary_button(
+                i18n::t(Key::PracticePasteImage),
+                Msg::PasteImage,
+            ));
+        }
         let mut col = column![
-            row![
-                primary_button(i18n::t(Key::PracticePickImage), Msg::PickImage),
-                secondary_button(i18n::t(Key::PracticePasteImage), Msg::PasteImage),
-            ]
-            .spacing(8),
+            buttons,
             // Drop zone: dropping an image file anywhere on the
             // window loads it; the zone highlights (gold border)
             // while a file hovers.
@@ -2295,10 +2417,6 @@ impl State {
         // (No eval bar: Hieu 2026-11-13 asked to remove the colour
         // bar at the far left; the advantage chip in the panel still
         // shows the score.)
-        let content = row![board_el, self.view_panel(shared, &pos, lines_current)]
-            .spacing(SPACE_24)
-            .width(Length::Fill)
-            .align_y(iced::Alignment::Start);
         // Header (same 64 px surface bar as Play / Learn): "Quay
         // lại" goes to the menu, like the other two modes. Going back
         // to the setup phase lives in the panel (BackToSetup), not
@@ -2336,6 +2454,42 @@ impl State {
             ..Default::default()
         })
         .align_y(iced::Alignment::Center);
+        if is_narrow(self.window) {
+            // Stacked (mobile): board on top, panel below,
+            // scrolling vertically — same reason as Play.
+            return scrollable(
+                column![
+                    header,
+                    header_divider(),
+                    container(board_el)
+                        .padding(iced::Padding {
+                            top: SPACE_16,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
+                        .width(Length::Fill)
+                        .center_x(Length::Fill),
+                    container(self.view_panel(shared, &pos, lines_current))
+                        .padding(iced::Padding {
+                            top: 0.0,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
+                        .width(Length::Fill),
+                ]
+                .spacing(0)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+        let content = row![board_el, self.view_panel(shared, &pos, lines_current)]
+            .spacing(SPACE_24)
+            .width(Length::Fill)
+            .align_y(iced::Alignment::Start);
         column![
             header,
             header_divider(),
@@ -2630,10 +2784,14 @@ impl State {
             }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 // Cross-platform paste: Cmd+V on macOS, Ctrl+V elsewhere.
+                // wasm32: no clipboard paste — the key is ignored.
                 if modifiers.command()
                     && matches!(&key, iced::keyboard::Key::Character(c) if c.as_str() == "v")
                 {
-                    Some(Msg::PasteImage)
+                    #[cfg(target_arch = "wasm32")]
+                    return None;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    return Some(Msg::PasteImage);
                 } else {
                     None
                 }
@@ -2656,11 +2814,14 @@ impl State {
                         Msg::ChessDbEvaluated { req_id, result }
                     }
                 }),
-            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
             // File drops onto the window + Ctrl+V clipboard paste
             // (setup, image source): the drop zone and the paste
             // button share this stream.
             iced::event::listen_with(Self::window_event_to_msg),
+            // wasm32: no AI bridge — its forwarder thread panics on
+            // wasm; the tick below pumps the worker and drains the
+            // answers instead (see `Msg::Tick`).
+            #[cfg(not(target_arch = "wasm32"))]
             bridge::from_mpsc("practice-ai", Arc::clone(&self.ai_rx)).filter_map(|resp| {
                 match resp {
                     AiResponse::Analysis { req_id, lines } => {
@@ -2684,11 +2845,47 @@ impl State {
         // The halo keeps pulsing while the check stands (Hieu,
         // 2026-11-19) — the old 1 s window froze it before the
         // next move was calculated.
-        let ticking = self.board.is_animating() || self.game.pos.in_check(self.game.pos.side());
+        let ticking = self.board.is_animating()
+            || self.game.pos.in_check(self.game.pos.side())
+            || self.ai_work_pending_wasm();
         if ticking {
+            // `iced::time::every` yields `wasmtimer::std::Instant` — the
+            // same type the screens keep (`crate::time::Instant`),
+            // so the tick instant passes straight through.
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
+    }
+
+    /// wasm32 only: a hint analysis or a grade may be outstanding
+    /// (request sent, pump not run yet). The tick is what pumps the
+    /// worker and drains the answers, so it must stay alive while a
+    /// request is in flight. Desktop always returns `false`
+    /// (answers arrive via the bridge, not the tick).
+    #[cfg(target_arch = "wasm32")]
+    fn ai_work_pending_wasm(&self) -> bool {
+        self.suggest_req_id.is_some() || self.grade_req_id.is_some()
+    }
+
+    /// Desktop: see `ai_work_pending_wasm` (wasm only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ai_work_pending_wasm(&self) -> bool {
+        false
+    }
+
+    /// wasm32 only: drain the AI worker's answers (already pumped
+    /// by `worker.pump`) without holding the lock while handling
+    /// them.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_ai_responses(&self) -> Vec<AiResponse> {
+        let Ok(rx) = self.ai_rx.lock() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Ok(resp) = rx.try_recv() {
+            out.push(resp);
+        }
+        out
     }
 }
 
@@ -3000,7 +3197,7 @@ mod tests {
         let pos = startpos();
         // The recognised grid for the start position (grid row 0
         // is the top = rank 9).
-        let mut grid: xq_recognize::Grid = [[None; 9]; 10];
+        let mut grid: Grid = [[None; 9]; 10];
         for sq in 0..90u8 {
             if let Some(piece) = pos.piece_at(sq) {
                 let file = (sq % 9) as usize;
@@ -3176,7 +3373,7 @@ mod tests {
         // mark it recognised, choose Black to move, and start the
         // game: the game must start with Black to move.
         let pos = startpos();
-        let mut grid: xq_recognize::Grid = [[None; 9]; 10];
+        let mut grid: Grid = [[None; 9]; 10];
         for sq in 0..90u8 {
             if let Some(piece) = pos.piece_at(sq) {
                 let file = (sq % 9) as usize;

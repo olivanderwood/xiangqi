@@ -56,10 +56,11 @@
 //! The start and result dialogs are screen-local overlays built
 //! with `Stack` (Iced 0.14 has no modal dialog).
 
+use crate::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use iced::widget::{column, container, mouse_area, row, scrollable, text, toggler, Column, Stack};
 use iced::{
@@ -78,9 +79,14 @@ use xq_core::types::{Color, Move};
 use xq_engine::{Engine, EngineRequest, Level, Line, Score, StopHandle, Weaken};
 use xq_pikafish::{pick_weighted, GameRng, DIVERSITY_MARGIN_CP, DIVERSITY_PLIES};
 
-use crate::ai_worker::{response_is_current, AiRequest, AiResponse, AiWorker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ai_worker::AiWorker;
+#[cfg(target_arch = "wasm32")]
+use crate::ai_worker::WasmAiWorker;
+use crate::ai_worker::{response_is_current, AiRequest, AiResponse};
 use crate::app::{Screen, Shared};
 use crate::board::{Arrow, BoardMsg, BoardProgram, BoardRender, BoardState, Geom, Square};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::bridge;
 use crate::chessdb_panel::{ChessDbPanel, ChessDbPanelMsg};
 use crate::chessdb_worker::ChessDbResponse;
@@ -96,7 +102,7 @@ use crate::theme::{
 };
 use crate::widgets::{
     advantage_chip, board_size_for_window, card, danger_button_with_icon, ghost_button_with_icon,
-    header_divider, primary_button, primary_button_with_icon, secondary_button,
+    header_divider, is_narrow, primary_button, primary_button_with_icon, secondary_button,
     secondary_button_with_icon, side_card, status_chip, HEADER_HEIGHT,
 };
 
@@ -403,12 +409,20 @@ pub struct State {
     ai_rx: Arc<Mutex<Receiver<AiResponse>>>,
     ai_stop: StopHandle,
     next_req_id: u64,
+    /// wasm32 only: the Pikafish-WASM driver (no worker thread
+    /// there). Taken out of the worker at construction; the tick
+    /// handler pumps it and drains `ai_rx` (see `subscription`).
+    #[cfg(target_arch = "wasm32")]
+    ai_pump: crate::ai_worker::WasmEngineDriver,
     chessdb: ChessDbPanel,
-    /// Current window size (tracked via `Msg::WindowResized`, seeded
-    /// with the default 1280 × 800): the board's display size comes
+    /// Current window size (forwarded from `App` via
+    /// `Msg::WindowResized`, seeded with the default 1280 × 800 —
+    /// see `App::window`): the board's display size comes
     /// from it ([`board_size_for_window`](crate::widgets::board_size_for_window)),
-    /// so the board shrinks with the window instead of overflowing.
-    window: Size,
+    /// and it decides the narrow layout, so the board shrinks with
+    /// the window instead of overflowing. Visible inside the crate
+    /// for the App forwarding test.
+    pub(crate) window: Size,
 }
 
 #[derive(Debug, Clone)]
@@ -502,7 +516,19 @@ impl State {
     /// `EngineEvent::Unavailable`) says so.
     #[must_use]
     pub fn new(shared: &Shared) -> Self {
+        // wasm32: the AI worker is the WASM one (Pikafish in a Web
+        // Worker); desktop keeps the thread worker.
+        #[cfg(target_arch = "wasm32")]
+        let mut worker = WasmAiWorker::new(shared.engine.clone());
+        #[cfg(not(target_arch = "wasm32"))]
         let worker = AiWorker::new(shared.engine.clone());
+        // wasm32: take the driver out FIRST (before the channels
+        // are moved out of the worker below — a partial move would
+        // make the worker unusable).
+        #[cfg(target_arch = "wasm32")]
+        let ai_pump = worker
+            .take_driver()
+            .expect("wasm worker always carries a driver");
         // Move the worker's channels out for the bridge (see
         // `bridge.rs`: the forwarder thread is the receiver's only
         // consumer while bridged). `AiWorker` has no `Drop`, so
@@ -580,6 +606,8 @@ impl State {
             ai_rx,
             ai_stop,
             next_req_id,
+            #[cfg(target_arch = "wasm32")]
+            ai_pump,
             chessdb: ChessDbPanel::new(true, "chessdb-play"),
             window: Size::new(1280.0, 800.0),
         }
@@ -610,6 +638,27 @@ impl State {
                 self.check_focus_timeout(now);
                 self.trigger_work(shared);
                 self.check_engine_fallback(shared);
+                // wasm32: no worker thread and no bridge — the tick
+                // pumps the worker synchronously and drains its
+                // answers into the normal `Msg::Ai` handling below.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.ai_pump.pump();
+                    // The WASM engine becomes ready once the worker
+                    // finishes its handshake (after the 51.6 MB
+                    // `.data` download); surface a fallback banner
+                    // if it failed and the builtin took over.
+                    if self.ai_pump.is_ready() && !self.engine_ready {
+                        self.engine_ready = true;
+                        self.engine_banner = None;
+                        shared.engine_name = self.ai_pump.engine_name();
+                    } else if let Some(notice) = self.ai_pump.take_fallback_notice() {
+                        self.engine_banner = Some(notice);
+                    }
+                    for resp in self.drain_ai_responses() {
+                        let _ = self.update(ai_bridge_msg(resp), shared);
+                    }
+                }
                 Task::none()
             }
             Msg::Ai(ev) => {
@@ -803,18 +852,61 @@ impl State {
     /// `Msg::EngineInstalled` / `Msg::EngineUnavailable`.)
     pub fn subscription(&self) -> Subscription<Msg> {
         let mut subs = vec![
+            // wasm32: no AI bridge — its forwarder thread panics on
+            // wasm; the tick below pumps the worker and drains the
+            // answers instead (see `Msg::Tick`).
+            #[cfg(not(target_arch = "wasm32"))]
             bridge::from_mpsc("ai", Arc::clone(&self.ai_rx)).map(ai_bridge_msg),
             self.chessdb.subscription().map(chessdb_bridge_msg),
-            iced::window::resize_events().map(|(_id, size)| Msg::WindowResized(size)),
         ];
         if self.board.is_animating()
             || self.check_flash_active()
             || self.ai_move_pending()
             || self.focus_clock_running()
+            || self.ai_work_pending_wasm()
         {
+            // `iced::time::every` yields `wasmtimer::std::Instant` — the
+            // same type the screens keep (`crate::time::Instant`),
+            // so the tick instant passes straight through.
             subs.push(iced::time::every(TICK_INTERVAL).map(Msg::Tick));
         }
         Subscription::batch(subs)
+    }
+
+    /// wasm32 only: an AI answer may be outstanding (request sent,
+    /// pump not run yet). The tick is what pumps the worker and
+    /// drains the answers, so it must stay alive while any request
+    /// is in flight. Desktop always returns `false` (answers arrive
+    /// via the bridge, not the tick).
+    #[cfg(target_arch = "wasm32")]
+    fn ai_work_pending_wasm(&self) -> bool {
+        self.ai_thinking
+            || self.ai_req_id.is_some()
+            || self.diverse_req_id.is_some()
+            || self.hint_req_id.is_some()
+            || self.grade_req_id.is_some()
+            || self.eval_req_id.is_some()
+    }
+
+    /// Desktop: see `ai_work_pending_wasm` (wasm only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ai_work_pending_wasm(&self) -> bool {
+        false
+    }
+
+    /// wasm32 only: drain the AI worker's answers (already pumped
+    /// by `ai_pump.pump`) without holding the lock while handling
+    /// them.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_ai_responses(&self) -> Vec<AiResponse> {
+        let Ok(rx) = self.ai_rx.lock() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Ok(resp) = rx.try_recv() {
+            out.push(resp);
+        }
+        out
     }
 
     // ------------------------------------------------------------------
@@ -2176,6 +2268,43 @@ impl State {
     fn view_base<'a>(&'a self, shared: &'a Shared) -> Element<'a, Msg> {
         let display_pos = self.display_pos();
         let board_size = board_size_for_window(self.window);
+        let board_el = container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
+            .width(Length::Fixed(board_size.width))
+            .height(Length::Fixed(board_size.height));
+        if is_narrow(self.window) {
+            // Stacked (mobile): the board on top and the panel
+            // below it, scrolling vertically. The side-by-side row
+            // would shrink the board to ~1 px at a 390 px phone
+            // width (Hieu, 2026-11-26: responsive vỡ trên mobile).
+            return scrollable(
+                column![
+                    self.header(shared),
+                    header_divider(),
+                    container(board_el)
+                        .padding(iced::Padding {
+                            top: SPACE_16,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
+                        .width(Length::Fill)
+                        .center_x(Length::Fill),
+                    container(self.panel(shared, &display_pos))
+                        .padding(iced::Padding {
+                            top: 0.0,
+                            right: SPACE_24,
+                            bottom: SPACE_16,
+                            left: SPACE_24,
+                        })
+                        .width(Length::Fill),
+                ]
+                .spacing(0)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
         // Header (64) + divider (1) + content (16 px vertical
         // padding + the board height) add up to exactly the window
         // height — the board never overflows at the 1100 × 720
@@ -2187,15 +2316,10 @@ impl State {
             self.header(shared),
             header_divider(),
             container(
-                row![
-                    container(BoardProgram::canvas(self.board_render()).map(Msg::Board))
-                        .width(Length::Fixed(board_size.width))
-                        .height(Length::Fixed(board_size.height)),
-                    self.panel(shared, &display_pos),
-                ]
-                .spacing(SPACE_24)
-                .width(Length::Fill)
-                .height(Length::Fill),
+                row![board_el, self.panel(shared, &display_pos),]
+                    .spacing(SPACE_24)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
             )
             .padding(iced::Padding {
                 top: SPACE_16,
@@ -2236,42 +2360,45 @@ impl State {
             Some(book) => book.lesson_name.clone(),
             None => i18n::t(Key::PlayVsAi).to_string(),
         };
-        container(
-            row![
-                ghost_button_with_icon(
-                    i18n::t(Key::BackToMenu),
-                    Icon::ArrowLeft,
-                    Msg::Navigate(Screen::Home)
-                ),
-                text(title)
-                    .size(FONT_SCREEN_TITLE)
-                    .font(theme::inter_font_semibold())
-                    .width(Length::Fill),
-                status_chip(level, None, TEXT_DIM),
-                status_chip(engine_label, engine_dot, TEXT_DIM),
-                ghost_button_with_icon(
-                    i18n::t(Key::Settings),
-                    Icon::SlidersHorizontal,
-                    Msg::ShowSettings
-                ),
-            ]
-            .spacing(SPACE_16)
-            .align_y(Alignment::Center),
-        )
-        .padding(iced::Padding {
-            top: 0.0,
-            right: SPACE_24,
-            bottom: 0.0,
-            left: SPACE_24,
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(HEADER_HEIGHT))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::SURFACE)),
-            ..Default::default()
-        })
-        .align_y(Alignment::Center)
-        .into()
+        // Narrow (mobile): the two status chips do not fit beside
+        // the title and the buttons at 390 px, so they are left
+        // out — the panel below the board shows the same difficulty
+        // and engine status.
+        let mut header_row = row![
+            ghost_button_with_icon(
+                i18n::t(Key::BackToMenu),
+                Icon::ArrowLeft,
+                Msg::Navigate(Screen::Home)
+            ),
+            text(title)
+                .size(FONT_SCREEN_TITLE)
+                .font(theme::inter_font_semibold())
+                .width(Length::Fill),
+        ];
+        if !is_narrow(self.window) {
+            header_row = header_row.push(status_chip(level, None, TEXT_DIM));
+            header_row = header_row.push(status_chip(engine_label, engine_dot, TEXT_DIM));
+        }
+        header_row = header_row.push(ghost_button_with_icon(
+            i18n::t(Key::Settings),
+            Icon::SlidersHorizontal,
+            Msg::ShowSettings,
+        ));
+        container(header_row.spacing(SPACE_16).align_y(Alignment::Center))
+            .padding(iced::Padding {
+                top: 0.0,
+                right: SPACE_24,
+                bottom: 0.0,
+                left: SPACE_24,
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(HEADER_HEIGHT))
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(theme::SURFACE)),
+                ..Default::default()
+            })
+            .align_y(Alignment::Center)
+            .into()
     }
 
     /// Everything the canvas program needs to draw one frame.

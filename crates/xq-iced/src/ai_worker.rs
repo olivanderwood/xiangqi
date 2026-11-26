@@ -16,11 +16,17 @@
 //!   and drops every response whose `req_id` does not match
 //!   (`response_is_current`). This is what makes Undo-while-thinking safe.
 
+#[cfg(target_arch = "wasm32")]
+use crate::engine_wasm::{WasmEngine, WasmEngineError, WasmEngineEvent};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use xq_core::analysis::tags_with_mate;
+#[cfg(target_arch = "wasm32")]
+use xq_core::analysis::GradeThresholds;
 use xq_core::analysis::{explain_tags, grade_from_delta_with, tags_for, Grade};
 use xq_core::search::AnalysisLine;
+#[cfg(target_arch = "wasm32")]
+use xq_engine::SearchLimits;
 use xq_engine::{
     BuiltinEngine, Engine, EngineError, EngineRequest, Line, SharedEngine, StopHandle,
 };
@@ -126,6 +132,9 @@ fn to_analysis_line(pos: &xq_core::board::Position, line: &Line) -> AnalysisLine
 }
 
 /// A fixed worker thread driving one shared engine.
+/// (On wasm the screens use [`WasmAiWorker`] instead, so this
+/// struct is unconstructed there.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct AiWorker {
     pub tx: Sender<AiRequest>,
     pub rx: Receiver<AiResponse>,
@@ -146,6 +155,8 @@ pub struct AiWorker {
 
 /// Swap the shared engine for the builtin one (once) and record why, so
 /// the UI can show a banner. A no-op when the engine is already builtin.
+/// Desktop only: the wasm worker answers failures with its own builtin.
+#[cfg(not(target_arch = "wasm32"))]
 fn swap_to_builtin(
     engine: &SharedEngine,
     notice: &std::sync::Arc<Mutex<Option<String>>>,
@@ -203,6 +214,8 @@ fn run_best_move_on(
 }
 
 /// Run one best-move request against the shared engine.
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn run_best_move(
     engine: &SharedEngine,
     req: &EngineRequest,
@@ -236,6 +249,8 @@ fn run_analyze_on(
 }
 
 /// Run one analysis request against the shared engine.
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn run_analyze(
     engine: &SharedEngine,
     req: &EngineRequest,
@@ -285,6 +300,8 @@ fn run_grade_on(
 }
 
 /// Run one grade request against the shared engine.
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn run_grade(
     engine: &SharedEngine,
     start_fen: &str,
@@ -298,6 +315,8 @@ fn run_grade(
 }
 
 /// What to do after an engine error (§7.3).
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 enum Fallback {
     /// Do nothing (user cancelled).
     None,
@@ -309,6 +328,8 @@ enum Fallback {
 
 /// Run `f` on the one-off builtin engine (created lazily, level synced
 /// to the shared engine's level) for a single illegal-move fallback.
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn retry_one_off(
     engine: &SharedEngine,
     one_off: &mut Option<BuiltinEngine>,
@@ -323,6 +344,8 @@ fn retry_one_off(
 }
 
 /// Fallback policy for an engine error (§7.3).
+/// Desktop only (see `swap_to_builtin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn fallback_action(
     e: &EngineError,
     engine: &SharedEngine,
@@ -347,7 +370,645 @@ fn fallback_action(
     }
 }
 
+/// Run one worker request against the shared engine, applying the
+/// §7.3 fallback policy on error (desktop worker thread only — the
+/// wasm worker answers failures with its own builtin, see
+/// [`WasmAiWorker`]).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn handle_request(
+    req: AiRequest,
+    engine: &SharedEngine,
+    res_tx: &Sender<AiResponse>,
+    one_off: &mut Option<BuiltinEngine>,
+    illegal_count: &mut u32,
+    notice: &std::sync::Arc<Mutex<Option<String>>>,
+    stop: &StopHandle,
+) {
+    match req {
+        AiRequest::BestMove { req, req_id } => {
+            let result = run_best_move(engine, &req, req_id, res_tx);
+            if let Err(e) = result {
+                let action = fallback_action(&e, engine, notice, illegal_count);
+                match action {
+                    Fallback::None => {}
+                    Fallback::RetryShared => {
+                        let _ = run_best_move(engine, &req, req_id, res_tx);
+                    }
+                    Fallback::RetryOneOff => {
+                        retry_one_off(engine, one_off, |fb| {
+                            let _ = run_best_move_on(fb, &req, req_id, res_tx);
+                        });
+                    }
+                }
+            }
+        }
+        AiRequest::Analyze { req, top_n, req_id } => {
+            let result = run_analyze(engine, &req, top_n, req_id, res_tx);
+            if let Err(e) = result {
+                let action = fallback_action(&e, engine, notice, illegal_count);
+                match action {
+                    Fallback::None => {}
+                    Fallback::RetryShared => {
+                        let _ = run_analyze(engine, &req, top_n, req_id, res_tx);
+                    }
+                    Fallback::RetryOneOff => {
+                        retry_one_off(engine, one_off, |fb| {
+                            let _ = run_analyze_on(fb, &req, top_n, req_id, res_tx);
+                        });
+                    }
+                }
+            }
+        }
+        AiRequest::GradeMove {
+            start_fen,
+            moves,
+            mv,
+            req_id,
+        } => {
+            let result = run_grade(engine, &start_fen, &moves, mv, req_id, res_tx);
+            if let Err(e) = result {
+                let action = fallback_action(&e, engine, notice, illegal_count);
+                match action {
+                    Fallback::None => {}
+                    Fallback::RetryShared => {
+                        let _ = run_grade(engine, &start_fen, &moves, mv, req_id, res_tx);
+                    }
+                    Fallback::RetryOneOff => {
+                        retry_one_off(engine, one_off, |fb| {
+                            let _ = run_grade_on(fb, &start_fen, &moves, mv, req_id, res_tx);
+                        });
+                    }
+                }
+            }
+        }
+        AiRequest::Stop => {
+            stop.stop();
+        }
+    }
+}
+
+/// Drain queued requests, keeping only the latest; a Stop queued
+/// between searches still takes effect. A BestMove is the AI's move,
+/// not best-effort work: it must be answered or the game stalls on
+/// "máy đang nghĩ" (Hieu, 2026-11-14), so a later hint/grade never
+/// drops it — only a newer BestMove replaces one.
+#[cfg(not(target_arch = "wasm32"))]
+fn drain_queue(req_rx: &Receiver<AiRequest>, pending: &mut Option<AiRequest>, stop: &StopHandle) {
+    while let Ok(q) = req_rx.try_recv() {
+        match q {
+            AiRequest::Stop => stop.stop(),
+            other => {
+                let pending_is_best = matches!(pending, Some(AiRequest::BestMove { .. }));
+                let new_is_best = matches!(other, AiRequest::BestMove { .. });
+                if !pending_is_best || new_is_best {
+                    *pending = Some(other);
+                }
+            }
+        }
+    }
+}
+
+/// wasm32 only: the AI worker without a thread.
+///
+/// `std::thread::spawn` panics on `wasm32-unknown-unknown` without
+/// atomics/shared-memory, and the app has no COOP/COEP setup for
+/// that — so on wasm there is no worker thread at all. The engine is
+/// Pikafish-WASM, running in a Web Worker behind
+/// [`WasmEngine`](crate::engine_wasm::WasmEngine) (see
+/// `assets/engine-wasm/INTEGRATION.md`); this struct is the
+/// channel-shaped front end the screens already know from
+/// [`AiWorker`] — same [`AiRequest`]/[`AiResponse`] types, same
+/// `req_id` discipline (`response_is_current`), same `tx` / `rx` /
+/// `stop` / `alloc_req_id` surface.
+///
+/// Shape: the screens take the channels out of the worker at
+/// construction (like the desktop worker) and keep the driver
+/// ([`WasmEngineDriver`], taken out with [`WasmAiWorker::take_driver`])
+/// — Play/Learn — or keep the whole worker and call
+/// [`WasmAiWorker::pump`] from their tick handler — Practice. The
+/// driver is pumped from the tick: it forwards at most one queued
+/// request to the engine, drains the engine's events into `rx`, and
+/// answers a failed request with the builtin engine so the game
+/// never stalls on "máy đang nghĩ".
+///
+/// Two-step grading (`GradeMove`): best move first, then the played
+/// move's score via `searchmoves` — the two searches share one
+/// `req_id`, and the grade is computed with the Pikafish thresholds
+/// (`GradeThresholds::PIKAFISH`), exactly like the desktop worker's
+/// `run_grade_on` with a Pikafish engine.
+///
+/// Known spike trade-off: while the 51.6 MB `.data` file is still
+/// downloading the engine is not ready, so requests wait in
+/// `pending` (retried every tick) instead of being answered — the
+/// first AI move of a session waits for the download.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmAiWorker {
+    pub tx: Sender<AiRequest>,
+    pub rx: Receiver<AiResponse>,
+    /// Stop handle sharing the shared engine's flag (same contract
+    /// as [`AiWorker::stop`]).
+    pub stop: StopHandle,
+    pub next_req_id: u64,
+    /// Taken out by Play/Learn at construction (`take_driver`); the
+    /// Practice screen keeps the whole worker and pumps in place.
+    driver: Option<WasmEngineDriver>,
+}
+
+/// What the WASM driver is waiting on (one search at a time — the
+/// worker rejects a second `go` with `engine busy`). The request is
+/// kept so a worker error can be answered with the builtin engine
+/// instead of stalling the game.
+#[cfg(target_arch = "wasm32")]
+enum InFlight {
+    BestMove {
+        req: EngineRequest,
+        req_id: u64,
+    },
+    Analyze {
+        req: EngineRequest,
+        top_n: usize,
+        req_id: u64,
+    },
+    /// Grading is two searches with one `req_id`: `best` is `None`
+    /// while the best move is being searched, `Some((best, score))`
+    /// while the played move is being scored.
+    Grade {
+        req: EngineRequest,
+        mv: xq_core::types::Move,
+        best: Option<(xq_core::types::Move, i32)>,
+        req_id: u64,
+    },
+}
+
+#[cfg(target_arch = "wasm32")]
+impl InFlight {
+    /// Rebuild the [`AiRequest`] this in-flight search answers, so
+    /// a worker error can fall back to the builtin engine.
+    fn into_request(self) -> AiRequest {
+        match self {
+            InFlight::BestMove { req, req_id } => AiRequest::BestMove { req, req_id },
+            InFlight::Analyze { req, top_n, req_id } => AiRequest::Analyze { req, top_n, req_id },
+            InFlight::Grade {
+                req, mv, req_id, ..
+            } => AiRequest::GradeMove {
+                start_fen: req.start_fen.clone(),
+                moves: req.moves.clone(),
+                mv,
+                req_id,
+            },
+        }
+    }
+}
+
+/// wasm32 only: the pump behind [`WasmAiWorker`]. Owns the
+/// [`WasmEngine`] plus the channel ends the screens moved out of the
+/// worker. The engine starts LAZILY: `engine` stays `None` until the
+/// first AI request arrives (`dispatch` → `ensure_started`), so
+/// merely opening a screen — the Play setup dialog, a lesson list —
+/// never loads the 51.6 MB `.data` file. On iPhone Safari that load,
+/// on top of the 57.6 MB app WASM, killed the tab the moment the
+/// user tapped "Đấu với AI" (Hieu, 2026-11-26: the tab reloaded to
+/// Home, then "A problem repeatedly occurred"). `None` + `dead`
+/// still means the worker failed and every request goes to the
+/// builtin; `None` + `!started` just means nothing asked yet.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmEngineDriver {
+    engine: Option<WasmEngine>,
+    /// `true` once the worker spawn was attempted (success or
+    /// failure — see `ensure_started`).
+    started: bool,
+    req_rx: Receiver<AiRequest>,
+    res_tx: Sender<AiResponse>,
+    stop: StopHandle,
+    /// One-off builtin for error fallbacks (level synced to the
+    /// shared engine at construction).
+    fallback: BuiltinEngine,
+    notice: std::sync::Arc<Mutex<Option<String>>>,
+    pending: Option<AiRequest>,
+    in_flight: Option<InFlight>,
+    /// The worker died at startup (`Error` with no `req_id`): all
+    /// later requests go straight to the builtin.
+    dead: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmEngineDriver {
+    /// Whether the worker finished the `uci` + `isready` handshake.
+    /// `false` when there is no engine at all.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.engine.as_ref().is_some_and(WasmEngine::is_ready)
+    }
+
+    /// The engine's `id name` line once ready (empty before that).
+    #[must_use]
+    pub fn engine_name(&self) -> String {
+        self.engine
+            .as_ref()
+            .map_or_else(String::new, WasmEngine::name)
+    }
+
+    /// Take the fallback notice, if the WASM engine failed and the
+    /// builtin took over. The UI shows it as a banner once.
+    pub fn take_fallback_notice(&self) -> Option<String> {
+        self.notice.lock().expect("notice lock").take()
+    }
+
+    fn set_notice_once(&self, message: String) {
+        let mut slot = self.notice.lock().expect("notice lock");
+        if slot.is_none() {
+            *slot = Some(message);
+        }
+    }
+
+    /// Pump once from the screens' tick handler: forward at most one
+    /// queued request to the engine and drain its events into `rx`.
+    /// Never blocks — a request the engine is not ready for stays
+    /// queued for the next tick.
+    pub fn pump(&mut self) {
+        // Drain queued requests, keeping only the latest (same rule
+        // as `drain_queue`); a Stop also stops the WASM search at
+        // once, instead of queueing behind the running search.
+        while let Ok(q) = self.req_rx.try_recv() {
+            match q {
+                AiRequest::Stop => {
+                    self.stop.stop();
+                    if let Some(engine) = &self.engine {
+                        let _ = engine.stop();
+                    }
+                }
+                other => {
+                    let pending_is_best = matches!(self.pending, Some(AiRequest::BestMove { .. }));
+                    let new_is_best = matches!(other, AiRequest::BestMove { .. });
+                    if !pending_is_best || new_is_best {
+                        self.pending = Some(other);
+                    }
+                }
+            }
+        }
+        if self.in_flight.is_none() {
+            if let Some(req) = self.pending.take() {
+                self.dispatch(req);
+            }
+        }
+        loop {
+            let Some(ev) = self.engine.as_ref().and_then(WasmEngine::try_recv) else {
+                break;
+            };
+            self.handle_event(ev);
+        }
+    }
+
+    /// Spawn the worker on the first AI request (lazy start — see the
+    /// struct doc). A no-op after the first attempt; a failed spawn
+    /// marks the driver dead and sets the fallback notice once, so
+    /// the request falls through to the builtin below.
+    fn ensure_started(&mut self) {
+        if self.started || self.dead {
+            return;
+        }
+        self.started = true;
+        match WasmEngine::new("engine-wasm/pikafish-worker.js") {
+            Ok(engine) => self.engine = Some(engine),
+            Err(e) => {
+                self.dead = true;
+                self.set_notice_once(format!(
+                    "Không chạy được Pikafish-WASM ({e:?}), đang dùng AI tích hợp"
+                ));
+            }
+        }
+    }
+
+    /// Send one request to the engine (or answer it with the builtin
+    /// when there is no engine / the worker is dead / the send
+    /// fails). A request sent while the engine is not ready yet is
+    /// re-queued for the next tick.
+    fn dispatch(&mut self, req: AiRequest) {
+        self.ensure_started();
+        if self.engine.is_none() || self.dead {
+            self.answer_with_builtin(req);
+            return;
+        }
+        let engine = self.engine.as_ref().expect("engine present");
+        match req {
+            AiRequest::BestMove { req, req_id } => match engine.request_best_move(&req, req_id) {
+                Ok(()) => {
+                    self.in_flight = Some(InFlight::BestMove { req, req_id });
+                }
+                Err(WasmEngineError::NotReady) => {
+                    self.pending = Some(AiRequest::BestMove { req, req_id });
+                }
+                Err(_) => self.answer_with_builtin(AiRequest::BestMove { req, req_id }),
+            },
+            AiRequest::Analyze { req, top_n, req_id } => {
+                match engine.request_analyze(&req, top_n, req_id) {
+                    Ok(()) => {
+                        self.in_flight = Some(InFlight::Analyze { req, top_n, req_id });
+                    }
+                    Err(WasmEngineError::NotReady) => {
+                        self.pending = Some(AiRequest::Analyze { req, top_n, req_id });
+                    }
+                    Err(_) => {
+                        self.answer_with_builtin(AiRequest::Analyze { req, top_n, req_id });
+                    }
+                }
+            }
+            AiRequest::GradeMove {
+                start_fen,
+                moves,
+                mv,
+                req_id,
+            } => {
+                // Desktop Pikafish grades with `time_ms(1500)`
+                // (`PikafishEngine::grade_limits`); the builtin's
+                // `depth(6)` does not apply to this engine.
+                let req = EngineRequest::new(
+                    start_fen.clone(),
+                    moves.clone(),
+                    SearchLimits::time_ms(1500),
+                );
+                match engine.request_best_move(&req, req_id) {
+                    Ok(()) => {
+                        self.in_flight = Some(InFlight::Grade {
+                            req,
+                            mv,
+                            best: None,
+                            req_id,
+                        });
+                    }
+                    Err(WasmEngineError::NotReady) => {
+                        self.pending = Some(AiRequest::GradeMove {
+                            start_fen,
+                            moves,
+                            mv,
+                            req_id,
+                        });
+                    }
+                    Err(_) => self.answer_with_builtin(AiRequest::GradeMove {
+                        start_fen,
+                        moves,
+                        mv,
+                        req_id,
+                    }),
+                }
+            }
+            AiRequest::Stop => {}
+        }
+    }
+
+    /// Answer one request synchronously with the builtin engine (no
+    /// engine / dead worker / failed send). Same helpers as the
+    /// desktop worker's `run_*_on`, minus the §7.3 swap policy —
+    /// the builtin IS the fallback here.
+    fn answer_with_builtin(&mut self, req: AiRequest) {
+        match req {
+            AiRequest::BestMove { req, req_id } => {
+                let _ = run_best_move_on(&mut self.fallback, &req, req_id, &self.res_tx);
+            }
+            AiRequest::Analyze { req, top_n, req_id } => {
+                let _ = run_analyze_on(&mut self.fallback, &req, top_n, req_id, &self.res_tx);
+            }
+            AiRequest::GradeMove {
+                start_fen,
+                moves,
+                mv,
+                req_id,
+            } => {
+                let _ = run_grade_on(
+                    &mut self.fallback,
+                    &start_fen,
+                    &moves,
+                    mv,
+                    req_id,
+                    &self.res_tx,
+                );
+            }
+            AiRequest::Stop => {}
+        }
+    }
+
+    /// Translate one engine event into [`AiResponse`]s.
+    fn handle_event(&mut self, ev: WasmEngineEvent) {
+        match ev {
+            WasmEngineEvent::Ready { .. } => {}
+            WasmEngineEvent::Info {
+                req_id,
+                depth,
+                score_cp,
+                pv,
+            } => {
+                let _ = self.res_tx.send(AiResponse::Info {
+                    req_id,
+                    depth,
+                    score: score_cp,
+                    pv,
+                });
+            }
+            WasmEngineEvent::BestMove {
+                req_id,
+                mv,
+                score_cp,
+            } => {
+                match self.in_flight.take() {
+                    Some(InFlight::BestMove { .. }) => {
+                        let _ = self.res_tx.send(AiResponse::BestMove {
+                            req_id,
+                            mv,
+                            score: score_cp,
+                        });
+                    }
+                    Some(InFlight::Grade {
+                        req,
+                        mv: played,
+                        best: None,
+                        req_id,
+                    }) => {
+                        // Phase 1 done: the best move + its score are
+                        // known; now score the played move (same req_id
+                        // — the worker freed it when it answered).
+                        let best_cp = score_cp;
+                        match self
+                            .engine
+                            .as_ref()
+                            .expect("engine present")
+                            .request_score_move(&req, played, req_id)
+                        {
+                            Ok(()) => {
+                                self.in_flight = Some(InFlight::Grade {
+                                    req,
+                                    mv: played,
+                                    best: Some((mv, best_cp)),
+                                    req_id,
+                                });
+                            }
+                            Err(_) => {
+                                self.answer_with_builtin(AiRequest::GradeMove {
+                                    start_fen: req.start_fen.clone(),
+                                    moves: req.moves.clone(),
+                                    mv: played,
+                                    req_id,
+                                });
+                            }
+                        }
+                    }
+                    Some(InFlight::Grade {
+                        req,
+                        mv: played,
+                        best: Some((best_mv, best_cp)),
+                        req_id: _,
+                    }) => {
+                        // Phase 2 done: this `bestmove` IS the played
+                        // move, and `score_cp` is its search score.
+                        let grade = grade_from_delta_with(
+                            best_cp - score_cp,
+                            false,
+                            GradeThresholds::PIKAFISH,
+                        );
+                        let explanation = match req.position() {
+                            Ok(pos) => explain_tags(&tags_for(&pos, played)),
+                            Err(_) => String::new(),
+                        };
+                        let _ = self.res_tx.send(AiResponse::Graded {
+                            req_id,
+                            grade,
+                            best: Some(best_mv),
+                            played_score_cp: score_cp,
+                            explanation,
+                        });
+                    }
+                    Some(other) => {
+                        // An `Analysis` answers with `Analysis`, not
+                        // `BestMove` — a stray bestmove is dropped and
+                        // the in-flight request is restored.
+                        self.in_flight = Some(other);
+                    }
+                    None => {}
+                }
+            }
+            WasmEngineEvent::Analysis { req_id, lines } => {
+                match self.in_flight.take() {
+                    Some(InFlight::Analyze { req, .. }) => {
+                        // The bridge leaves `tags` empty on purpose;
+                        // fill them like `to_analysis_line` does.
+                        let lines = match req.position() {
+                            Ok(pos) => lines
+                                .iter()
+                                .map(|l| AnalysisLine {
+                                    mv: l.mv,
+                                    score: l.score,
+                                    depth: l.depth,
+                                    pv: l.pv.clone(),
+                                    tags: tags_with_mate(&pos, l.mv, l.score),
+                                })
+                                .collect(),
+                            Err(_) => lines,
+                        };
+                        let _ = self.res_tx.send(AiResponse::Analysis { req_id, lines });
+                    }
+                    other => {
+                        self.in_flight = other;
+                    }
+                }
+            }
+            WasmEngineEvent::Log { .. } => {}
+            WasmEngineEvent::Error { req_id, message } => {
+                let Some(id) = req_id else {
+                    // Startup failure: the worker is dead; the
+                    // in-flight request (if any) is answered with
+                    // the builtin and everything after it goes
+                    // straight there too.
+                    if let Some(in_flight) = self.in_flight.take() {
+                        let req = in_flight.into_request();
+                        self.answer_with_builtin(req);
+                    }
+                    self.dead = true;
+                    self.set_notice_once(format!(
+                        "Không chạy được Pikafish-WASM ({message}), đang dùng AI tích hợp"
+                    ));
+                    return;
+                };
+                if let Some(in_flight) = self.in_flight.take() {
+                    self.set_notice_once(format!(
+                        "Pikafish-WASM lỗi ({message}), đang dùng AI tích hợp"
+                    ));
+                    let _ = id;
+                    let req = in_flight.into_request();
+                    self.answer_with_builtin(req);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmAiWorker {
+    /// Create the worker: NO engine is spawned here — the Web Worker
+    /// (and its 51.6 MB `.data` download) starts only on the first AI
+    /// request, inside the driver's `ensure_started` (see
+    /// [`WasmEngineDriver`]). Opening a screen must stay light: on
+    /// iPhone Safari, spawning at Play entry killed the tab as soon
+    /// as the user tapped "Đấu với AI" (Hieu, 2026-11-26). A request
+    /// sent before the engine is ready waits in the queue; when the
+    /// worker itself fails to spawn, the notice is set and every
+    /// request is answered by the builtin.
+    #[must_use]
+    pub fn new(shared_engine: SharedEngine) -> Self {
+        let (req_tx, req_rx) = channel::<AiRequest>();
+        let (res_tx, res_rx) = channel::<AiResponse>();
+        let level = shared_engine.lock().expect("engine lock").level();
+        let stop = shared_engine.stop_handle();
+        let notice = std::sync::Arc::new(Mutex::new(None));
+        let driver = WasmEngineDriver {
+            engine: None,
+            started: false,
+            req_rx,
+            res_tx,
+            stop: stop.clone(),
+            fallback: BuiltinEngine::with_level(level),
+            notice: std::sync::Arc::clone(&notice),
+            pending: None,
+            in_flight: None,
+            dead: false,
+        };
+        Self {
+            tx: req_tx,
+            rx: res_rx,
+            stop,
+            next_req_id: 1,
+            driver: Some(driver),
+        }
+    }
+
+    /// Take the driver out of the worker. Call this before moving
+    /// `tx` / `rx` / `stop` out (a partial move afterwards would
+    /// make the worker unusable). Play/Learn take it; Practice
+    /// keeps the whole worker and pumps in place instead.
+    #[must_use]
+    pub fn take_driver(&mut self) -> Option<WasmEngineDriver> {
+        self.driver.take()
+    }
+
+    /// Pump the driver in place (Practice keeps the whole worker).
+    /// A no-op once the driver was taken out.
+    pub fn pump(&mut self) {
+        if let Some(driver) = self.driver.as_mut() {
+            driver.pump();
+        }
+    }
+
+    /// Allocate the next request id.
+    pub fn alloc_req_id(&mut self) -> u64 {
+        let id = self.next_req_id;
+        self.next_req_id += 1;
+        id
+    }
+}
+
 impl AiWorker {
+    /// (On wasm the screens use [`WasmAiWorker`] instead, so this
+    /// constructor is uncalled there.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     #[must_use]
     pub fn new(engine: SharedEngine) -> Self {
         let (req_tx, req_rx) = channel::<AiRequest>();
@@ -361,6 +1022,15 @@ impl AiWorker {
         let stop_for_thread = stop.clone();
         let fallback_notice = std::sync::Arc::new(Mutex::new(None));
         let notice_for_thread = std::sync::Arc::clone(&fallback_notice);
+        // wasm32: the channels feed the desktop worker thread only;
+        // the screens use `WasmAiWorker` there instead.
+        #[cfg(target_arch = "wasm32")]
+        let _ = (&req_rx, &res_tx, &stop_for_thread, &notice_for_thread);
+        // Desktop: the worker thread (blocking `recv`, searches run
+        // strictly one at a time). wasm32 has no threads — the
+        // screens use [`WasmAiWorker`] there instead, so this
+        // constructor only builds the (unused) shell on wasm.
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             // One-off builtin for illegal-move fallbacks (this move only);
             // the shared engine is swapped only after repeated failures.
@@ -379,104 +1049,16 @@ impl AiWorker {
                         Err(_) => break,
                     },
                 };
-                match req {
-                    AiRequest::BestMove { req, req_id } => {
-                        let result = run_best_move(&engine, &req, req_id, &res_tx);
-                        if let Err(e) = result {
-                            let action = fallback_action(
-                                &e,
-                                &engine,
-                                &notice_for_thread,
-                                &mut illegal_count,
-                            );
-                            match action {
-                                Fallback::None => {}
-                                Fallback::RetryShared => {
-                                    let _ = run_best_move(&engine, &req, req_id, &res_tx);
-                                }
-                                Fallback::RetryOneOff => {
-                                    retry_one_off(&engine, &mut one_off, |fb| {
-                                        let _ = run_best_move_on(fb, &req, req_id, &res_tx);
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    AiRequest::Analyze { req, top_n, req_id } => {
-                        let result = run_analyze(&engine, &req, top_n, req_id, &res_tx);
-                        if let Err(e) = result {
-                            let action = fallback_action(
-                                &e,
-                                &engine,
-                                &notice_for_thread,
-                                &mut illegal_count,
-                            );
-                            match action {
-                                Fallback::None => {}
-                                Fallback::RetryShared => {
-                                    let _ = run_analyze(&engine, &req, top_n, req_id, &res_tx);
-                                }
-                                Fallback::RetryOneOff => {
-                                    retry_one_off(&engine, &mut one_off, |fb| {
-                                        let _ = run_analyze_on(fb, &req, top_n, req_id, &res_tx);
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    AiRequest::GradeMove {
-                        start_fen,
-                        moves,
-                        mv,
-                        req_id,
-                    } => {
-                        let result = run_grade(&engine, &start_fen, &moves, mv, req_id, &res_tx);
-                        if let Err(e) = result {
-                            let action = fallback_action(
-                                &e,
-                                &engine,
-                                &notice_for_thread,
-                                &mut illegal_count,
-                            );
-                            match action {
-                                Fallback::None => {}
-                                Fallback::RetryShared => {
-                                    let _ =
-                                        run_grade(&engine, &start_fen, &moves, mv, req_id, &res_tx);
-                                }
-                                Fallback::RetryOneOff => {
-                                    retry_one_off(&engine, &mut one_off, |fb| {
-                                        let _ = run_grade_on(
-                                            fb, &start_fen, &moves, mv, req_id, &res_tx,
-                                        );
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    AiRequest::Stop => {
-                        stop_for_thread.stop();
-                    }
-                }
-                // Drain queued requests, keeping only the latest; a Stop
-                // queued between searches still takes effect. A BestMove
-                // is the AI's move, not best-effort work: it must be
-                // answered or the game stalls on "máy đang nghĩ"
-                // (Hieu, 2026-11-14), so a later hint/grade never
-                // drops it — only a newer BestMove replaces one.
-                while let Ok(q) = req_rx.try_recv() {
-                    match q {
-                        AiRequest::Stop => stop_for_thread.stop(),
-                        other => {
-                            let pending_is_best =
-                                matches!(pending, Some(AiRequest::BestMove { .. }));
-                            let new_is_best = matches!(other, AiRequest::BestMove { .. });
-                            if !pending_is_best || new_is_best {
-                                pending = Some(other);
-                            }
-                        }
-                    }
-                }
+                handle_request(
+                    req,
+                    &engine,
+                    &res_tx,
+                    &mut one_off,
+                    &mut illegal_count,
+                    &notice_for_thread,
+                    &stop_for_thread,
+                );
+                drain_queue(&req_rx, &mut pending, &stop_for_thread);
             }
         });
         Self {
@@ -498,6 +1080,7 @@ impl AiWorker {
     }
 
     /// Allocate the next request id.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn alloc_req_id(&mut self) -> u64 {
         let id = self.next_req_id;
         self.next_req_id += 1;

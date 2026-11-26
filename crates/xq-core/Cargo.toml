@@ -8,5 +8,16 @@ license = "MIT"
 [dependencies]
 rand = "0.8"
 
+# wasm32: `rand` needs OS randomness via `getrandom`, which on
+# wasm32-unknown-unknown only works with its `js` feature
+# (otherwise the build fails: "targets are not supported by
+# default"). Feature unification turns it on for `rand`'s copy too.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+# wasm32: `std::time::Instant` panics (no OS clock); the searcher
+# needs a clock, so it uses `crate::time` backed by wasmtimer
+# (`performance.now()`) on wasm — see `src/time.rs`.
+wasmtimer = "0.4"
+
 [dev-dependencies]
 proptest = "1"
