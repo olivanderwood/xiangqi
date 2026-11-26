@@ -1,0 +1,19 @@
+[package]
+name = "sync-spike"
+version = "0.1.0"
+edition = "2021"
+description = "Spike Phase 0 cho sync mirroring: Google OAuth (loopback) -> Firebase Auth REST -> Firestore REST (ghi/doc 1 van co). Crate test rieng, khong dinh app chinh."
+
+# Detached khoi workspace chinh (khong anh huong build/test cua app).
+[workspace]
+
+[dependencies]
+ureq = { version = "3.5.2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+# Giu binary nho de do dung luong theo yeu cau Phase 0 (< 90 MB cho app).
+opt-level = "s"
