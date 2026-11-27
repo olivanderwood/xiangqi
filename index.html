@@ -29,9 +29,9 @@
        scope is `./`; icons as a directory). -->
   
 <script type="module">
-import init, * as bindings from './xiangqi-iced-a44d6bee31e44a84.js';
+import init, * as bindings from './xiangqi-iced-c4f59dd0dced9b0.js';
 
-const wasm = await init({ module_or_path: './xiangqi-iced-c4bb12ce340db39f_bg.wasm' });
+const wasm = await init({ module_or_path: './xiangqi-iced-7e09dbdb3da257e9_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -42,6 +42,12 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 </script>
   
   
+  <!-- Firebase Auth cho PWA sync (2026-11-27): glue module import SDK
+       từ CDN gstatic, chỉ để đăng nhập Google (Firestore đi REST qua
+       fetch). File này phải đứng trước wasm app boot để
+       `window.__xiangqiAuth` sẵn khi worker sync hỏi. -->
+  
+  <script type="module" src="./firebase-auth.js"></script>
   
   <!-- Pikafish-WASM engine (INTEGRATION.md in assets/engine-wasm):
        the worker + its 3 files must stay co-located under
@@ -65,7 +71,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
       touch-action: none;
     }
   </style>
-<link rel="modulepreload" href="./xiangqi-iced-a44d6bee31e44a84.js" crossorigin="anonymous" integrity="sha384-SlMZt3bXMfsaDueo9zXj+iAsRt77aswae9lzzqjJmhicwLDISjVkkpcq0VQdc3W0"><link rel="preload" href="./xiangqi-iced-c4bb12ce340db39f_bg.wasm" crossorigin="anonymous" integrity="sha384-aDJ2vOfsgTcLdGYK0dbUF/v81ScZ7XGFeHGij3tO35BTSUEChJaNrLHlM3forErL" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="./xiangqi-iced-c4f59dd0dced9b0.js" crossorigin="anonymous" integrity="sha384-X0QlzBiXhfpJ6PhK7VBa4hNq6fYaKKJAE4KNBrt3LGt9MZAtqC/yJIQ7G6bw6Cts"><link rel="preload" href="./xiangqi-iced-7e09dbdb3da257e9_bg.wasm" crossorigin="anonymous" integrity="sha384-8Th03eT+0oxhB/Pl2nJTEY8FGPiwr8FYXlpOzSHgh+q89ZUjsg8jDn+GTV1kECh4" as="fetch" type="application/wasm"></head>
 <body>
   <noscript>Cờ Tướng AI cần bật JavaScript để chạy.</noscript>
   <script>
