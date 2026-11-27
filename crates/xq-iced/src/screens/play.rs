@@ -321,6 +321,25 @@ fn dim_background(_theme: &Theme) -> container::Style {
     }
 }
 
+/// Whether a remote entry's final position leaves the AI to move:
+/// the side to move after the entry's moves (start side flipped by
+/// the move count's parity) is not the human's colour. Used by the
+/// sync apply path to decide — BEFORE `resume_saved` triggers work
+/// — whether the AI reply runs on the other machine.
+fn remote_leaves_ai_to_move(remote: &SavedGame, human: Option<Color>) -> bool {
+    let Some(human) = human else {
+        return false;
+    };
+    let Ok(pos) = xq_core::board::Position::from_fen(&remote.start_fen) else {
+        return false;
+    };
+    let mut side = pos.side();
+    if remote.moves.len() % 2 == 1 {
+        side = side.opposite();
+    }
+    side != human
+}
+
 /// Play-vs-AI screen state (a port of egui `VsAiState`).
 pub struct State {
     game: Game,
@@ -405,6 +424,28 @@ pub struct State {
     engine_ready: bool,
     engine_banner: Option<String>,
     engine_dir: Option<PathBuf>,
+    /// Sync mirroring Phase 1 (2026-11-27): the live synced entry
+    /// for this game (uuid stable, version bumped per push). `None`
+    /// until the first push (new game) or until a game is resumed.
+    /// Book games and two-player games never sync (not saved).
+    sync_entry: Option<SavedGame>,
+    /// A move landed since the last successful push — the next tick
+    /// pushes it (after the animation, like all other work).
+    sync_dirty: bool,
+    /// The last move came from the other machine and it is now the
+    /// AI's turn: the AI reply runs on THAT machine, so this one
+    /// must not trigger its own AI search — it waits for the
+    /// `RemoteUpdate` instead.
+    sync_waiting_remote_ai: bool,
+    /// In-flight push request id (to match Pushed / PushRejected /
+    /// PushFailed); `None` when no push is in flight.
+    sync_push_req_id: Option<u64>,
+    /// Earliest time a failed push may be retried (5 s after the
+    /// failure — no hammering when offline).
+    sync_retry_after: Option<Instant>,
+    /// One-line sync notice shown in the side panel (e.g. "Máy kia
+    /// vừa đi trước"), cleared when a new game starts.
+    sync_notice: Option<String>,
     ai_tx: Sender<AiRequest>,
     ai_rx: Arc<Mutex<Receiver<AiResponse>>>,
     ai_stop: StopHandle,
@@ -425,6 +466,13 @@ pub struct State {
     pub(crate) window: Size,
 }
 
+/// Play-vs-AI screen messages.
+///
+/// `large_enum_variant` được phép: `Sync` mang cả một ván
+/// (`SyncResponse` chứa `SavedGame`) vì màn hình cần toàn bộ ván
+/// để áp nước từ máy kia — message chỉ sống ngắn (App định tuyến
+/// rồi xử lý ngay).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Msg {
     /// Go to another screen (intercepted by `App::update`).
@@ -503,6 +551,9 @@ pub enum Msg {
     /// Start dialog: open the game history ("Lịch sử đấu",
     /// intercepted by `App::update`).
     OpenHistory,
+    /// A sync worker response (routed by `App` from the SyncPoll
+    /// drain — see `handle_sync_response`).
+    Sync(crate::sync::SyncResponse),
 }
 
 impl State {
@@ -602,6 +653,12 @@ impl State {
             engine_ready: false,
             engine_banner: None,
             engine_dir: None,
+            sync_entry: None,
+            sync_dirty: false,
+            sync_waiting_remote_ai: false,
+            sync_push_req_id: None,
+            sync_retry_after: None,
+            sync_notice: None,
             ai_tx,
             ai_rx,
             ai_stop,
@@ -638,6 +695,10 @@ impl State {
                 self.check_focus_timeout(now);
                 self.trigger_work(shared);
                 self.check_engine_fallback(shared);
+                // Sync mirroring (Phase 1): push after a move landed
+                // — same tick as trigger_work, so never while the
+                // piece is still sliding.
+                self.maybe_sync_push(shared);
                 // wasm32: no worker thread and no bridge — the tick
                 // pumps the worker synchronously and drains its
                 // answers into the normal `Msg::Ai` handling below.
@@ -663,6 +724,10 @@ impl State {
             }
             Msg::Ai(ev) => {
                 self.handle_ai(ev, shared);
+                Task::none()
+            }
+            Msg::Sync(resp) => {
+                self.handle_sync_response(resp, shared);
                 Task::none()
             }
             Msg::ChessDbEvaluated { req_id, result } => {
@@ -716,6 +781,10 @@ impl State {
             }
             Msg::Undo => {
                 self.undo();
+                // An undo changes the move list: the other machine
+                // must see the takeback (it rebuilds from the
+                // shorter list on RemoteUpdate).
+                self.sync_dirty = true;
                 self.trigger_work(shared);
                 Task::none()
             }
@@ -755,6 +824,8 @@ impl State {
                 };
                 self.game.resign(side);
                 self.result_ack = false;
+                // The result must reach the other machine too.
+                self.sync_dirty = true;
                 Task::none()
             }
             Msg::NewGame => {
@@ -1069,6 +1140,8 @@ impl State {
             self.game.timeout(human);
             self.focus_turn_start = None;
             self.result_ack = false;
+            // The timeout result must reach the other machine too.
+            self.sync_dirty = true;
         }
     }
 
@@ -1177,12 +1250,22 @@ impl State {
     /// already travelled under the user's cursor, so sliding it back
     /// from its source square would look like a jump (Hieu,
     /// 2026-11-14); a click, a hint or an AI move passes `true`.
-    fn play(&mut self, mv: Move, shared: &Shared, animate: bool) {
+    /// Apply one move to the game (board, sound, focus clock).
+    /// `remote` is true for a move that arrived from the other
+    /// machine (sync): it must not mark the game dirty (it is
+    /// already on the cloud) and must not clear
+    /// `sync_waiting_remote_ai` (that flag is owned by the sync
+    /// apply path, not by the move itself).
+    fn play(&mut self, mv: Move, shared: &Shared, animate: bool, remote: bool) {
         let pos_before = self.game.pos.clone();
         let moves_before = self.game.moves.clone();
         let mover = pos_before.side();
         if self.game.play(mv).is_err() {
             return;
+        }
+        if !remote {
+            self.sync_waiting_remote_ai = false;
+            self.sync_dirty = true;
         }
         // Book game: follow the played move down the lesson tree
         // (marks the game out of book when the move is not in it).
@@ -1250,7 +1333,7 @@ impl State {
     /// `animate` is passed through to [`Self::play`]: `false` for a
     /// drag-and-drop, `true` for a click, a hint or an AI move.
     fn play_move(&mut self, mv: Move, shared: &mut Shared, animate: bool) {
-        self.play(mv, shared, animate);
+        self.play(mv, shared, animate, false);
         self.trigger_work(shared);
     }
 
@@ -1329,6 +1412,15 @@ impl State {
         if let Some(mut engine) = shared.engine.try_lock() {
             let _ = engine.set_level(self.level());
         }
+        // Sync mirroring (Phase 1): a new game has no entry yet —
+        // it is created on the first push (fresh uuid). Clear any
+        // leftover sync state from the previous game.
+        self.sync_entry = None;
+        self.sync_dirty = false;
+        self.sync_waiting_remote_ai = false;
+        self.sync_push_req_id = None;
+        self.sync_retry_after = None;
+        self.sync_notice = None;
     }
 
     /// Continue a finished opening as a Vs-AI game (egui
@@ -1372,6 +1464,15 @@ impl State {
         self.focus_turn_start = None;
         self.started = true;
         self.show_start_dialog = false;
+        // Sync mirroring (Phase 1): a continued-from-learn game
+        // syncs like any Vs-AI game; its entry is created on the
+        // first push (start_fen = the lesson position).
+        self.sync_entry = None;
+        self.sync_dirty = false;
+        self.sync_waiting_remote_ai = false;
+        self.sync_push_req_id = None;
+        self.sync_retry_after = None;
+        self.sync_notice = None;
     }
 
     /// Start a "play vs AI in one opening line" game (Hieu,
@@ -1531,6 +1632,24 @@ impl State {
             ),
             _ => format!("Đấu với AI — đang dở — {moves} nước"),
         };
+        let moves_iccs: Vec<String> = self
+            .game
+            .moves
+            .iter()
+            .map(|m| xq_core::notation::iccs(*m))
+            .collect();
+        // Sync mirroring (Phase 1): reuse the synced entry when
+        // there is one, so the store never holds two entries (two
+        // uuids) for the same game — the manual save and the sync
+        // push must agree on the id.
+        if let Some(e) = &self.sync_entry {
+            let mut e = e.clone();
+            e.label = label;
+            e.finished = finished;
+            e.moves = moves_iccs;
+            e.result = result;
+            return e;
+        }
         SavedGame {
             id: SavedGame::new_id(SavedMode::Play),
             mode: SavedMode::Play,
@@ -1538,18 +1657,19 @@ impl State {
             created_unix: SavedGame::now_unix(),
             finished,
             start_fen: self.game.start.to_fen(),
-            moves: self
-                .game
-                .moves
-                .iter()
-                .map(|m| xq_core::notation::iccs(*m))
-                .collect(),
+            moves: moves_iccs,
             difficulty: self.difficulty,
             human_red: self.human_red(),
             result,
             lesson_id: None,
             node_path: Vec::new(),
             percent: None,
+            uuid: SavedGame::fresh_sync_uuid(),
+            client_id: None,
+            version: 1,
+            updated_unix: SavedGame::now_unix(),
+            updated_by_device: String::new(),
+            deleted: false,
         }
     }
 
@@ -1581,6 +1701,241 @@ impl State {
         shared.saved_games.add(entry);
         shared.saved_games.save();
         self.saved_this_game = true;
+    }
+
+    // --- Sync mirroring Phase 1 (2026-11-27) ---
+
+    /// Whether this game may sync: a started Vs-AI game, not a book
+    /// game (book games are never saved, so they never sync) and not
+    /// two-player.
+    fn sync_eligible(&self) -> bool {
+        self.started && matches!(self.opponent, VsOpponent::Ai { .. }) && self.book_game.is_none()
+    }
+
+    /// Whether it is the AI's turn right now (used to decide if the
+    /// local AI must wait for the remote reply).
+    fn is_ai_turn(&self) -> bool {
+        match self.opponent {
+            VsOpponent::Ai { human, .. } => self.game.pos.side() != human,
+            VsOpponent::TwoPlayer => false,
+        }
+    }
+
+    /// Start watching the current synced entry (after resume, or on
+    /// the first push). No-op when not signed in or no entry.
+    fn watch_sync_entry(&self, shared: &Shared) {
+        if !shared.sync.signed_in() {
+            return;
+        }
+        let Some(e) = &self.sync_entry else {
+            return;
+        };
+        shared.sync.worker.send(crate::sync::SyncRequest::Watch {
+            uuid: e.uuid.clone(),
+            version: e.version,
+            moves: e.moves.clone(),
+        });
+    }
+
+    /// Push the current game after a move landed (called from Tick,
+    /// so never while the piece is still sliding). Creates the sync
+    /// entry on the first push (fresh uuid, id == uuid so the local
+    /// and remote copies dedup), bumps its version per push, and
+    /// sends it to the worker. A failed push retries at most every
+    /// 5 s; an in-flight push is never duplicated.
+    fn maybe_sync_push(&mut self, shared: &mut Shared) {
+        if !self.sync_eligible() || !self.sync_dirty || self.board.is_animating() {
+            return;
+        }
+        if !shared.sync.signed_in() || self.sync_push_req_id.is_some() {
+            return;
+        }
+        if let Some(after) = self.sync_retry_after {
+            if Instant::now() < after {
+                return;
+            }
+        }
+        if self.game.moves.is_empty() {
+            return;
+        }
+        let created = self.sync_entry.is_none();
+        let Some(entry) = self.sync_entry_for_push() else {
+            return;
+        };
+        let req_id = shared.sync.worker.alloc_req_id();
+        self.sync_push_req_id = Some(req_id);
+        self.sync_retry_after = None;
+        shared.sync.worker.send(crate::sync::SyncRequest::Push {
+            game: entry,
+            req_id,
+        });
+        if created {
+            self.watch_sync_entry(shared);
+        }
+    }
+
+    /// The sync entry for the next push: reuse the existing one
+    /// (uuid stable, version +1) or create it from the live game
+    /// (first push of a new game — id == uuid, see `maybe_sync_push`).
+    fn sync_entry_for_push(&mut self) -> Option<SavedGame> {
+        let finished = self.game.result().is_over();
+        match self.sync_entry.as_mut() {
+            Some(e) => {
+                e.moves = self
+                    .game
+                    .moves
+                    .iter()
+                    .map(|m| xq_core::notation::iccs(*m))
+                    .collect();
+                e.finished = finished;
+                e.result = match self.game.result() {
+                    GameResult::RedWins(_) => Some("red".to_string()),
+                    GameResult::BlackWins(_) => Some("black".to_string()),
+                    GameResult::Draw(_) => Some("draw".to_string()),
+                    GameResult::Ongoing => None,
+                };
+                e.version += 1;
+                e.updated_unix = SavedGame::now_unix();
+                Some(e.clone())
+            }
+            None => {
+                let mut e = self.to_saved_game(finished);
+                // The synced entry's id IS its uuid (like
+                // `from_sync_entry`): the local and remote copies
+                // then dedup to one entry in the store.
+                e.id = e.uuid.clone();
+                self.sync_entry = Some(e.clone());
+                Some(e)
+            }
+        }
+    }
+
+    /// Handle one sync worker response (routed by `App`).
+    fn handle_sync_response(&mut self, resp: crate::sync::SyncResponse, shared: &mut Shared) {
+        use crate::sync::SyncResponse;
+        match resp {
+            SyncResponse::Pushed { req_id, uuid, .. } => {
+                if self.sync_push_req_id != Some(req_id) {
+                    return;
+                }
+                self.sync_push_req_id = None;
+                self.sync_dirty = false;
+                // Keep the store on disk in step with the cloud.
+                if let Some(e) = self.sync_entry.clone() {
+                    if e.uuid == uuid {
+                        let id = e.id.clone();
+                        shared.saved_games.add(e);
+                        // At most one unfinished Play game is kept
+                        // (see `save_current_game`): drop any stale
+                        // unfinished entry for another id.
+                        let stale: Vec<String> = shared
+                            .saved_games
+                            .entries
+                            .iter()
+                            .filter(|x| x.mode == SavedMode::Play && !x.finished && x.id != id)
+                            .map(|x| x.id.clone())
+                            .collect();
+                        for stale_id in stale {
+                            shared.saved_games.remove(&stale_id);
+                        }
+                        shared.saved_games.save();
+                        if self.game.result().is_over() {
+                            shared.sync.worker.send(crate::sync::SyncRequest::Unwatch);
+                        }
+                    }
+                }
+            }
+            SyncResponse::PushRejected { req_id, remote } => {
+                if self.sync_push_req_id != Some(req_id) {
+                    return;
+                }
+                self.sync_push_req_id = None;
+                self.sync_dirty = false;
+                self.apply_remote(remote, shared, true);
+            }
+            SyncResponse::PushFailed { req_id, .. } => {
+                if self.sync_push_req_id != Some(req_id) {
+                    return;
+                }
+                self.sync_push_req_id = None;
+                // Retry later (at most every 5 s); the dirty flag
+                // stays set so the push is not lost.
+                self.sync_retry_after = Some(Instant::now() + Duration::from_secs(5));
+            }
+            SyncResponse::RemoteUpdate { uuid, game } => {
+                let Some(e) = &self.sync_entry else {
+                    return;
+                };
+                if e.uuid != uuid {
+                    return;
+                }
+                self.apply_remote(game, shared, false);
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply a remote entry (from `RemoteUpdate`, or from
+    /// `PushRejected` when `rejected` — the other machine's move
+    /// reached the cloud first).
+    fn apply_remote(&mut self, remote: SavedGame, shared: &mut Shared, rejected: bool) {
+        if remote.deleted {
+            self.sync_notice = Some("Ván đã bị xoá ở máy kia.".to_string());
+            self.sync_entry = None;
+            self.sync_dirty = false;
+            self.sync_waiting_remote_ai = false;
+            shared.sync.worker.send(crate::sync::SyncRequest::Unwatch);
+            return;
+        }
+        let local_moves: Vec<String> = self
+            .game
+            .moves
+            .iter()
+            .map(|m| xq_core::notation::iccs(*m))
+            .collect();
+        if remote.moves == local_moves {
+            // Already in sync (e.g. our own push echoed back) —
+            // just adopt the remote version number.
+            if let Some(e) = self.sync_entry.as_mut() {
+                e.version = remote.version;
+                e.updated_unix = remote.updated_unix;
+            }
+            return;
+        }
+        if remote.moves.len() > local_moves.len()
+            && remote.moves[..local_moves.len()] == local_moves[..]
+        {
+            // Strict extension: apply only the new moves, the last
+            // one animated with sound (like a move played here).
+            let extra = &remote.moves[local_moves.len()..];
+            for (i, iccs) in extra.iter().enumerate() {
+                let Ok(mv) = xq_core::notation::parse_iccs(iccs) else {
+                    return;
+                };
+                let last = i + 1 == extra.len();
+                self.play(mv, shared, last, true);
+            }
+            self.sync_entry = Some(remote);
+            self.sync_dirty = false;
+            self.sync_waiting_remote_ai = self.is_ai_turn();
+            self.trigger_work(shared);
+            return;
+        }
+        // Divergent (both machines moved at once — the remote won):
+        // rebuild the whole game from the remote entry. The notice
+        // is set AFTER resume_saved: it clears sync_notice at the
+        // end (a plain resume has nothing to say).
+        // Decide BEFORE resume_saved (it triggers work at the end):
+        // if the remote entry leaves the AI to move, the reply runs
+        // on the other machine, so this one must wait for it.
+        self.sync_waiting_remote_ai = remote_leaves_ai_to_move(&remote, self.human_color());
+        self.sync_entry = Some(remote.clone());
+        self.sync_dirty = false;
+        self.resume_saved(&remote, shared);
+        if rejected {
+            self.sync_notice =
+                Some("Máy kia vừa đi trước — ván đã đồng bộ theo máy kia.".to_string());
+        }
     }
 
     /// Resume a saved Play game: rebuild the board by replaying
@@ -1658,6 +2013,12 @@ impl State {
         self.focus = false;
         self.focus_turn_start = None;
         self.trigger_work(shared);
+        // Sync mirroring (Phase 1): this game is now the synced
+        // game — keep its entry and watch it for remote moves.
+        self.sync_entry = Some(saved.clone());
+        self.sync_dirty = false;
+        self.sync_notice = None;
+        self.watch_sync_entry(shared);
     }
 
     /// Undo: stop the AI first if it is thinking, then step back to
@@ -1725,6 +2086,8 @@ impl State {
             self.game.agree_draw();
             self.draw_message = Some(i18n::t(Key::AiAcceptedDraw).to_string());
             self.result_ack = false;
+            // The agreed draw must reach the other machine too.
+            self.sync_dirty = true;
         } else {
             self.draw_message = Some(i18n::t(Key::AiDeclinedDraw).to_string());
         }
@@ -1809,6 +2172,13 @@ impl State {
         let VsOpponent::Ai { human, .. } = self.opponent else {
             return;
         };
+        // Sync mirroring (Phase 1): the last move came from the
+        // other machine and it is the AI's turn — the AI reply runs
+        // on THAT machine; this one waits for the `RemoteUpdate`
+        // instead of starting its own search.
+        if self.sync_waiting_remote_ai {
+            return;
+        }
         if !self.started
             || self.ai_thinking
             || self.review.is_some()
@@ -1828,7 +2198,7 @@ impl State {
             .as_mut()
             .and_then(|book| book.walker.next_move(&pos));
         if let Some(mv) = book_mv {
-            self.play(mv, shared, true);
+            self.play(mv, shared, true, false);
             return;
         }
         let Some(engine) = shared.engine.try_lock() else {
@@ -2079,7 +2449,7 @@ impl State {
                 // chip with it — no extra engine work (Hieu,
                 // 2026-11-25).
                 let mover = self.game.pos.side();
-                self.play(mv, shared, true);
+                self.play(mv, shared, true, false);
                 self.store_eval(
                     self.game.moves.len(),
                     Self::red_from_mover_score(score, mover),
@@ -2121,7 +2491,7 @@ impl State {
                         // stored — a stale chip beats a wrong one.
                         let mover = self.game.pos.side();
                         let line_score = lines.iter().find(|l| l.mv == mv).map(|l| l.score);
-                        self.play(mv, shared, true);
+                        self.play(mv, shared, true, false);
                         if let Some(score) = line_score {
                             self.store_eval(
                                 self.game.moves.len(),
@@ -2584,6 +2954,15 @@ impl State {
         if let Some(banner) = &self.engine_banner {
             col = col.push(
                 text(banner)
+                    .size(FONT_BODY)
+                    .style(|_: &Theme| text::Style { color: Some(RED) }),
+            );
+        }
+        // Sync mirroring (Phase 1): one-line notice, e.g. "Máy kia
+        // vừa đi trước" — cleared when a new game starts.
+        if let Some(notice) = &self.sync_notice {
+            col = col.push(
+                text(notice)
                     .size(FONT_BODY)
                     .style(|_: &Theme| text::Style { color: Some(RED) }),
             );
@@ -3248,7 +3627,7 @@ mod tests {
         assert!(state.started);
         // Red cannon (file 1, rank 2) to the centre: P8-5.
         let mv = Move::new(19, 22);
-        state.play(mv, &shared, true);
+        state.play(mv, &shared, true, false);
         assert_eq!(state.game.moves.len(), 1);
         assert_eq!(state.last_move, Some(mv));
         assert!(state.selected.is_none());
@@ -3269,14 +3648,14 @@ mod tests {
         state.start(StartSide::Red, 1, &mut shared);
         // A click: the piece slides, so the sound is owed to the
         // landing, not played at once.
-        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
         assert_eq!(state.pending_sound, Some(MoveSound::Move));
         // The landing tick plays it.
         let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
         let _ = state.update(Msg::Tick(later), &mut shared);
         assert_eq!(state.pending_sound, None);
         // A drag-and-drop never slides: its sound plays at once.
-        state.play(Move::new(82, 65), &shared, false);
+        state.play(Move::new(82, 65), &shared, false, false);
         assert_eq!(state.pending_sound, None);
     }
 
@@ -3296,7 +3675,7 @@ mod tests {
         assert!(!state.ai_move_pending());
         // Human plays: now it is the AI's (Black) turn, no request
         // in flight yet — the tick must stay alive to retry.
-        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
         assert!(state.ai_move_pending());
         // Once the request is sent (`ai_thinking`), the answer comes
         // through the bridge, so the tick may stop.
@@ -3359,8 +3738,8 @@ mod tests {
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
         // Two plies by hand (Red, then Black), as if the AI replied.
-        state.play(Move::new(19, 22), &shared, true);
-        state.play(Move::new(82, 65), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
+        state.play(Move::new(82, 65), &shared, true, false);
         assert_eq!(state.game.moves.len(), 2);
         state.undo();
         // Back to the human's turn: the human's own last move is
@@ -3379,7 +3758,7 @@ mod tests {
         state.start(StartSide::Red, 1, &mut shared);
         // Started but no move yet: nothing to save.
         assert!(!state.needs_save_prompt());
-        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
         // A move played, game ongoing: ask to save on exit.
         assert!(state.needs_save_prompt());
         // Once saved, no prompt again for this game.
@@ -3393,8 +3772,8 @@ mod tests {
         let mut shared = Shared::new();
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
-        state.play(Move::new(19, 22), &shared, true);
-        state.play(Move::new(82, 65), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
+        state.play(Move::new(82, 65), &shared, true, false);
         let fen_before = state.game.pos.to_fen();
         state.save_current_game(&mut shared, false);
         let saved = shared
@@ -3431,6 +3810,12 @@ mod tests {
             lesson_id: None,
             node_path: Vec::new(),
             percent: None,
+            uuid: String::new(),
+            client_id: None,
+            version: 0,
+            updated_unix: 0,
+            updated_by_device: String::new(),
+            deleted: false,
         };
         state.resume_saved(&bad, &mut shared);
         // Still at the start dialog: nothing was loaded.
@@ -3451,8 +3836,8 @@ mod tests {
         let mut shared = Shared::new();
         let mut state = State::new(&shared);
         state.start(StartSide::Red, 1, &mut shared);
-        state.play(Move::new(19, 22), &shared, true);
-        state.play(Move::new(82, 65), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
+        state.play(Move::new(82, 65), &shared, true, false);
         state.game.resign(Color::Red);
         assert!(state.game.result().is_over());
         state.save_current_game(&mut shared, true);
@@ -3538,7 +3923,7 @@ mod tests {
         // A move played, game ongoing: a normal game would ask to
         // save on exit — a book game never does.
         let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
-        state.play(first, &shared, true);
+        state.play(first, &shared, true, false);
         assert!(!state.needs_save_prompt());
         // Saving is a no-op: nothing is recorded, nothing is marked
         // saved — the game leaves no history.
@@ -3587,7 +3972,7 @@ mod tests {
         // Human plays the book's first move; the AI replies from
         // the book (no engine call).
         let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
-        state.play(first, &shared, true);
+        state.play(first, &shared, true, false);
         land(&mut state, &mut shared);
         assert_eq!(state.game.moves.len(), 2, "AI replied");
         assert!(state.book_in_book());
@@ -3602,7 +3987,7 @@ mod tests {
             .into_iter()
             .find(|m| !book_moves.contains(m))
             .expect("an off-book legal move exists");
-        state.play(off, &shared, true);
+        state.play(off, &shared, true, false);
         land(&mut state, &mut shared);
         assert!(!state.book_in_book(), "off-book move leaves the book");
         assert!(state.ai_thinking, "engine asked once out of book");
@@ -3617,7 +4002,7 @@ mod tests {
         // Two book rounds: human + AI, human + AI.
         for _ in 0..2 {
             let mv = state.book_children()[0];
-            state.play(mv, &shared, true);
+            state.play(mv, &shared, true, false);
             land(&mut state, &mut shared);
         }
         assert_eq!(state.game.moves.len(), 4);
@@ -3633,7 +4018,7 @@ mod tests {
         // (the undo takes back the off-book move; the AI's reply
         // was never played for it).
         let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
-        state.play(first, &shared, true);
+        state.play(first, &shared, true, false);
         land(&mut state, &mut shared);
         assert_eq!(state.game.moves.len(), 2);
         let book_moves = state.book_children();
@@ -3644,7 +4029,7 @@ mod tests {
             .into_iter()
             .find(|m| !book_moves.contains(m))
             .expect("an off-book legal move exists");
-        state.play(off, &shared, true);
+        state.play(off, &shared, true, false);
         assert!(!state.book_in_book());
         state.undo();
         assert_eq!(state.game.moves.len(), 2);
@@ -3664,7 +4049,7 @@ mod tests {
         assert!(state.book_lesson_id().is_none());
         // And it behaves like a normal game again: a move played
         // means the exit prompt is offered.
-        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
         assert!(state.needs_save_prompt());
     }
 
@@ -3792,8 +4177,8 @@ mod tests {
         assert!(state.board_enabled());
         // After the opening move and the AI's reply, the clock runs
         // on the human's second turn.
-        state.play(Move::new(19, 22), &shared, true);
-        state.play(Move::new(82, 65), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
+        state.play(Move::new(82, 65), &shared, true, false);
         assert!(state.focus_turn_start.is_some());
         assert!(state.focus_clock_running());
 
@@ -3829,7 +4214,7 @@ mod tests {
         state.start_focus = true;
         state.start(StartSide::Black, 2, &mut shared);
         assert!(state.focus);
-        state.play(Move::new(19, 22), &shared, true);
+        state.play(Move::new(19, 22), &shared, true, false);
         assert!(state.focus_clock_running());
         assert!(state.focus_turn_start.is_some());
     }
@@ -4114,9 +4499,114 @@ mod tests {
         state.start_book_game(&lesson.id, true, &mut shared);
         let first = parse_book_mv(&state.game.pos, &lesson.tree[0].mv);
         let expected = lesson.tree[0].score_cp.unwrap_or(0);
-        state.play(first, &shared, true);
+        state.play(first, &shared, true, false);
         assert_eq!(state.game.moves.len(), 1);
         assert_eq!(state.eval_score, Some((1, expected)));
         assert_eq!(state.chip_score(), expected);
+    }
+
+    // --- Sync mirroring Phase 1 (2026-11-27) ---
+
+    #[test]
+    fn sync_entry_for_push_keeps_uuid_and_bumps_version() {
+        // One game = one uuid (so the two machines dedup), one
+        // version per push (so "who reached the cloud first" is
+        // decided by version).
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        state.play(Move::new(19, 22), &shared, true, false);
+        let first = state.sync_entry_for_push().expect("first push entry");
+        assert!(!first.uuid.is_empty());
+        assert_eq!(first.id, first.uuid);
+        assert_eq!(first.version, 1);
+        assert_eq!(first.moves.len(), 1);
+        // The AI's reply (played locally here) goes out as version 2
+        // under the same uuid.
+        state.play(Move::new(82, 65), &shared, true, false);
+        let second = state.sync_entry_for_push().expect("second push entry");
+        assert_eq!(second.uuid, first.uuid);
+        assert_eq!(second.id, first.uuid);
+        assert_eq!(second.version, 2);
+        assert_eq!(second.moves.len(), 2);
+    }
+
+    #[test]
+    fn sync_remote_extension_waits_for_the_remote_ai() {
+        // Mirroring: the other machine just played h2e2 (Red). This
+        // machine applies it and must NOT start its own AI — the
+        // reply runs on the machine where the human just moved.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        let mut remote = state.to_saved_game(false);
+        remote.moves = vec![xq_core::notation::iccs(Move::new(19, 22))];
+        remote.version = 2;
+        state.apply_remote(remote, &mut shared, false);
+        assert_eq!(state.game.moves.len(), 1);
+        assert!(state.sync_waiting_remote_ai);
+        assert!(state.sync_entry.is_some());
+        // Even after the piece lands, no local AI request starts.
+        let later = Instant::now() + crate::board::ANIM_DURATION + Duration::from_millis(50);
+        let _ = state.update(Msg::Tick(later), &mut shared);
+        assert!(!state.ai_thinking);
+        assert!(state.ai_req_id.is_none());
+    }
+
+    #[test]
+    fn sync_remote_divergent_rebuilds_and_notices() {
+        // Both machines moved at once; the remote one reached the
+        // cloud first (PushRejected). This machine rebuilds from the
+        // remote entry and says so.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        state.play(Move::new(19, 22), &shared, true, false);
+        state.play(Move::new(82, 65), &shared, true, false);
+        let _ = state.sync_entry_for_push().expect("local entry");
+        let mut remote = state.sync_entry.clone().expect("entry stored");
+        // The other machine played its cannon instead of the horse.
+        remote.moves = vec![
+            xq_core::notation::iccs(Move::new(19, 22)),
+            xq_core::notation::iccs(Move::new(70, 67)),
+        ];
+        remote.version += 1;
+        state.apply_remote(remote, &mut shared, true);
+        assert_eq!(state.game.moves.len(), 2);
+        assert_eq!(
+            state.game.moves[1],
+            Move::new(70, 67),
+            "local horse move must be replaced by the remote cannon move"
+        );
+        assert!(state
+            .sync_notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("Máy kia vừa đi trước"));
+        // After the remote Black move it is Red's (the human's)
+        // turn, so no remote AI is awaited.
+        assert!(!state.sync_waiting_remote_ai);
+    }
+
+    #[test]
+    fn sync_remote_leaves_ai_to_move_cases() {
+        // The side to move decides: the AI's reply runs on the
+        // machine where the human just moved, the other one waits.
+        let mut shared = Shared::new();
+        let mut state = State::new(&shared);
+        state.start(StartSide::Red, 1, &mut shared);
+        let mut entry = state.to_saved_game(false);
+        assert!(!remote_leaves_ai_to_move(&entry, Some(Color::Red)));
+        entry.moves = vec![xq_core::notation::iccs(Move::new(19, 22))];
+        assert!(remote_leaves_ai_to_move(&entry, Some(Color::Red)));
+        entry.moves.push(xq_core::notation::iccs(Move::new(82, 65)));
+        assert!(!remote_leaves_ai_to_move(&entry, Some(Color::Red)));
+        // Same position, human playing Black: after Red's first
+        // move it is the human's turn, not the AI's.
+        entry.moves.truncate(1);
+        assert!(!remote_leaves_ai_to_move(&entry, Some(Color::Black)));
+        // No human side recorded (should not happen in Play): the
+        // AI is never assumed to move.
+        assert!(!remote_leaves_ai_to_move(&entry, None));
     }
 }

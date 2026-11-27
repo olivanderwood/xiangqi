@@ -75,6 +75,24 @@ pub struct Settings {
     #[serde(default)]
     pub pikafish_path: String,
     pub progress: HashMap<String, LessonProgress>,
+    /// Sync mirroring Phase 1 (2026-11-27): ID máy này, dạng
+    /// `device-<uuid>`, ghi vào `updated_by_device` mỗi lần đẩy.
+    /// Cấp một lần lúc load nếu chưa có (desktop only — uuid v4 cần
+    /// OS RNG; PWA chưa sync nên để trống).
+    #[serde(default)]
+    pub device_id: String,
+    /// Tên thân thiện của máy này (hiện trong "bản lưu trữ từ ...").
+    /// Mặc định "Máy này", đổi được trong Cài đặt → Tài khoản.
+    #[serde(default = "default_device_name")]
+    pub device_name: String,
+    /// Email Google đang đăng nhập sync (chỉ để hiển thị; token ở
+    /// keychain, KHÔNG ở đây). None = chưa đăng nhập.
+    #[serde(default)]
+    pub sync_email: Option<String>,
+}
+
+fn default_device_name() -> String {
+    "Máy này".to_string()
 }
 
 fn default_true() -> bool {
@@ -106,6 +124,9 @@ impl Default for Settings {
             engine_trace_log: false,
             pikafish_path: String::new(),
             progress: HashMap::new(),
+            device_id: String::new(),
+            device_name: default_device_name(),
+            sync_email: None,
         }
     }
 }
@@ -148,22 +169,49 @@ pub fn difficulty_level(difficulty: u8, custom_elo: u16) -> xq_engine::Level {
 
 impl Settings {
     /// Load from the default path ([`settings_path`]); defaults on
-    /// a missing or corrupt file.
+    /// a missing or corrupt file. Cấp `device_id` rồi ghi lại ngay
+    /// nếu file chưa có nó — id máy phải ổn định giữa các lần mở
+    /// (không cấp mới mỗi lần chạy).
     #[must_use]
     pub fn load() -> Self {
-        Self::load_from(&settings_path())
+        let path = settings_path();
+        let mut s = Self::load_from(&path);
+        if s.ensure_device_id() {
+            s.save_to(&path);
+        }
+        s
     }
 
     /// Load from an explicit path (used by tests, so they never
-    /// touch the user's real config).
+    /// touch the user's real config). Không cấp `device_id` — caller
+    /// nào cần thì gọi [`Settings::ensure_device_id`] (xem
+    /// [`Settings::load`]).
     #[must_use]
     pub fn load_from(path: &std::path::Path) -> Self {
-        let mut s: Self = std::fs::read_to_string(path)
-            .ok()
+        // wasm: không có filesystem — đọc từ localStorage (xem
+        // `crate::storage`); `path` chỉ dùng cho test trên desktop.
+        #[cfg(target_arch = "wasm32")]
+        let text = {
+            let _ = path;
+            crate::storage::load(crate::storage::SETTINGS_KEY)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let text = std::fs::read_to_string(path).ok();
+        let mut s: Self = text
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         s.migrate_difficulty();
         s
+    }
+
+    /// Cấp `device_id` (`device-<uuid>`) nếu file cũ chưa có. Trả
+    /// `true` khi vừa cấp (để `load` ghi lại ngay).
+    pub fn ensure_device_id(&mut self) -> bool {
+        if self.device_id.is_empty() {
+            self.device_id = format!("device-{}", uuid::Uuid::new_v4());
+            return true;
+        }
+        false
     }
 
     /// Migrate an old-scheme difficulty (0–4) to the 8-level scale:
@@ -192,15 +240,24 @@ impl Settings {
         self.save_to(&settings_path());
     }
 
-    /// Save to an explicit path (used by tests).
+    /// Save to an explicit path (used by tests). Trên wasm ghi vào
+    /// localStorage thay vì file (xem `crate::storage`).
     pub fn save_to(&self, path: &std::path::Path) {
-        if let Some(parent) = path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return;
-            }
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, s);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                crate::storage::save(crate::storage::SETTINGS_KEY, &s);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(parent) = path.parent() {
+                    if std::fs::create_dir_all(parent).is_err() {
+                        return;
+                    }
+                }
+                let _ = std::fs::write(path, s);
+            }
         }
     }
 
@@ -257,6 +314,9 @@ mod tests {
             engine_hash_mb: 512,
             engine_trace_log: true,
             pikafish_path: "/opt/pikafish/pikafish".to_string(),
+            device_id: "device-test-1".to_string(),
+            device_name: "Máy test".to_string(),
+            sync_email: Some("a@b.c".to_string()),
             ..Default::default()
         };
         s.record_lesson("c64", true, 0.8);
@@ -290,7 +350,10 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        assert_eq!(Settings::load_from(&path), Settings::default());
+        let mut back = Settings::load_from(&path);
+        // `ensure_device_id` cấp id mới cho file chưa có — không tính.
+        back.device_id = String::new();
+        assert_eq!(back, Settings::default());
     }
 
     #[test]
@@ -300,7 +363,10 @@ mod tests {
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(&path, "{not json").expect("write");
-        assert_eq!(Settings::load_from(&path), Settings::default());
+        let mut back = Settings::load_from(&path);
+        // `ensure_device_id` cấp id mới cho file hỏng — không tính.
+        back.device_id = String::new();
+        assert_eq!(back, Settings::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -354,6 +420,36 @@ mod tests {
             );
             assert!(back.difficulty_v2);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn device_id_is_generated_once_and_stable() {
+        // File cũ chưa có device_id: load cấp một cái, lưu lại rồi
+        // load nữa vẫn là cái đó (không cấp mới mỗi lần).
+        let dir =
+            std::env::temp_dir().join(format!("xq-iced-settings-device-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let s = Settings {
+            device_id: String::new(),
+            ..Settings::default()
+        };
+        // Ghi tay không qua ensure_device_id (giả file cũ).
+        let json = serde_json::to_string(&s).expect("serialize");
+        std::fs::write(&path, json).expect("write");
+        let mut back = Settings::load_from(&path);
+        assert!(back.ensure_device_id(), "file cu chua co id thi phai cap");
+        assert!(
+            back.device_id.starts_with("device-"),
+            "device_id phai duoc cap: {}",
+            back.device_id
+        );
+        assert_eq!(back.device_id.len(), 43); // "device-" + uuid 36 ký tự
+        back.save_to(&path);
+        let mut back2 = Settings::load_from(&path);
+        assert!(!back2.ensure_device_id(), "file da co id thi khong cap moi");
+        assert_eq!(back2.device_id, back.device_id);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

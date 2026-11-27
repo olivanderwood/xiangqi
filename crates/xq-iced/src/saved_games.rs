@@ -88,6 +88,32 @@ pub struct SavedGame {
     /// Learn only: % learned at save time.
     #[serde(default)]
     pub percent: Option<u8>,
+    /// Sync (Phase 1, plan §5.3): ID ổn định của ván trên cloud —
+    /// cũng là document ID trên Firestore (`users/{uid}/games/{uuid}`).
+    /// Ván mới: UUID v4. Ván cũ migrate: cấp UUID v4 lúc load, giữ id
+    /// cũ trong `client_id`.
+    #[serde(default)]
+    pub uuid: String,
+    /// ID cũ (`"<mode>-<unix-millis>"`) của ván đã migrate; None với
+    /// ván tạo sau khi có sync.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Số phiên bản sync, tăng 1 mỗi lần đẩy bản mới (luật xung đột:
+    /// version cao hơn thắng).
+    #[serde(default)]
+    pub version: u64,
+    /// Unix seconds lúc đẩy bản này lên cloud.
+    #[serde(default)]
+    pub updated_unix: u64,
+    /// ID máy đẩy bản này (`device-<uuid>` trong settings.json).
+    /// Rỗng cho tới khi sync worker đẩy lần đầu (worker lấy device id
+    /// từ settings, màn hình không biết).
+    #[serde(default)]
+    pub updated_by_device: String,
+    /// Tombstone: true = ván đã bị xoá, giữ document để máy kia
+    /// biết mà xoá theo.
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 impl SavedGame {
@@ -103,6 +129,59 @@ impl SavedGame {
         format!("{}-{ms}", mode.as_str())
     }
 
+    /// Chuyển sang entry đồng bộ (Phase 1 chỉ sync ván Play; Learn /
+    /// Practice map được nhưng worker không đẩy).
+    #[must_use]
+    pub fn to_sync_entry(&self) -> xq_sync::SyncEntry {
+        xq_sync::SyncEntry {
+            uuid: self.uuid.clone(),
+            label: self.label.clone(),
+            mode: self.mode.as_str().to_string(),
+            start_fen: self.start_fen.clone(),
+            moves: self.moves.clone(),
+            difficulty: self.difficulty,
+            human_red: self.human_red,
+            finished: self.finished,
+            result: self.result.clone(),
+            version: self.version,
+            updated_unix: self.updated_unix,
+            updated_by_device: self.updated_by_device.clone(),
+            deleted: self.deleted,
+        }
+    }
+
+    /// Tạo SavedGame từ entry đồng bộ (ván kéo về từ cloud). `id` lấy
+    /// luôn `uuid` để 2 máy ra cùng id và dedup đúng khi lưu.
+    #[must_use]
+    pub fn from_sync_entry(e: &xq_sync::SyncEntry) -> Self {
+        let mode = match e.mode.as_str() {
+            "learn" => SavedMode::Learn,
+            "practice" => SavedMode::Practice,
+            _ => SavedMode::Play,
+        };
+        Self {
+            id: e.uuid.clone(),
+            mode,
+            label: e.label.clone(),
+            created_unix: e.updated_unix,
+            finished: e.finished,
+            start_fen: e.start_fen.clone(),
+            moves: e.moves.clone(),
+            difficulty: e.difficulty,
+            human_red: e.human_red,
+            result: e.result.clone(),
+            lesson_id: None,
+            node_path: Vec::new(),
+            percent: None,
+            uuid: e.uuid.clone(),
+            client_id: None,
+            version: e.version,
+            updated_unix: e.updated_unix,
+            updated_by_device: e.updated_by_device.clone(),
+            deleted: e.deleted,
+        }
+    }
+
     /// Current unix time in seconds.
     #[must_use]
     pub fn now_unix() -> u64 {
@@ -110,6 +189,13 @@ impl SavedGame {
             .duration_since(crate::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    /// ID sync cho một ván mới tạo: UUID v4 (desktop: OS RNG; wasm:
+    /// `crypto.getRandomValues` qua feature `js` của getrandom).
+    #[must_use]
+    pub fn fresh_sync_uuid() -> String {
+        uuid::Uuid::new_v4().to_string()
     }
 }
 
@@ -150,15 +236,45 @@ impl SavedGames {
     }
 
     /// Load from an explicit path (used by tests, so they never
-    /// touch the user's real config).
+    /// touch the user's real config). Trên wasm đọc từ localStorage
+    /// (xem `crate::storage`), `path` chỉ dùng cho test trên desktop.
     #[must_use]
     pub fn load_from(path: &std::path::Path) -> Self {
-        let mut s: Self = std::fs::read_to_string(path)
-            .ok()
+        // wasm: không có filesystem — đọc từ localStorage.
+        #[cfg(target_arch = "wasm32")]
+        let text = {
+            let _ = path;
+            crate::storage::load(crate::storage::SAVED_GAMES_KEY)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let text = std::fs::read_to_string(path).ok();
+        let mut s: Self = text
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         s.migrate_difficulty();
+        s.migrate_sync();
         s
+    }
+
+    /// Migrate sync fields cho ván cũ (trước Phase 1): cấp UUID v4,
+    /// giữ id cũ trong `client_id`, version = 1, updated_unix =
+    /// created_unix (nếu chưa có). Idempotent: ván đã có uuid thì
+    /// không đụng vào. Lưu ý: uuid cấp trong bộ nhớ — lần lưu file
+    /// kế tiếp mới ghi xuống đĩa; sync worker lưu ngay sau khi
+    /// migrate (xem `sync.rs`).
+    fn migrate_sync(&mut self) {
+        for e in &mut self.entries {
+            if e.uuid.is_empty() {
+                e.client_id = Some(e.id.clone());
+                e.uuid = uuid::Uuid::new_v4().to_string();
+                if e.version == 0 {
+                    e.version = 1;
+                }
+                if e.updated_unix == 0 {
+                    e.updated_unix = e.created_unix;
+                }
+            }
+        }
     }
 
     /// Migrate entry difficulties from the old 0–4 scale to the
@@ -187,15 +303,24 @@ impl SavedGames {
         self.save_to(&saved_games_path());
     }
 
-    /// Save to an explicit path (used by tests).
+    /// Save to an explicit path (used by tests). Trên wasm ghi vào
+    /// localStorage thay vì file (xem `crate::storage`).
     pub fn save_to(&self, path: &std::path::Path) {
-        if let Some(parent) = path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return;
-            }
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, s);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                crate::storage::save(crate::storage::SAVED_GAMES_KEY, &s);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(parent) = path.parent() {
+                    if std::fs::create_dir_all(parent).is_err() {
+                        return;
+                    }
+                }
+                let _ = std::fs::write(path, s);
+            }
         }
     }
 
@@ -286,6 +411,12 @@ mod tests {
             lesson_id: None,
             node_path: Vec::new(),
             percent: None,
+            uuid: "a0b2d496-7ddb-44e5-a4e2-be5a3f61aa62".to_string(),
+            client_id: None,
+            version: 3,
+            updated_unix: 1_763_000_100,
+            updated_by_device: "device-1".to_string(),
+            deleted: false,
         }
     }
 
@@ -362,5 +493,59 @@ mod tests {
         // 2026-11-14 20:00:00 UTC.
         assert_eq!(format_date(1_794_686_400), "14/11/2026 20:00");
         assert_eq!(format_date(0), "01/01/1970 00:00");
+    }
+
+    #[test]
+    fn old_entries_get_sync_ids_on_load() {
+        // File viết trước Phase 1: không có field sync nào.
+        let dir = std::env::temp_dir().join("xiangqi-saved-games-sync-migrate");
+        let path = dir.join("saved_games.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        let old_json = r#"{
+            "entries": [{
+                "id": "play-1763000000000",
+                "mode": "Play",
+                "label": "Đấu với AI",
+                "created_unix": 1763000000,
+                "finished": false,
+                "start_fen": "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1",
+                "moves": ["h2e2"],
+                "difficulty": 2
+            }],
+            "difficulty_v2": true
+        }"#;
+        std::fs::write(&path, old_json).unwrap();
+        let back = SavedGames::load_from(&path);
+        let e = &back.entries[0];
+        // UUID v4: 36 ký tự, dạng 8-4-4-4-12.
+        assert_eq!(e.uuid.len(), 36);
+        assert_eq!(e.uuid.matches('-').count(), 4);
+        assert_eq!(e.client_id.as_deref(), Some("play-1763000000000"));
+        assert_eq!(e.version, 1);
+        assert_eq!(e.updated_unix, 1763000000);
+        assert!(!e.deleted);
+        // Load lại lần nữa (file chưa lưu): uuid mới khác uuid cũ
+        // (migrate trong bộ nhớ), nhưng không crash và vẫn hợp lệ.
+        let back2 = SavedGames::load_from(&path);
+        assert_ne!(back2.entries[0].uuid, e.uuid);
+        assert!(back2.entries[0].uuid.len() == 36);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sync_entry_roundtrip() {
+        let game = sample_play();
+        let entry = game.to_sync_entry();
+        assert_eq!(entry.uuid, game.uuid);
+        assert_eq!(entry.mode, "play");
+        assert_eq!(entry.moves, game.moves);
+        assert_eq!(entry.version, 3);
+        let back = SavedGame::from_sync_entry(&entry);
+        assert_eq!(back.id, entry.uuid);
+        assert_eq!(back.uuid, entry.uuid);
+        assert_eq!(back.mode, SavedMode::Play);
+        assert_eq!(back.moves, game.moves);
+        assert_eq!(back.version, 3);
+        assert_eq!(back.updated_by_device, "device-1");
     }
 }

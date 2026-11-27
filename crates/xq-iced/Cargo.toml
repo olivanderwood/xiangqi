@@ -37,6 +37,14 @@ dirs = "6"
 # Needed by `engine_manager.rs` (copied from xq-app): total RAM
 # decides the default Pikafish hash size.
 sysinfo = "0.33"
+# Sync mirroring (Phase 1 desktop, 2026-11-27; PWA, 2026-11-27):
+# phần pure của `xq-sync` (model / conflict / Firestore URL + parse)
+# dùng chung cả hai target; transport desktop là ureq (trong
+# xq-sync), transport wasm là fetch (gloo-net, ở `sync_fetch.rs`).
+# `uuid` v4: desktop dùng OS RNG, wasm dùng `crypto.getRandomValues`
+# qua feature `js` của getrandom (khai ở xq-sync).
+xq-sync = { path = "../xq-sync" }
+uuid = { version = "1", features = ["v4"] }
 
 # wasm32 (PWA spike, 2026-11-26): the ONNX recognizer cannot build
 # for wasm (`ort` has no wasm32-unknown-unknown target), so the
@@ -57,6 +65,11 @@ sysinfo = "0.33"
 # handler instead).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 xq-recognize = { path = "../xq-recognize" }
+# `keyring` lưu refresh token vào keychain hệ thống (Windows
+# Credential Manager / macOS Keychain / Linux Secret Service), KHÔNG
+# vào settings.json. Trên wasm phiên do Firebase JS SDK giữ trong
+# IndexedDB nên không cần keyring.
+keyring = "3"
 # `arboard` has no wasm32-unknown-unknown target.
 arboard = "3"
 
@@ -72,7 +85,7 @@ iced = { version = "0.14", features = ["canvas", "tokio", "advanced", "image", "
 # Worker and talks to it with `postMessage`. Only used from
 # wasm32-gated code, so the desktop build is untouched.
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Worker", "MessageEvent", "console"] }
+web-sys = { version = "0.3", features = ["Worker", "MessageEvent", "console", "Storage", "Window"] }
 # Panic messages in the browser console (the release profile uses
 # `panic = "abort"`, which would otherwise surface only as
 # `RuntimeError: unreachable`). Invaluable when debugging the PWA
@@ -84,3 +97,17 @@ console_error_panic_hook = "0.1"
 # `iced::time::every` yields), so the tick instant passes through
 # to the screens unchanged.
 wasmtimer = "0.4"
+# PWA sync (2026-11-27): `wasm-bindgen-futures` chạy async task của
+# worker sync (`spawn_local` — không thread trên wasm); `gloo-net`
+# gọi Firestore REST qua `fetch` (CORS đã kiểm chứng); `gloo-timers`
+# làm nhịp poll 5 giây của worker. Chỉ dùng từ code wasm32-gated.
+wasm-bindgen-futures = "0.4"
+# `js-sys` cho `js_sys::Promise` ở bridge Firebase Auth
+# (`firebase_auth.rs`): extern đồng bộ trả Promise rồi chờ bằng
+# `JsFuture`, thay cho `async fn` extern (xem ghi chú ở đầu file đó).
+js-sys = "0.3"
+gloo-net = "0.6"
+# `futures` feature: `gloo_timers::future::TimeoutFuture` cho nhịp
+# poll của worker sync (không có feature này thì module `future`
+# không tồn tại).
+gloo-timers = { version = "0.3", features = ["futures"] }

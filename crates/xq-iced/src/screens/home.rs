@@ -57,6 +57,11 @@ pub enum Msg {
     ShowAbout,
     /// The window was resized: the cards follow it.
     WindowResized(Size),
+    /// Accept the sync resume offer: continue the newer unfinished
+    /// game from the other machine (intercepted by `App::update`).
+    SyncResumeAccept,
+    /// Dismiss the sync resume offer (intercepted by `App::update`).
+    SyncResumeDismiss,
 }
 
 /// One 80 px piece disc from the mockup title block (piece
@@ -160,7 +165,11 @@ impl State {
     #[allow(dead_code)]
     pub fn update(&mut self, msg: Msg, _shared: &mut Shared) -> Task<Msg> {
         match msg {
-            Msg::Navigate(_) | Msg::ShowSettings | Msg::ShowAbout => Task::none(),
+            Msg::Navigate(_)
+            | Msg::ShowSettings
+            | Msg::ShowAbout
+            | Msg::SyncResumeAccept
+            | Msg::SyncResumeDismiss => Task::none(),
             Msg::WindowResized(size) => {
                 self.window = size;
                 Task::none()
@@ -176,7 +185,9 @@ impl State {
     }
 
     /// The home screen: title block, three cards in a row, footer.
-    pub fn view(&self, _shared: &Shared) -> Element<'_, Msg> {
+    /// A sync resume offer (a newer unfinished game from another
+    /// machine) renders as a card above the three cards.
+    pub fn view(&self, shared: &Shared) -> Element<'_, Msg> {
         let title_block = column![
             row![piece_disc("帥", RED_PIECE), piece_disc("將", BLACK_PIECE),].spacing(SPACE_16),
             Space::new().height(Length::Fixed(20.0)),
@@ -252,7 +263,7 @@ impl State {
         .spacing(SPACE_24)
         .align_y(iced::Alignment::Center);
 
-        let content = column![title_block, cards, footer]
+        let content = column![title_block, self.resume_offer_card(shared), cards, footer]
             .spacing(SPACE_32)
             .align_x(iced::Alignment::Center)
             .width(Length::Fill);
@@ -271,6 +282,41 @@ impl State {
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .padding(SPACE_32)
+            .into()
+    }
+
+    /// Sync resume offer card (Phase 1): a newer unfinished Play
+    /// game from another machine. Empty space when there is no
+    /// offer, so the layout below never shifts.
+    fn resume_offer_card(&self, shared: &Shared) -> Element<'_, Msg> {
+        let Some(offer) = &shared.sync.resume_offer else {
+            return Space::new().height(Length::Fixed(0.0)).into();
+        };
+        let moves = offer.game.moves.len();
+        let body = column![
+            text(format!(
+                "Có ván Đấu với AI đang dở mới hơn từ {} ({} nước).",
+                offer.from_label, moves
+            ))
+            .size(FONT_BODY)
+            .font(theme::inter_font_semibold()),
+            text("Tiếp tục ván đó? Ván dở trên máy này (nếu có) sẽ vào Lịch sử dạng bản lưu trữ.")
+                .size(FONT_BODY)
+                .style(|_: &Theme| iced::widget::text::Style {
+                    color: Some(TEXT_DIM),
+                }),
+            row![
+                crate::widgets::primary_button("Tiếp tục ván này", Msg::SyncResumeAccept)
+                    .height(Length::Fixed(44.0)),
+                secondary_button("Để sau", Msg::SyncResumeDismiss).height(Length::Fixed(44.0)),
+            ]
+            .spacing(SPACE_16),
+        ]
+        .spacing(SPACE_8);
+        container(body)
+            .padding(SPACE_24)
+            .width(Length::Fill)
+            .style(card_style)
             .into()
     }
 }

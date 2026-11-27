@@ -21,6 +21,8 @@ mod engine_log;
 mod engine_manager;
 #[cfg(target_arch = "wasm32")]
 mod engine_wasm;
+#[cfg(target_arch = "wasm32")]
+mod firebase_auth;
 mod helpers;
 mod i18n;
 mod icons;
@@ -28,6 +30,13 @@ mod saved_games;
 mod screens;
 mod settings;
 mod sound;
+#[cfg(target_arch = "wasm32")]
+mod storage;
+mod sync;
+#[cfg(target_arch = "wasm32")]
+mod sync_fetch;
+#[cfg(target_arch = "wasm32")]
+mod sync_wasm;
 mod theme;
 mod time;
 mod widgets;

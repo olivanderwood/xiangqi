@@ -1764,6 +1764,12 @@ impl State {
             lesson_id: None,
             node_path: Vec::new(),
             percent: None,
+            uuid: crate::saved_games::SavedGame::fresh_sync_uuid(),
+            client_id: None,
+            version: 1,
+            updated_unix: crate::saved_games::SavedGame::now_unix(),
+            updated_by_device: String::new(),
+            deleted: false,
         }
     }
 
@@ -3563,6 +3569,12 @@ mod tests {
             lesson_id: None,
             node_path: Vec::new(),
             percent: None,
+            uuid: String::new(),
+            client_id: None,
+            version: 0,
+            updated_unix: 0,
+            updated_by_device: String::new(),
+            deleted: false,
         };
         state.load_saved(&bad, &mut shared);
         assert_eq!(state.phase(), PracticePhase::Setup);

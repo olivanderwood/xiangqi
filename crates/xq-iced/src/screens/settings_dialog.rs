@@ -110,6 +110,13 @@ pub enum Msg {
     OpenEngineFolder,
     /// Open the engine-log folder in the file manager (About).
     OpenEngineLog,
+    /// Sync (Phase 1, desktop only): đăng nhập Google — mở trình
+    /// duyệt, worker trả SignedIn/SignInFailed (App định tuyến).
+    SignIn,
+    /// Sync (Phase 1): đăng xuất — xoá token trong keychain.
+    SignOut,
+    /// Sync (Phase 1): tên thân thiện của máy này đổi.
+    DeviceNameChanged(String),
 }
 
 impl State {
@@ -252,6 +259,31 @@ impl State {
                         open_folder(parent);
                     }
                 }
+                Task::none()
+            }
+            Msg::SignIn => {
+                // Desktop: mở trình duyệt (OAuth loopback). PWA: mở
+                // popup Google (rớt thì redirect — xem glue JS);
+                // worker trả SignedIn/SignInFailed (App định tuyến).
+                shared.sync.status = crate::sync::SyncStatus::SigningIn;
+                let req_id = shared.sync.worker.alloc_req_id();
+                shared
+                    .sync
+                    .worker
+                    .send(crate::sync::SyncRequest::SignIn { req_id });
+                Task::none()
+            }
+            Msg::SignOut => {
+                let req_id = shared.sync.worker.alloc_req_id();
+                shared
+                    .sync
+                    .worker
+                    .send(crate::sync::SyncRequest::SignOut { req_id });
+                Task::none()
+            }
+            Msg::DeviceNameChanged(name) => {
+                shared.settings.device_name = name;
+                shared.settings.save();
                 Task::none()
             }
         }
@@ -444,6 +476,51 @@ impl State {
             col = col.push(primary_button(i18n::t(Key::EngineRetry), Msg::RetryEngine));
         }
         col = col.push(text(i18n::t(Key::SettingsEngineApplyNote)).size(FONT_CAPTION));
+        // Tài khoản đồng bộ (Phase 1 desktop, PWA sync 2026-11-27).
+        {
+            col = col.push(self.account_section(shared));
+        }
+        col.into()
+    }
+
+    /// Tài khoản đồng bộ (Phase 1): đăng nhập Google, email, tên
+    /// máy, đăng xuất.
+    fn account_section(&self, shared: &Shared) -> Element<'_, Msg> {
+        use crate::sync::SyncStatus;
+        let mut col = column![section_title("Tài khoản đồng bộ")].spacing(SPACE_8);
+        match &shared.sync.status {
+            SyncStatus::SignedIn { email } => {
+                col = col.push(text(format!("Đã đăng nhập: {email}")).size(FONT_BODY));
+                col = col
+                    .push(text("Tên máy (hiện trên máy kia khi có bản lưu trữ):").size(FONT_BODY));
+                col = col.push(
+                    text_input("Tên máy", &shared.settings.device_name)
+                        .on_input(Msg::DeviceNameChanged),
+                );
+                col = col.push(secondary_button("Đăng xuất", Msg::SignOut));
+                col = col.push(
+                    text("Ván Đấu với AI đang dở sẽ tự theo bạn sang máy khác cùng tài khoản.")
+                        .size(FONT_CAPTION),
+                );
+            }
+            SyncStatus::SigningIn => {
+                col =
+                    col.push(text("Đang chờ đăng nhập Google trong trình duyệt…").size(FONT_BODY));
+            }
+            SyncStatus::Error(reason) => {
+                col = col.push(text(format!("Đồng bộ lỗi: {reason}")).size(FONT_BODY));
+                col = col.push(primary_button("Đăng nhập bằng Google", Msg::SignIn));
+            }
+            SyncStatus::Off => {
+                col = col.push(
+                    text(
+                        "Chưa đăng nhập. Đăng nhập để ván Đấu với AI đang dở tự theo bạn sang máy khác.",
+                    )
+                    .size(FONT_BODY),
+                );
+                col = col.push(primary_button("Đăng nhập bằng Google", Msg::SignIn));
+            }
+        }
         col.into()
     }
 

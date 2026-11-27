@@ -30,6 +30,12 @@
   <link data-trunk rel="rust" href="Cargo.toml" data-bin="xiangqi-iced" />
   <link data-trunk rel="copy-file" href="assets/pwa/manifest.webmanifest" />
   <link data-trunk rel="copy-file" href="assets/pwa/sw.js" />
+  <!-- Firebase Auth cho PWA sync (2026-11-27): glue module import SDK
+       từ CDN gstatic, chỉ để đăng nhập Google (Firestore đi REST qua
+       fetch). File này phải đứng trước wasm app boot để
+       `window.__xiangqiAuth` sẵn khi worker sync hỏi. -->
+  <link data-trunk rel="copy-file" href="assets/pwa/firebase-auth.js" />
+  <script type="module" src="./firebase-auth.js"></script>
   <link data-trunk rel="copy-dir" href="assets/pwa/icons" />
   <!-- Pikafish-WASM engine (INTEGRATION.md in assets/engine-wasm):
        the worker + its 3 files must stay co-located under

@@ -110,6 +110,10 @@ pub struct Shared {
     /// `<config_dir>/xiangqi/saved_games.json`. Loaded once at
     /// startup; screens mutate it and call `save()` after a change.
     pub saved_games: crate::saved_games::SavedGames,
+    /// Sync mirroring Phase 1 (2026-11-27): worker + trạng thái
+    /// đăng nhập + đề nghị tiếp tục ván từ máy khác. Desktop: worker
+    /// thread thật; PWA: vỏ rỗng (trạng thái luôn `Off`).
+    pub sync: crate::sync::SyncState,
 }
 
 impl Default for Shared {
@@ -150,6 +154,7 @@ impl Shared {
                 sink.write(level, msg);
             })));
         }
+        let device_id = settings.device_id.clone();
         Self {
             settings,
             sound,
@@ -158,6 +163,7 @@ impl Shared {
             engine_name: "AI tích hợp".to_string(),
             engine_log,
             saved_games: crate::saved_games::SavedGames::load(),
+            sync: crate::sync::SyncState::new(device_id),
         }
     }
 }
@@ -239,6 +245,11 @@ pub enum Message {
     /// screen that tracks it (home / play / learn / practice), so no
     /// screen ever lays out from a stale size — see `App::window`.
     WindowResized(Size),
+    /// Sync poll (every 500 ms): drain the sync worker's responses
+    /// and route them — session responses update `Shared::sync`,
+    /// game responses go to the Play screen, `PulledAll` may raise
+    /// the "tiếp tục ván từ máy khác" offer on Home.
+    SyncPoll,
 }
 
 impl App {
@@ -279,6 +290,19 @@ impl App {
             dialog: None,
             install_rx,
         };
+        // Sync mirroring: khôi phục phiên ngay lúc mở app — desktop
+        // từ keychain, PWA từ Firebase JS SDK (IndexedDB). Không có
+        // phiên thì worker trả SessionRestoreFailed, trạng thái cứ ở
+        // Off — bình thường.
+        let mut app = app;
+        {
+            let req_id = app.shared.sync.worker.alloc_req_id();
+            app.shared.sync.status = crate::sync::SyncStatus::SigningIn;
+            app.shared
+                .sync
+                .worker
+                .send(crate::sync::SyncRequest::RestoreSession { req_id });
+        }
         let boot = iced::Task::batch([theme::load_cjk_font(), theme::load_inter_fonts()])
             .map(Message::FontLoaded);
         (app, boot)
@@ -301,6 +325,146 @@ impl App {
     /// open), replacing any open dialog.
     fn open_about(&mut self) {
         self.dialog = Some(settings_dialog::State::about(&self.shared));
+    }
+
+    /// Drain the sync worker's responses (called from
+    /// `Message::SyncPoll`, twice a second): session responses
+    /// update `Shared::sync`, game responses go to the Play screen,
+    /// `PulledAll` may raise the "tiếp tục ván từ máy khác" offer.
+    fn drain_sync_responses(&mut self) {
+        while let Some(resp) = self.shared.sync.try_recv() {
+            self.handle_sync_response(resp);
+        }
+    }
+
+    /// Route one sync response (see `drain_sync_responses`).
+    fn handle_sync_response(&mut self, resp: crate::sync::SyncResponse) {
+        use crate::sync::{SyncResponse, SyncStatus};
+        match resp {
+            SyncResponse::SessionRestored { tokens, .. } => {
+                self.shared.sync.status = SyncStatus::SignedIn {
+                    email: tokens.email.clone(),
+                };
+                self.shared.settings.sync_email = Some(tokens.email);
+                self.shared.settings.save();
+            }
+            SyncResponse::SessionRestoreFailed { reason, .. } => {
+                // "chưa đăng nhập" là bình thường (mở app lần đầu) —
+                // trạng thái cứ ở Off, không hiện lỗi.
+                if reason == "chua dang nhap" {
+                    self.shared.sync.status = SyncStatus::Off;
+                } else {
+                    self.shared.sync.status = SyncStatus::Error(reason);
+                }
+            }
+            SyncResponse::SignedIn { tokens, .. } => {
+                self.shared.sync.status = SyncStatus::SignedIn {
+                    email: tokens.email.clone(),
+                };
+                self.shared.settings.sync_email = Some(tokens.email);
+                self.shared.settings.save();
+            }
+            SyncResponse::SignInFailed { reason, .. } => {
+                self.shared.sync.status = SyncStatus::Error(reason);
+            }
+            SyncResponse::SignedOut { .. } => {
+                self.shared.sync.status = SyncStatus::Off;
+                self.shared.settings.sync_email = None;
+                self.shared.settings.save();
+                self.shared.sync.resume_offer = None;
+            }
+            SyncResponse::PulledAll { games, .. } => {
+                self.maybe_offer_remote_game(games);
+            }
+            SyncResponse::Pushed { .. }
+            | SyncResponse::PushRejected { .. }
+            | SyncResponse::PushFailed { .. }
+            | SyncResponse::RemoteUpdate { .. } => {
+                // Game-level: the Play screen owns the game — forward
+                // it there (it ignores anything that is not its
+                // current synced game).
+                let _ = self.play.update(play::Msg::Sync(resp), &mut self.shared);
+            }
+            SyncResponse::PulledOne { .. } | SyncResponse::SyncFailed { .. } => {
+                // Phase 1 không dùng PulledOne; SyncFailed cho
+                // request lẻ thì Play đã nhận qua PushFailed — bỏ qua.
+            }
+        }
+    }
+
+    /// Sau `PulledAll`: nếu cloud có ván Play đang dở MỚI HƠN ván
+    /// dở trên máy này (hoặc máy này không có ván dở) thì đề nghị
+    /// tiếp tục ván đó trên Home. Ván giống hệt (cùng uuid + cùng
+    /// nước) thì không đề nghị gì.
+    fn maybe_offer_remote_game(&mut self, games: Vec<crate::saved_games::SavedGame>) {
+        use crate::saved_games::SavedMode;
+        let Some(remote) = games
+            .iter()
+            .filter(|g| g.mode == SavedMode::Play && !g.finished && !g.deleted)
+            .max_by_key(|g| (g.updated_unix, g.version))
+        else {
+            return;
+        };
+        let local = self.shared.saved_games.unfinished_play();
+        let newer_than_local = match local {
+            None => true,
+            Some(l) => {
+                (remote.updated_unix, remote.version) > (l.updated_unix, l.version)
+                    && (remote.uuid != l.uuid || remote.moves != l.moves)
+            }
+        };
+        if !newer_than_local {
+            return;
+        }
+        // Nhãn nguồn: device id rút gọn (tên máy kia không có trong
+        // entry — chỉ có id; xem `SyncEntry::updated_by_device`).
+        let short = remote
+            .updated_by_device
+            .rsplit('-')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(8)
+            .collect::<String>();
+        self.shared.sync.resume_offer = Some(crate::sync::ResumeOffer {
+            game: remote.clone(),
+            from_label: if short.is_empty() {
+                "máy khác".to_string()
+            } else {
+                format!("máy khác (…{short})")
+            },
+        });
+    }
+
+    /// Chấp nhận đề nghị tiếp tục ván từ máy khác: ván dở cũ trên
+    /// máy này (nếu có và cũ hơn) vào Lịch sử dạng bản lưu trữ, rồi
+    /// mở ván remote trên màn Play.
+    fn accept_sync_resume(&mut self) {
+        let Some(offer) = self.shared.sync.resume_offer.take() else {
+            return;
+        };
+        if let Some(local) = self.shared.saved_games.unfinished_play() {
+            if local.uuid != offer.game.uuid {
+                // Ván cũ hơn vào Lịch sử: đánh dấu đã xong (để không
+                // còn được đề nghị tiếp tục) + đổi nhãn.
+                let mut archived = local.clone();
+                archived.finished = true;
+                archived.label = format!("{} — bản lưu trữ từ máy này", archived.label);
+                self.shared.saved_games.add(archived);
+                self.shared.saved_games.save();
+            }
+        }
+        self.play.resume_saved(&offer.game, &mut self.shared);
+        self.goto(Screen::Play);
+    }
+
+    /// Dừng theo dõi ván sync (khi rời màn Play — state Play bị reset
+    /// nhưng worker vẫn poll uuid cũ nếu không bảo dừng).
+    fn stop_sync_watch(&mut self) {
+        self.shared
+            .sync
+            .worker
+            .send(crate::sync::SyncRequest::Unwatch);
     }
 
     /// Iced `update`: intercept the shared variants, delegate the
@@ -335,6 +499,10 @@ impl App {
             }
             Message::ShowSettings => {
                 self.open_settings();
+                Task::none()
+            }
+            Message::SyncPoll => {
+                self.drain_sync_responses();
                 Task::none()
             }
             Message::ShowAbout => {
@@ -400,6 +568,23 @@ impl App {
                 self.dialog = None;
                 Task::none()
             }
+            Message::Dialog(settings_dialog::Msg::SignIn) => {
+                // PWA only: đăng nhập có thể redirect (popup bị chặn
+                // trên iOS standalone) rồi tải lại trang — lưu ván
+                // đang dở trước để không mất ván khi tải lại.
+                // Desktop mở trình duyệt hệ thống, không tải lại
+                // app nên không cần.
+                #[cfg(target_arch = "wasm32")]
+                if self.play.needs_save_prompt() {
+                    self.play.save_current_game(&mut self.shared, false);
+                }
+                match &mut self.dialog {
+                    Some(dialog) => dialog
+                        .update(settings_dialog::Msg::SignIn, &mut self.shared)
+                        .map(Message::Dialog),
+                    None => Task::none(),
+                }
+            }
             Message::Dialog(msg) => match &mut self.dialog {
                 Some(dialog) => dialog.update(msg, &mut self.shared).map(Message::Dialog),
                 None => Task::none(),
@@ -408,6 +593,14 @@ impl App {
             Message::Home(msg) => match msg {
                 home::Msg::Navigate(screen) => {
                     self.goto(screen);
+                    Task::none()
+                }
+                home::Msg::SyncResumeAccept => {
+                    self.accept_sync_resume();
+                    Task::none()
+                }
+                home::Msg::SyncResumeDismiss => {
+                    self.shared.sync.resume_offer = None;
                     Task::none()
                 }
                 home::Msg::ShowSettings => {
@@ -435,6 +628,7 @@ impl App {
                     } else {
                         if screen == Screen::Home {
                             self.play = play::State::new(&self.shared);
+                            self.stop_sync_watch();
                         }
                         self.goto(screen);
                         Task::none()
@@ -445,11 +639,13 @@ impl App {
                 play::Msg::SavePromptSave => {
                     self.play.save_current_game(&mut self.shared, false);
                     self.play = play::State::new(&self.shared);
+                    self.stop_sync_watch();
                     self.goto(Screen::Home);
                     Task::none()
                 }
                 play::Msg::SavePromptDiscard => {
                     self.play = play::State::new(&self.shared);
+                    self.stop_sync_watch();
                     self.goto(Screen::Home);
                     Task::none()
                 }
@@ -778,6 +974,13 @@ impl App {
         // becomes visible, and on web it can deliver a stale size at
         // that moment.
         subs.push(iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)));
+        // Sync poll (Phase 1): drain the worker's responses twice a
+        // second — session state, remote moves, resume offers. The
+        // timer runs on wasm too, but the wasm worker never answers,
+        // so the drain is a no-op there.
+        subs.push(
+            iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::SyncPoll),
+        );
         if let Some(rx) = &self.install_rx {
             subs.push(
                 bridge::from_mpsc("engine-install", Arc::clone(rx)).map(engine_install_bridge_msg),

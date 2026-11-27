@@ -582,6 +582,12 @@ impl State {
             lesson_id: Some(lesson.id.clone()),
             node_path: self.node_path.clone(),
             percent: Some(self.progress_percent()),
+            uuid: crate::saved_games::SavedGame::fresh_sync_uuid(),
+            client_id: None,
+            version: 1,
+            updated_unix: crate::saved_games::SavedGame::now_unix(),
+            updated_by_device: String::new(),
+            deleted: false,
         };
         // One entry per lesson: drop the old one first.
         let old: Vec<String> = shared
@@ -2667,6 +2673,12 @@ mod tests {
             lesson_id: Some("no-such-lesson".to_string()),
             node_path: Vec::new(),
             percent: Some(10),
+            uuid: String::new(),
+            client_id: None,
+            version: 0,
+            updated_unix: 0,
+            updated_by_device: String::new(),
+            deleted: false,
         };
         st.resume_saved(&bad, &mut shared);
         assert!(st.lesson.is_none(), "unknown lesson is not started");
